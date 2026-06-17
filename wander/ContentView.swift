@@ -11,43 +11,167 @@ import CoreLocation
 
 struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
+    private let explorationEngine = ExplorationEngine()
+
+    @State private var drawerExpanded = false
+    @State private var drawerDragOffset: CGFloat = 0
+
+    private let drawerCollapsedHeight: CGFloat = 120
+    private let drawerExpandedFraction: CGFloat = 0.55
 
     var body: some View {
-        ZStack {
-            Map {
-                UserAnnotation()
-            }
-            .mapControls {
-                MapUserLocationButton()
-                MapCompass()
-                MapScaleView()
-            }
+        GeometryReader { geometry in
+            ZStack {
+                Map {
+                    UserAnnotation()
 
-            VStack {
-                Spacer()
-                debugPanel
+                    ForEach(locationTracker.discoveredCells) { cell in
+                        let coordinates = explorationEngine.boundaryCoordinates(for: cell.id)
+                        if !coordinates.isEmpty {
+                            MapPolygon(coordinates: coordinates)
+                                .foregroundStyle(Color.green.opacity(0.25))
+                                .stroke(Color.green.opacity(0.7), lineWidth: 1)
+                        }
+                    }
+                }
+                .mapControls {
+                    MapUserLocationButton()
+                    MapCompass()
+                    MapScaleView()
+                }
+
+                VStack {
+                    Spacer()
+                    debugDrawer(in: geometry)
+                }
             }
-            .padding(.bottom, 24)
         }
     }
 
-    // MARK: - Debug panel
+    // MARK: - Debug drawer
 
-    private var debugPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Debug")
-                    .font(.headline)
-                Spacer()
+    private func debugDrawer(in geometry: GeometryProxy) -> some View {
+        let screenHeight = geometry.size.height
+        let expandedHeight = screenHeight * drawerExpandedFraction
+        let maxOffset = expandedHeight - drawerCollapsedHeight
+        let baseOffset = drawerExpanded ? 0 : maxOffset
+        let currentOffset = baseOffset + drawerDragOffset
+
+        return VStack(spacing: 0) {
+            drawerHandle(in: geometry, maxOffset: maxOffset)
+
+            ScrollView {
+                debugContent
+                    .padding()
+            }
+            .frame(height: expandedHeight - drawerHandleHeight)
+            .scrollIndicators(.hidden)
+        }
+        .frame(height: expandedHeight)
+        .background(.ultraThinMaterial)
+        .overlay(
+            // Visible top border for the drawer.
+            Rectangle()
+                .fill(Color.gray.opacity(0.2))
+                .frame(height: 0.5)
+                .frame(maxHeight: .infinity, alignment: .top),
+            alignment: .top
+        )
+        .clipShape(
+            RoundedRectangle(cornerRadius: 16)
+        )
+        .offset(y: currentOffset)
+        .animation(.interpolatingSpring(stiffness: 300, damping: 30), value: drawerExpanded)
+        .animation(.interpolatingSpring(stiffness: 300, damping: 30), value: drawerDragOffset)
+    }
+
+    private let drawerHandleHeight: CGFloat = 120
+
+    private func drawerHandle(in geometry: GeometryProxy, maxOffset: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            // Drag indicator only, so buttons still receive taps.
+            RoundedRectangle(cornerRadius: 2.5)
+                .fill(Color.secondary.opacity(0.5))
+                .frame(width: 40, height: 5)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            drawerDragOffset = value.translation.height
+                        }
+                        .onEnded { value in
+                            let projected = baseOffsetForDrag(maxOffset: maxOffset) + drawerDragOffset
+                            let threshold = maxOffset / 2
+
+                            withAnimation(.interpolatingSpring(stiffness: 300, damping: 30)) {
+                                drawerExpanded = projected < threshold
+                                drawerDragOffset = 0
+                            }
+                        }
+                )
+
+            HStack(spacing: 12) {
+                // Tracking status pill.
                 Text(locationTracker.isTracking ? "Tracking ON" : "Tracking OFF")
                     .font(.caption.bold())
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 6)
                     .background(locationTracker.isTracking ? Color.green : Color.red)
                     .foregroundColor(.white)
                     .clipShape(Capsule())
-            }
 
+                Spacer()
+
+                // Always-visible tracking controls.
+                Button("Start") {
+                    locationTracker.startTracking()
+                }
+                .buttonStyle(DebugButtonStyle(color: .green))
+
+                Button("Stop") {
+                    locationTracker.stopTracking()
+                }
+                .buttonStyle(DebugButtonStyle(color: .red))
+
+                Spacer()
+
+                // Cells summary with proper spacing.
+                HStack(spacing: 4) {
+                    Image(systemName: "hexagon.fill")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                    Text("\(locationTracker.discoveredCells.count)")
+                        .font(.caption.bold())
+                    Text(locationTracker.discoveredCells.count == 1 ? "cellule" : "cellules")
+                        .font(.caption)
+                }
+
+                // Toggle drawer expansion.
+                Button {
+                    withAnimation(.interpolatingSpring(stiffness: 300, damping: 30)) {
+                        drawerExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: drawerExpanded ? "chevron.down" : "chevron.up")
+                        .font(.caption.bold())
+                        .foregroundColor(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 12)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func baseOffsetForDrag(maxOffset: CGFloat) -> CGFloat {
+        drawerExpanded ? 0 : maxOffset
+    }
+
+    private var debugContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Group {
                 LabeledDebugRow(label: "Permission", value: locationStatusText(locationTracker.authorizationStatus))
                 LabeledDebugRow(label: "Points reçus", value: "\(locationTracker.locationsReceived)")
@@ -56,6 +180,12 @@ struct ContentView: View {
                 LabeledDebugRow(label: "Accuracy", value: accuracyValue(locationTracker.lastLocation?.horizontalAccuracy))
                 LabeledDebugRow(label: "Speed", value: speedValue(locationTracker.lastLocation?.speed))
                 LabeledDebugRow(label: "Timestamp", value: timestampValue(locationTracker.lastLocation?.timestamp))
+                LabeledDebugRow(label: "Cells", value: "\(locationTracker.discoveredCells.count)")
+                LabeledDebugRow(label: "Current H3", value: locationTracker.currentH3CellID ?? "—")
+                LabeledDebugRow(label: "Resolution", value: "10")
+                LabeledDebugRow(label: "Last seg dist", value: distanceValue(locationTracker.lastSegmentDistance))
+                LabeledDebugRow(label: "Last seg speed", value: speedValue(locationTracker.lastSegmentSpeed))
+                LabeledDebugRow(label: "Last cells added", value: "\(locationTracker.lastCellsAdded)")
                 LabeledDebugRow(label: "Erreur", value: locationTracker.lastError ?? "—")
             }
             .font(.caption)
@@ -74,11 +204,6 @@ struct ContentView: View {
                 .buttonStyle(DebugButtonStyle(color: .red))
             }
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .shadow(radius: 8)
-        .padding(.horizontal)
     }
 
     // MARK: - Helpers
@@ -113,6 +238,11 @@ struct ContentView: View {
     private func speedValue(_ value: CLLocationSpeed?) -> String {
         guard let value, value >= 0 else { return "—" }
         return String(format: "%.2f m/s", value)
+    }
+
+    private func distanceValue(_ value: CLLocationDistance?) -> String {
+        guard let value, value >= 0 else { return "—" }
+        return String(format: "%.1f m", value)
     }
 
     private func timestampValue(_ date: Date?) -> String {

@@ -11,12 +11,23 @@ import Combine
 
 final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let locationManager = CLLocationManager()
+    private let explorationEngine = ExplorationEngine()
+    private let cellStore = DiscoveredCellStore()
+    private var previousAcceptedLocation: CLLocation?
 
     @Published var authorizationStatus: CLAuthorizationStatus
     @Published var lastLocation: CLLocation?
     @Published var locationsReceived: Int = 0
     @Published var isTracking: Bool = false
     @Published var lastError: String?
+    @Published var discoveredCells: [DiscoveredCell] = []
+    @Published var currentH3CellID: String?
+
+    // Last accepted segment statistics for the debug panel.
+    @Published var lastSegmentDistance: CLLocationDistance?
+    @Published var lastSegmentTimeGap: TimeInterval?
+    @Published var lastSegmentSpeed: CLLocationSpeed?
+    @Published var lastCellsAdded: Int = 0
 
     /// Tracks whether the user tapped Start while the permission was still undetermined.
     /// We use this to automatically begin tracking once the permission is granted.
@@ -34,6 +45,9 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         // Required so startUpdatingLocation keeps working when the app is in the background.
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = true
+
+        cellStore.load()
+        discoveredCells = cellStore.cells
     }
 
     // MARK: - Permissions
@@ -131,7 +145,43 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 self.lastError = nil
                 updated = true
 
-                // TODO: Convert lat/lng to H3 cell index for fog-of-war reveal.
+                let previous = self.previousAcceptedLocation
+                let discoveredIDs = self.explorationEngine.discoveredCellIDs(
+                    from: previous,
+                    to: location
+                )
+
+                for cellID in discoveredIDs {
+                    self.cellStore.upsert(
+                        cellID: cellID,
+                        resolution: self.explorationEngine.resolution,
+                        seenAt: location.timestamp
+                    )
+                }
+
+                self.currentH3CellID = self.explorationEngine.cellID(for: location)
+
+                // Update segment statistics for the debug panel.
+                if let previous = previous {
+                    let distance = location.distance(from: previous)
+                    let gap = location.timestamp.timeIntervalSince(previous.timestamp)
+                    let speed = gap > 0 ? distance / gap : 0
+                    let cellsAdded = max(0, discoveredIDs.count - 1)
+
+                    self.lastSegmentDistance = distance
+                    self.lastSegmentTimeGap = gap
+                    self.lastSegmentSpeed = speed
+                    self.lastCellsAdded = cellsAdded
+
+                    print("🧭 Segment distance=\(Int(distance))m gap=\(Int(gap))s speed=\(String(format: "%.1f", speed))m/s cellsAdded=\(cellsAdded) current=\(self.currentH3CellID ?? "—")")
+                } else {
+                    self.lastSegmentDistance = nil
+                    self.lastSegmentTimeGap = nil
+                    self.lastSegmentSpeed = nil
+                    self.lastCellsAdded = 0
+                }
+
+                self.previousAcceptedLocation = location
 
                 print("""
                 [LocationTracker] location received
@@ -141,13 +191,13 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                   - speed: \(location.speed) m/s
                   - timestamp: \(location.timestamp)
                   - age: \(now.timeIntervalSince(location.timestamp)) s
+                  - cells discovered: \(self.discoveredCells.count)
                 """)
             }
 
-            // TODO: When persistence is added, store each new location/visited cell here.
-
             if updated {
-                // TODO: Reconstruct the trip segment between lastLocation and the new point.
+                self.cellStore.save()
+                self.discoveredCells = self.cellStore.cells
             }
         }
     }
