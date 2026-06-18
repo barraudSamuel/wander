@@ -39,8 +39,10 @@ final class CityBoundary {
     private(set) var boundaryCoordinates: [CLLocationCoordinate2D] = []
 
     private lazy var cacheURL: URL = {
-        let urls = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        let appSupport = urls.first!.appendingPathComponent("wander", isDirectory: true)
+        guard let appSupportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            fatalError("CityBoundary: applicationSupportDirectory not found")
+        }
+        let appSupport = appSupportDir.appendingPathComponent("wander", isDirectory: true)
         if !FileManager.default.fileExists(atPath: appSupport.path) {
             try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
         }
@@ -49,24 +51,24 @@ final class CityBoundary {
 
     private init() {}
 
+    // MARK: - Public
+
     /// Loads the city boundary cells from cache, or computes and caches them.
-    /// The heavy H3 polyfill runs on a background task, the rest stays on MainActor.
+    /// The heavy H3 polyfill runs on a background task; the rest stays on MainActor.
     func load() async {
-        guard parseHoChiMinhBoundary() != nil else {
+        guard let (h3Ring, clRing) = parseHoChiMinhBoundary() else {
             cityCellIDs = []
             return
         }
+        boundaryCoordinates = clRing
 
         if let cached = loadCached() {
             cityCellIDs = cached
             return
         }
 
-        let ring = boundaryCoordinates.map {
-            H3Coordinate(lat: $0.latitude, lng: $0.longitude)
-        }
         let ids = await Task.detached(priority: .userInitiated) {
-            let polygon = H3GeoPolygon(exterior: ring)
+            let polygon = H3GeoPolygon(exterior: h3Ring)
             let cells = polygon.fill(resolution: 10)
             return Set(cells.map { $0.description })
         }.value
@@ -75,7 +77,7 @@ final class CityBoundary {
         cache(ids)
     }
 
-    /// Computes the current progress for the given discovered cells.
+    /// Computes the current exploration progress for the given discovered cells.
     func progress(against discoveredCells: [DiscoveredCell]) -> CityProgress {
         let discoveredIDs = Set(discoveredCells.map { $0.id })
         let explored = cityCellIDs.intersection(discoveredIDs)
@@ -88,7 +90,7 @@ final class CityBoundary {
 
     // MARK: - Parsing
 
-    private func parseHoChiMinhBoundary() -> [H3Coordinate]? {
+    private func parseHoChiMinhBoundary() -> (h3Ring: [H3Coordinate], clRing: [CLLocationCoordinate2D])? {
         guard let data = CityGeoJSONData.hoChiMinhCity.data(using: .utf8) else { return nil }
 
         do {
@@ -102,11 +104,11 @@ final class CityBoundary {
                 return H3Coordinate(lat: lat, lng: lon)
             }
 
-            boundaryCoordinates = h3Ring.map {
+            let clRing = h3Ring.map {
                 CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lng)
             }
 
-            return h3Ring
+            return (h3Ring, clRing)
         } catch {
             print("[CityBoundary] failed to parse GeoJSON: \(error.localizedDescription)")
             return nil

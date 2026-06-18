@@ -2,6 +2,9 @@
 //  DiscoveredCellStore.swift
 //  wander
 //
+//  SwiftData-backed store for discovered H3 cells. Offers batch upsert
+//  with a single fetch (instead of N+1) and exposes cells as @Published.
+//
 //  Created by Samuel Barraud on 17/06/2026.
 //
 
@@ -14,10 +17,14 @@ final class DiscoveredCellStore: ObservableObject {
 
     private var modelContext: ModelContext?
 
+    // MARK: - Configuration
+
     func configure(with context: ModelContext) {
         modelContext = context
         load()
     }
+
+    // MARK: - Query
 
     func load() {
         guard let context = modelContext else { return }
@@ -31,29 +38,27 @@ final class DiscoveredCellStore: ObservableObject {
         }
     }
 
+    // MARK: - Upsert
+
+    /// Single-cell upsert. Delegates to `upsertMany` then returns the stored cell.
     @discardableResult
     func upsert(cellID: String, resolution: Int, seenAt: Date) -> DiscoveredCell {
         upsertMany(cellIDs: [cellID], resolution: resolution, seenAt: seenAt)
-        if let cell = cells.first(where: { $0.id == cellID }) {
-            return cell
-        }
-        let cell = DiscoveredCell(id: cellID, resolution: resolution, firstSeenAt: seenAt, lastSeenAt: seenAt)
-        cells.append(cell)
-        return cell
+        return cells.first(where: { $0.id == cellID })
+            ?? DiscoveredCell(id: cellID, resolution: resolution, firstSeenAt: seenAt, lastSeenAt: seenAt)
     }
 
     @discardableResult
     func upsertMany(cellIDs: Set<String>, resolution: Int, seenAt: Date) -> Int {
         guard let context = modelContext else { return 0 }
+
+        let allExisting = (try? context.fetch(FetchDescriptor<DiscoveredCell>())) ?? []
+        let existingByID = Dictionary(uniqueKeysWithValues: allExisting.map { ($0.id, $0) })
+
         var addedCount = 0
 
         for cellID in cellIDs {
-            let id = cellID
-            let predicate = #Predicate<DiscoveredCell> { $0.id == id }
-            var descriptor = FetchDescriptor<DiscoveredCell>(predicate: predicate)
-            descriptor.fetchLimit = 1
-
-            if let existing = try? context.fetch(descriptor).first {
+            if let existing = existingByID[cellID] {
                 existing.lastSeenAt = seenAt
             } else {
                 let cell = DiscoveredCell(

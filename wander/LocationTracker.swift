@@ -182,37 +182,41 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     func applyTrackingMode(_ mode: TrackingMode) {
         trackingMode = mode
 
+        let useContinuousUpdates: Bool
+
         switch mode {
         case .foreground:
             locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
             locationManager.distanceFilter = 20
             locationManager.pausesLocationUpdatesAutomatically = false
-
-            guard trackingEnabled else { return }
-            locationManager.startUpdatingLocation()
-            locationManager.startMonitoringSignificantLocationChanges()
-            locationManager.startMonitoringVisits()
+            useContinuousUpdates = true
 
         case .background:
             locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
             locationManager.distanceFilter = 75
             locationManager.pausesLocationUpdatesAutomatically = true
-
-            guard trackingEnabled else { return }
-            locationManager.startUpdatingLocation()
-            locationManager.startMonitoringSignificantLocationChanges()
-            locationManager.startMonitoringVisits()
+            useContinuousUpdates = true
 
         case .lowPower:
             locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
             locationManager.distanceFilter = 500
             locationManager.pausesLocationUpdatesAutomatically = true
-
-            guard trackingEnabled else { return }
-            locationManager.stopUpdatingLocation()
-            locationManager.startMonitoringSignificantLocationChanges()
-            locationManager.startMonitoringVisits()
+            useContinuousUpdates = false
         }
+
+        startServicesIfTracking(continuousUpdates: useContinuousUpdates)
+    }
+
+    private func startServicesIfTracking(continuousUpdates: Bool) {
+        guard trackingEnabled else { return }
+
+        if continuousUpdates {
+            locationManager.startUpdatingLocation()
+        } else {
+            locationManager.stopUpdatingLocation()
+        }
+        locationManager.startMonitoringSignificantLocationChanges()
+        locationManager.startMonitoringVisits()
     }
 
     // MARK: - CLLocationManagerDelegate

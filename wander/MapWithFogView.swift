@@ -21,7 +21,7 @@ struct MapWithFogView: UIViewRepresentable {
     /// City boundary used as the outer fog shape. When empty, no fog is drawn.
     var cityBoundaryCoordinates: [CLLocationCoordinate2D]
 
-    /// Fog colour. Defaults to a semi-transparent black.
+    /// Fog colour — used by the polygon renderer.
     var fogColor: UIColor = UIColor.black.withAlphaComponent(0.45)
 
     /// When toggled, centers the map on the user's current location.
@@ -81,7 +81,7 @@ struct MapWithFogView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(fogColor: fogColor)
     }
 
     // MARK: - Fog overlay
@@ -110,18 +110,10 @@ struct MapWithFogView: UIViewRepresentable {
             }
         }
 
-        let outerPolygon = cityBoundaryCoordinates.withUnsafeBufferPointer { buffer -> MKPolygon in
-            guard let base = buffer.baseAddress else {
-                return cityBoundaryCoordinates.withUnsafeBufferPointer { fallbackBuffer in
-                    MKPolygon(
-                        coordinates: fallbackBuffer.baseAddress!,
-                        count: cityBoundaryCoordinates.count,
-                        interiorPolygons: holes
-                    )
-                }
-            }
-            return MKPolygon(
-                coordinates: base,
+        // count >= 3 already guaranteed, so buffer.baseAddress is non-nil.
+        let outerPolygon = cityBoundaryCoordinates.withUnsafeBufferPointer { buffer in
+            MKPolygon(
+                coordinates: buffer.baseAddress!,
                 count: cityBoundaryCoordinates.count,
                 interiorPolygons: holes
             )
@@ -165,15 +157,20 @@ struct MapWithFogView: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         let explorationEngine = ExplorationEngine()
+        let fogColor: UIColor
         var fogOverlay: MKPolygon?
         var lastDiscoveredIDs: Set<String> = []
         var lastBoundaryLength: Int = 0
         var didSetInitialRegion = false
 
+        init(fogColor: UIColor) {
+            self.fogColor = fogColor
+        }
+
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let polygon = overlay as? MKPolygon {
                 let renderer = MKPolygonRenderer(polygon: polygon)
-                renderer.fillColor = UIColor.black.withAlphaComponent(0.45)
+                renderer.fillColor = fogColor
                 renderer.strokeColor = nil
                 renderer.lineWidth = 0
                 return renderer
