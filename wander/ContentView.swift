@@ -109,9 +109,16 @@ struct ContentView: View {
     private var cityProgressBanner: some View {
         VStack(spacing: 4) {
             if let progress = cityProgress {
-                Text(progress.cityName)
-                    .font(.caption.bold())
-                    .foregroundColor(.primary)
+                HStack(spacing: 6) {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(4)
+                        .background(Circle().fill(locationTracker.isTracking ? Color.green : Color.secondary.opacity(0.3)))
+                    Text(progress.cityName)
+                        .font(.caption.bold())
+                        .foregroundColor(.primary)
+                }
 
                 Text("\(progress.percentageText) explored — \(progress.exploredCells) / \(progress.totalCells) cells")
                     .font(.caption2)
@@ -130,9 +137,16 @@ struct ContentView: View {
                 }
                 .frame(height: 4)
             } else {
-                Text("Calculating city progress…")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(4)
+                        .background(Circle().fill(locationTracker.isTracking ? Color.green : Color.secondary.opacity(0.3)))
+                    Text("Calculating city progress…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
         }
         .padding(.horizontal, 16)
