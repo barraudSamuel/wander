@@ -68,6 +68,31 @@ final class DiscoveredCellStore: ObservableObject {
         }
     }
 
+    /// Upserts many cells at once and persists the store only once.
+    /// Returns the number of cells that were actually added (not updated).
+    @discardableResult
+    func upsertMany(cellIDs: Set<String>, resolution: Int, seenAt: Date) -> Int {
+        var addedCount = 0
+        for cellID in cellIDs {
+            if cells.contains(where: { $0.id == cellID }) {
+                if let index = cells.firstIndex(where: { $0.id == cellID }) {
+                    cells[index].lastSeenAt = seenAt
+                }
+            } else {
+                let cell = DiscoveredCell(
+                    id: cellID,
+                    resolution: resolution,
+                    firstSeenAt: seenAt,
+                    lastSeenAt: seenAt
+                )
+                cells.append(cell)
+                addedCount += 1
+            }
+        }
+        save()
+        return addedCount
+    }
+
     func contains(_ cellID: String) -> Bool {
         cells.contains(where: { $0.id == cellID })
     }

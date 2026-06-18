@@ -10,15 +10,27 @@ import CoreLocation
 import Combine
 
 final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
+    enum TrackingMode: String {
+        case foreground
+        case background
+        case lowPower
+    }
+
     private let locationManager = CLLocationManager()
     private let explorationEngine = ExplorationEngine()
     private let cellStore = DiscoveredCellStore()
     private var previousAcceptedLocation: CLLocation?
 
+    // Persistence key for the user's tracking intention.
+    private let trackingEnabledKey = "trackingEnabled"
+
     @Published var authorizationStatus: CLAuthorizationStatus
     @Published var lastLocation: CLLocation?
     @Published var locationsReceived: Int = 0
     @Published var isTracking: Bool = false
+    @Published var trackingEnabled: Bool
+    @Published var trackingMode: TrackingMode = .foreground
+    @Published var visitsReceived: Int = 0
     @Published var lastError: String?
     @Published var discoveredCells: [DiscoveredCell] = []
     @Published var currentH3CellID: String?
@@ -35,19 +47,46 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     override init() {
         self.authorizationStatus = locationManager.authorizationStatus
+        self.trackingEnabled = UserDefaults.standard.bool(forKey: trackingEnabledKey)
         super.init()
         locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-        // Only trigger an update when the user has moved at least 50 meters.
-        // This value can be lowered later for a denser fog-reveal grid.
-        locationManager.distanceFilter = 50
-        locationManager.pausesLocationUpdatesAutomatically = true
+        // Default to foreground accuracy until a mode is explicitly applied.
+        locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        locationManager.distanceFilter = 20
+        locationManager.pausesLocationUpdatesAutomatically = false
         // Required so startUpdatingLocation keeps working when the app is in the background.
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = true
 
         cellStore.load()
         discoveredCells = cellStore.cells
+    }
+
+    // MARK: - Debug info
+
+    /// Human-readable description of the current desired accuracy setting.
+    var desiredAccuracyDescription: String {
+        switch locationManager.desiredAccuracy {
+        case kCLLocationAccuracyBestForNavigation:
+            return "Best for Navigation"
+        case kCLLocationAccuracyBest:
+            return "Best"
+        case kCLLocationAccuracyNearestTenMeters:
+            return "10 m"
+        case kCLLocationAccuracyHundredMeters:
+            return "100 m"
+        case kCLLocationAccuracyKilometer:
+            return "1 km"
+        case kCLLocationAccuracyThreeKilometers:
+            return "3 km"
+        default:
+            return "\(Int(locationManager.desiredAccuracy)) m"
+        }
+    }
+
+    /// Human-readable description of the current distance filter.
+    var distanceFilterDescription: String {
+        return "\(Int(locationManager.distanceFilter)) m"
     }
 
     // MARK: - Permissions
@@ -71,6 +110,10 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     func startTracking() {
         lastError = nil
 
+        // Persist the user's intention immediately so the app can resume after a restart.
+        UserDefaults.standard.set(true, forKey: trackingEnabledKey)
+        trackingEnabled = true
+
         guard CLLocationManager.locationServicesEnabled() else {
             lastError = "Location services are disabled on this device."
             isTracking = false
@@ -89,24 +132,86 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             break
         @unknown default:
             lastError = "Unknown authorization status."
+            trackingEnabled = false
+            UserDefaults.standard.set(false, forKey: trackingEnabledKey)
             return
         }
 
         isTracking = true
         lastError = nil
-        // Continuous updates while the app is running.
-        locationManager.startUpdatingLocation()
-        // Significant-change monitoring helps the app wake in the background
-        // after large user movements. It can generate callbacks alongside
-        // continuous updates, which is acceptable for this prototype.
-        locationManager.startMonitoringSignificantLocationChanges()
+
+        // Start tracking with the most precise foreground profile.
+        applyTrackingMode(.foreground)
     }
 
     func stopTracking() {
         shouldStartAfterPermission = false
+        UserDefaults.standard.set(false, forKey: trackingEnabledKey)
+        trackingEnabled = false
         isTracking = false
         locationManager.stopUpdatingLocation()
         locationManager.stopMonitoringSignificantLocationChanges()
+        locationManager.stopMonitoringVisits()
+    }
+
+    // MARK: - Tracking resume & modes
+
+    /// Resumes location services if the user previously opted in and permission is valid.
+    /// Call this from app launch and when the authorization status changes.
+    func resumeTrackingIfNeeded() {
+        guard trackingEnabled else { return }
+
+        let status = locationManager.authorizationStatus
+        guard status == .authorizedAlways || status == .authorizedWhenInUse else {
+            isTracking = false
+            return
+        }
+
+        guard CLLocationManager.locationServicesEnabled() else {
+            isTracking = false
+            return
+        }
+
+        isTracking = true
+        applyTrackingMode(trackingMode)
+    }
+
+    /// Applies accuracy/distance settings and starts or stops the appropriate location services.
+    /// Only starts services if the user has enabled tracking.
+    func applyTrackingMode(_ mode: TrackingMode) {
+        trackingMode = mode
+
+        switch mode {
+        case .foreground:
+            locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+            locationManager.distanceFilter = 20
+            locationManager.pausesLocationUpdatesAutomatically = false
+
+            guard trackingEnabled else { return }
+            locationManager.startUpdatingLocation()
+            locationManager.startMonitoringSignificantLocationChanges()
+            locationManager.startMonitoringVisits()
+
+        case .background:
+            locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+            locationManager.distanceFilter = 75
+            locationManager.pausesLocationUpdatesAutomatically = true
+
+            guard trackingEnabled else { return }
+            locationManager.startUpdatingLocation()
+            locationManager.startMonitoringSignificantLocationChanges()
+            locationManager.startMonitoringVisits()
+
+        case .lowPower:
+            locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+            locationManager.distanceFilter = 500
+            locationManager.pausesLocationUpdatesAutomatically = true
+
+            guard trackingEnabled else { return }
+            locationManager.stopUpdatingLocation()
+            locationManager.startMonitoringSignificantLocationChanges()
+            locationManager.startMonitoringVisits()
+        }
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -117,14 +222,19 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         Task { @MainActor in
             self.authorizationStatus = newStatus
 
-            if self.shouldStartAfterPermission,
-               newStatus == .authorizedWhenInUse || newStatus == .authorizedAlways {
+            if newStatus == .denied || newStatus == .restricted {
                 self.shouldStartAfterPermission = false
-                self.startTracking()
-            } else if newStatus == .denied || newStatus == .restricted {
-                self.shouldStartAfterPermission = false
+                self.trackingEnabled = false
+                UserDefaults.standard.set(false, forKey: self.trackingEnabledKey)
                 self.isTracking = false
                 self.lastError = "Location permission was denied or restricted."
+            } else if newStatus == .authorizedWhenInUse || newStatus == .authorizedAlways {
+                if self.shouldStartAfterPermission {
+                    self.shouldStartAfterPermission = false
+                    self.startTracking()
+                } else if self.trackingEnabled {
+                    self.resumeTrackingIfNeeded()
+                }
             }
         }
     }
@@ -138,68 +248,144 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         Task { @MainActor [weak self] in
             guard let self else { return }
 
-            var updated = false
             for location in filtered {
-                self.locationsReceived += 1
-                self.lastLocation = location
-                self.lastError = nil
-                updated = true
-
-                let previous = self.previousAcceptedLocation
-                let discoveredIDs = self.explorationEngine.discoveredCellIDs(
-                    from: previous,
-                    to: location
-                )
-
-                for cellID in discoveredIDs {
-                    self.cellStore.upsert(
-                        cellID: cellID,
-                        resolution: self.explorationEngine.resolution,
-                        seenAt: location.timestamp
-                    )
-                }
-
-                self.currentH3CellID = self.explorationEngine.cellID(for: location)
-
-                // Update segment statistics for the debug panel.
-                if let previous = previous {
-                    let distance = location.distance(from: previous)
-                    let gap = location.timestamp.timeIntervalSince(previous.timestamp)
-                    let speed = gap > 0 ? distance / gap : 0
-                    let cellsAdded = max(0, discoveredIDs.count - 1)
-
-                    self.lastSegmentDistance = distance
-                    self.lastSegmentTimeGap = gap
-                    self.lastSegmentSpeed = speed
-                    self.lastCellsAdded = cellsAdded
-
-                    print("🧭 Segment distance=\(Int(distance))m gap=\(Int(gap))s speed=\(String(format: "%.1f", speed))m/s cellsAdded=\(cellsAdded) current=\(self.currentH3CellID ?? "—")")
-                } else {
-                    self.lastSegmentDistance = nil
-                    self.lastSegmentTimeGap = nil
-                    self.lastSegmentSpeed = nil
-                    self.lastCellsAdded = 0
-                }
-
-                self.previousAcceptedLocation = location
-
-                print("""
-                [LocationTracker] location received
-                  - lat: \(location.coordinate.latitude)
-                  - lng: \(location.coordinate.longitude)
-                  - accuracy: \(location.horizontalAccuracy) m
-                  - speed: \(location.speed) m/s
-                  - timestamp: \(location.timestamp)
-                  - age: \(now.timeIntervalSince(location.timestamp)) s
-                  - cells discovered: \(self.discoveredCells.count)
-                """)
-            }
-
-            if updated {
-                self.cellStore.save()
-                self.discoveredCells = self.cellStore.cells
+                self.processAcceptedLocation(location, receivedAt: now)
             }
         }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
+        visitsReceived += 1
+
+        print("""
+        [LocationTracker] visit received
+          - coordinate: \(visit.coordinate.latitude), \(visit.coordinate.longitude)
+          - arrivalDate: \(visit.arrivalDate)
+          - departureDate: \(visit.departureDate)
+          - horizontalAccuracy: \(visit.horizontalAccuracy) m
+        """)
+
+        guard visit.horizontalAccuracy > 0 && visit.horizontalAccuracy <= explorationEngine.maxAccuracy else { return }
+
+        let location = CLLocation(
+            coordinate: visit.coordinate,
+            altitude: 0,
+            horizontalAccuracy: visit.horizontalAccuracy,
+            verticalAccuracy: -1,
+            timestamp: visit.arrivalDate == Date.distantPast ? Date() : visit.arrivalDate
+        )
+
+        guard let cellID = explorationEngine.cellID(for: location) else { return }
+
+        cellStore.upsertMany(
+            cellIDs: [cellID],
+            resolution: explorationEngine.resolution,
+            seenAt: location.timestamp
+        )
+        discoveredCells = cellStore.cells
+    }
+
+    // MARK: - Debug simulation
+
+    /// Feeds a realistic walking trajectory into the same processing path as real
+    /// CoreLocation updates, without touching the location manager.
+    #if DEBUG
+    func simulateWalk() {
+        let unionSquare = CLLocationCoordinate2D(latitude: 37.787994, longitude: -122.407437)
+        let pathOffsets: [(north: Double, east: Double)] = [
+            (0,     0),
+            (70,    0),
+            (130,  40),
+            (190,   0),
+            (190, -70),
+            (120, -70),
+            (60,  -70),
+            (0,   -70),
+            (-60, -40),
+            (0,    0)
+        ]
+        let baseTimestamp = Date().addingTimeInterval(-60 * Double(pathOffsets.count - 1))
+
+        Task { @MainActor [weak self] in
+            for (index, offset) in pathOffsets.enumerated() {
+                guard let self else { return }
+
+                let coordinate = unionSquare.coordinate(
+                    offsetByMetersNorth: offset.north,
+                    east: offset.east
+                )
+                let timestamp = baseTimestamp.addingTimeInterval(60 * Double(index))
+                let accuracy = Double.random(in: 5...10)
+                let location = CLLocation(
+                    coordinate: coordinate,
+                    altitude: 0,
+                    horizontalAccuracy: accuracy,
+                    verticalAccuracy: -1,
+                    timestamp: timestamp
+                )
+
+                self.processAcceptedLocation(location, receivedAt: Date())
+
+                if index < pathOffsets.count - 1 {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                }
+            }
+        }
+    }
+    #endif
+
+    private func processAcceptedLocation(_ location: CLLocation, receivedAt: Date) {
+        locationsReceived += 1
+        lastLocation = location
+        lastError = nil
+
+        let previous = previousAcceptedLocation
+        let discoveredIDs = explorationEngine.discoveredCellIDs(
+            from: previous,
+            to: location
+        )
+
+        let newCells = cellStore.upsertMany(
+            cellIDs: discoveredIDs,
+            resolution: explorationEngine.resolution,
+            seenAt: location.timestamp
+        )
+
+        currentH3CellID = explorationEngine.cellID(for: location)
+
+        // Update segment statistics for the debug panel.
+        if let previous = previous {
+            let distance = location.distance(from: previous)
+            let gap = location.timestamp.timeIntervalSince(previous.timestamp)
+            let speed = gap > 0 ? distance / gap : 0
+
+            lastSegmentDistance = distance
+            lastSegmentTimeGap = gap
+            lastSegmentSpeed = speed
+            lastCellsAdded = newCells
+
+            print("🧭 Segment distance=\(Int(distance))m gap=\(Int(gap))s speed=\(String(format: "%.1f", speed))m/s cellsAdded=\(newCells) current=\(currentH3CellID ?? "—")")
+        } else {
+            lastSegmentDistance = nil
+            lastSegmentTimeGap = nil
+            lastSegmentSpeed = nil
+            lastCellsAdded = newCells
+        }
+
+        previousAcceptedLocation = location
+
+        print("""
+        [LocationTracker] location received
+          - lat: \(location.coordinate.latitude)
+          - lng: \(location.coordinate.longitude)
+          - accuracy: \(location.horizontalAccuracy) m
+          - speed: \(location.speed) m/s
+          - timestamp: \(location.timestamp)
+          - age: \(receivedAt.timeIntervalSince(location.timestamp)) s
+          - cells discovered: \(discoveredCells.count)
+        """)
+
+        discoveredCells = cellStore.cells
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -209,5 +395,17 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             self?.lastError = message
         }
         print("[LocationTracker] error: \(message)")
+    }
+}
+
+private extension CLLocationCoordinate2D {
+    /// Returns a coordinate shifted by the given north/east offsets in meters.
+    func coordinate(offsetByMetersNorth north: Double, east: Double) -> CLLocationCoordinate2D {
+        let metersPerDegreeLatitude = 111_320.0
+        let metersPerDegreeLongitude = 111_320.0 * cos(latitude * .pi / 180)
+        return CLLocationCoordinate2D(
+            latitude: latitude + north / metersPerDegreeLatitude,
+            longitude: longitude + east / metersPerDegreeLongitude
+        )
     }
 }

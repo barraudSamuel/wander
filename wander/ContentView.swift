@@ -11,7 +11,7 @@ import CoreLocation
 
 struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
-    private let explorationEngine = ExplorationEngine()
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var drawerExpanded = false
     @State private var drawerDragOffset: CGFloat = 0
@@ -22,28 +22,40 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Map {
-                    UserAnnotation()
-
-                    ForEach(locationTracker.discoveredCells) { cell in
-                        let coordinates = explorationEngine.boundaryCoordinates(for: cell.id)
-                        if !coordinates.isEmpty {
-                            MapPolygon(coordinates: coordinates)
-                                .foregroundStyle(Color.green.opacity(0.25))
-                                .stroke(Color.green.opacity(0.7), lineWidth: 1)
-                        }
-                    }
-                }
-                .mapControls {
-                    MapUserLocationButton()
-                    MapCompass()
-                    MapScaleView()
-                }
+                // Map with a uniform fog of war overlay. Discovered cells are punched out
+                // as transparent holes; the rest of the zone stays under semi-transparent fog.
+                MapWithFogView(
+                    locationTracker: locationTracker,
+                    discoveredCellIDs: Set(locationTracker.discoveredCells.map { $0.id }),
+                    fogColor: UIColor.black.withAlphaComponent(0.45)
+                )
+                .ignoresSafeArea()
 
                 VStack {
                     Spacer()
                     debugDrawer(in: geometry)
                 }
+            }
+        }
+        .onAppear {
+            // iOS ne garantit pas le tracking continu après un force quit utilisateur.
+            // Ce flag sert à reprendre le tracking quand l’app est relancée ou quand iOS autorise une reprise.
+            locationTracker.resumeTrackingIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            switch newPhase {
+            case .active:
+                if locationTracker.trackingEnabled {
+                    locationTracker.applyTrackingMode(.foreground)
+                }
+            case .background:
+                if locationTracker.trackingEnabled {
+                    locationTracker.applyTrackingMode(.background)
+                }
+            case .inactive:
+                break
+            @unknown default:
+                break
             }
         }
     }
@@ -190,6 +202,10 @@ struct ContentView: View {
             }
             .font(.caption)
 
+            debugStatusSection
+
+            scratchMapDebugSection
+
             HStack(spacing: 12) {
                 Spacer()
 
@@ -198,12 +214,58 @@ struct ContentView: View {
                 }
                 .buttonStyle(DebugButtonStyle(color: .green))
 
+                #if DEBUG
+                Button("Simulate Walk") {
+                    locationTracker.simulateWalk()
+                }
+                .buttonStyle(DebugButtonStyle(color: .blue))
+                #endif
+
                 Button("Stop") {
                     locationTracker.stopTracking()
                 }
                 .buttonStyle(DebugButtonStyle(color: .red))
+
+                Spacer()
             }
         }
+    }
+
+    // MARK: - Tracking status section
+
+    private var debugStatusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tracking")
+                .font(.caption.bold())
+                .foregroundColor(.secondary)
+
+            Group {
+                LabeledDebugRow(label: "Enabled", value: locationTracker.trackingEnabled ? "true" : "false")
+                LabeledDebugRow(label: "Mode", value: locationTracker.trackingMode.rawValue)
+                LabeledDebugRow(label: "Visits", value: "\(locationTracker.visitsReceived)")
+                LabeledDebugRow(label: "Desired acc.", value: locationTracker.desiredAccuracyDescription)
+                LabeledDebugRow(label: "Dist. filter", value: locationTracker.distanceFilterDescription)
+            }
+            .font(.caption)
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: - Scratch map debug section
+
+    private var scratchMapDebugSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Fog of war")
+                .font(.caption.bold())
+                .foregroundColor(.secondary)
+
+            Group {
+                LabeledDebugRow(label: "Discovered cells", value: "\(locationTracker.discoveredCells.count)")
+                LabeledDebugRow(label: "Current H3", value: locationTracker.currentH3CellID ?? "—")
+            }
+            .font(.caption)
+        }
+        .padding(.top, 4)
     }
 
     // MARK: - Helpers
