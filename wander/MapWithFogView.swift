@@ -18,33 +18,38 @@ struct MapWithFogView: UIViewRepresentable {
     /// Set of H3 cell IDs that should be punched through the fog.
     var discoveredCellIDs: Set<String>
 
+    /// City boundary used as the outer fog shape. When empty, no fog is drawn.
+    var cityBoundaryCoordinates: [CLLocationCoordinate2D]
+
     /// Fog colour. Defaults to a semi-transparent black.
     var fogColor: UIColor = UIColor.black.withAlphaComponent(0.45)
-
-    /// Radius around the user covered by the fog. 10 km hides the hard edge
-    /// for normal city use while keeping the overlay lightweight.
-    var outerRadiusMeters: CLLocationDistance = 10_000
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.showsUserLocation = true
-        mapView.userTrackingMode = .follow
+        mapView.userTrackingMode = .none
+
+        // Failsafe initial view over Ho Chi Minh City before the boundary loads.
+        mapView.region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 10.76, longitude: 106.66),
+            span: MKCoordinateSpan(latitudeDelta: 0.35, longitudeDelta: 0.35)
+        )
 
         updateFogOverlay(on: mapView, context: context)
         return mapView
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
-        let overlayChanged = context.coordinator.lastDiscoveredIDs != discoveredCellIDs
-        let centerMoved = shouldRecenterFog(context: context)
+        let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
+        let discoveredChanged = context.coordinator.lastDiscoveredIDs != discoveredCellIDs
 
-        if overlayChanged || centerMoved {
+        if boundaryChanged || discoveredChanged {
             updateFogOverlay(on: uiView, context: context)
         }
 
-        // Keep the camera roughly centered on the latest user location when it
-        // first becomes available.
+        // Center on the user once we have a location; otherwise fit the city
+        // boundary so the fog overlay is visible immediately.
         if let coordinate = locationTracker.lastLocation?.coordinate,
            !context.coordinator.didSetInitialRegion {
             context.coordinator.didSetInitialRegion = true
@@ -53,6 +58,11 @@ struct MapWithFogView: UIViewRepresentable {
                 latitudinalMeters: 800,
                 longitudinalMeters: 800
             )
+            uiView.setRegion(region, animated: true)
+        } else if !context.coordinator.didSetInitialRegion,
+                  cityBoundaryCoordinates.count >= 3 {
+            context.coordinator.didSetInitialRegion = true
+            let region = coordinateRegion(for: cityBoundaryCoordinates)
             uiView.setRegion(region, animated: true)
         }
     }
@@ -72,7 +82,7 @@ struct MapWithFogView: UIViewRepresentable {
             coordinator.fogOverlay = nil
         }
 
-        guard let center = locationTracker.lastLocation?.coordinate else {
+        guard cityBoundaryCoordinates.count >= 3 else {
             coordinator.lastDiscoveredIDs = discoveredCellIDs
             return
         }
@@ -87,62 +97,55 @@ struct MapWithFogView: UIViewRepresentable {
             }
         }
 
-        let outerCoords = squareCoordinates(
-            around: center,
-            radiusInMeters: outerRadiusMeters
-        )
-        let outerPolygon = outerCoords.withUnsafeBufferPointer { buffer -> MKPolygon in
+        let outerPolygon = cityBoundaryCoordinates.withUnsafeBufferPointer { buffer -> MKPolygon in
             guard let base = buffer.baseAddress else {
-                return outerCoords.withUnsafeBufferPointer { fallbackBuffer in
+                return cityBoundaryCoordinates.withUnsafeBufferPointer { fallbackBuffer in
                     MKPolygon(
                         coordinates: fallbackBuffer.baseAddress!,
-                        count: outerCoords.count,
+                        count: cityBoundaryCoordinates.count,
                         interiorPolygons: holes
                     )
                 }
             }
             return MKPolygon(
                 coordinates: base,
-                count: outerCoords.count,
+                count: cityBoundaryCoordinates.count,
                 interiorPolygons: holes
             )
         }
 
         mapView.addOverlay(outerPolygon, level: .aboveRoads)
         coordinator.fogOverlay = outerPolygon
-        coordinator.lastFogCenter = center
         coordinator.lastDiscoveredIDs = discoveredCellIDs
+        coordinator.lastBoundaryLength = cityBoundaryCoordinates.count
     }
 
-    private func shouldRecenterFog(context: Context) -> Bool {
-        guard let current = locationTracker.lastLocation?.coordinate,
-              let previous = context.coordinator.lastFogCenter else {
-            return locationTracker.lastLocation != nil
+    private func coordinateRegion(for coordinates: [CLLocationCoordinate2D]) -> MKCoordinateRegion {
+        guard let first = coordinates.first else {
+            return MKCoordinateRegion()
         }
 
-        let threshold: CLLocationDistance = 2_000
-        let distance = CLLocation(latitude: current.latitude, longitude: current.longitude)
-            .distance(from: CLLocation(latitude: previous.latitude, longitude: previous.longitude))
-        return distance > threshold
-    }
+        var minLat = first.latitude
+        var maxLat = first.latitude
+        var minLon = first.longitude
+        var maxLon = first.longitude
 
-    /// Returns four corners of a square-ish box around `center`.
-    private func squareCoordinates(
-        around center: CLLocationCoordinate2D,
-        radiusInMeters: CLLocationDistance
-    ) -> [CLLocationCoordinate2D] {
-        let metersPerDegreeLatitude = 111_320.0
-        let metersPerDegreeLongitude = 111_320.0 * cos(center.latitude * .pi / 180)
+        for coordinate in coordinates.dropFirst() {
+            minLat = min(minLat, coordinate.latitude)
+            maxLat = max(maxLat, coordinate.latitude)
+            minLon = min(minLon, coordinate.longitude)
+            maxLon = max(maxLon, coordinate.longitude)
+        }
 
-        let latDelta = radiusInMeters / metersPerDegreeLatitude
-        let lonDelta = radiusInMeters / metersPerDegreeLongitude
-
-        return [
-            CLLocationCoordinate2D(latitude: center.latitude + latDelta, longitude: center.longitude - lonDelta),
-            CLLocationCoordinate2D(latitude: center.latitude + latDelta, longitude: center.longitude + lonDelta),
-            CLLocationCoordinate2D(latitude: center.latitude - latDelta, longitude: center.longitude + lonDelta),
-            CLLocationCoordinate2D(latitude: center.latitude - latDelta, longitude: center.longitude - lonDelta)
-        ]
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.4, 0.01),
+            longitudeDelta: max((maxLon - minLon) * 1.4, 0.01)
+        )
+        return MKCoordinateRegion(center: center, span: span)
     }
 
     // MARK: - Coordinator
@@ -151,7 +154,7 @@ struct MapWithFogView: UIViewRepresentable {
         let explorationEngine = ExplorationEngine()
         var fogOverlay: MKPolygon?
         var lastDiscoveredIDs: Set<String> = []
-        var lastFogCenter: CLLocationCoordinate2D?
+        var lastBoundaryLength: Int = 0
         var didSetInitialRegion = false
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {

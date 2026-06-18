@@ -15,6 +15,8 @@ struct ContentView: View {
 
     @State private var drawerExpanded = false
     @State private var drawerDragOffset: CGFloat = 0
+    @State private var cityProgress: CityProgress?
+    @State private var cityBoundaryCoordinates: [CLLocationCoordinate2D] = []
 
     private let drawerCollapsedHeight: CGFloat = 120
     private let drawerExpandedFraction: CGFloat = 0.55
@@ -27,11 +29,13 @@ struct ContentView: View {
                 MapWithFogView(
                     locationTracker: locationTracker,
                     discoveredCellIDs: Set(locationTracker.discoveredCells.map { $0.id }),
-                    fogColor: UIColor.black.withAlphaComponent(0.45)
+                    cityBoundaryCoordinates: cityBoundaryCoordinates,
+                    fogColor: UIColor.black.withAlphaComponent(0.55)
                 )
                 .ignoresSafeArea()
 
                 VStack {
+                    cityProgressBanner
                     Spacer()
                     debugDrawer(in: geometry)
                 }
@@ -41,6 +45,16 @@ struct ContentView: View {
             // iOS ne garantit pas le tracking continu après un force quit utilisateur.
             // Ce flag sert à reprendre le tracking quand l’app est relancée ou quand iOS autorise une reprise.
             locationTracker.resumeTrackingIfNeeded()
+
+            // Pre-compute the city boundary cells once; heavy H3 work happens inside CityBoundary.
+            Task { [locationTracker] in
+                await CityBoundary.shared.load()
+                cityProgress = CityBoundary.shared.progress(against: locationTracker.discoveredCells)
+                cityBoundaryCoordinates = CityBoundary.shared.boundaryCoordinates
+            }
+        }
+        .onChange(of: locationTracker.discoveredCells) { _, _ in
+            updateCityProgress()
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -58,6 +72,52 @@ struct ContentView: View {
                 break
             }
         }
+    }
+
+    // MARK: - City progress
+
+    private func updateCityProgress() {
+        Task { [locationTracker] in
+            cityProgress = CityBoundary.shared.progress(against: locationTracker.discoveredCells)
+        }
+    }
+
+    private var cityProgressBanner: some View {
+        VStack(spacing: 4) {
+            if let progress = cityProgress {
+                Text(progress.cityName)
+                    .font(.caption.bold())
+                    .foregroundColor(.primary)
+
+                Text("\(progress.percentageText) explored — \(progress.exploredCells) / \(progress.totalCells) cells")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.secondary.opacity(0.2))
+                            .frame(height: 4)
+
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.green)
+                            .frame(width: geo.size.width * progress.percentage, height: 4)
+                    }
+                }
+                .frame(height: 4)
+            } else {
+                Text("Calculating city progress…")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     // MARK: - Debug drawer
@@ -262,6 +322,10 @@ struct ContentView: View {
             Group {
                 LabeledDebugRow(label: "Discovered cells", value: "\(locationTracker.discoveredCells.count)")
                 LabeledDebugRow(label: "Current H3", value: locationTracker.currentH3CellID ?? "—")
+                LabeledDebugRow(label: "City", value: cityProgress?.cityName ?? "—")
+                LabeledDebugRow(label: "City cells", value: "\(cityProgress?.totalCells ?? 0)")
+                LabeledDebugRow(label: "Explored", value: "\(cityProgress?.exploredCells ?? 0)")
+                LabeledDebugRow(label: "Progress", value: cityProgress?.percentageText ?? "—")
             }
             .font(.caption)
         }
