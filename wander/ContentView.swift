@@ -12,18 +12,21 @@ import SwiftUI
 import MapKit
 import CoreLocation
 import SwiftData
+import UIKit
 
 struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
 
+    @State private var debugDrawerVisible = false
     @State private var drawerExpanded = false
     @State private var cityProgress: CityProgress?
     @State private var cityBoundaryCoordinates: [CLLocationCoordinate2D] = []
     @State private var centerOnUser = false
 
     private let drawerExpandedFraction: CGFloat = 0.55
+    private let drawerCollapsedHeight: CGFloat = 120
 
     var body: some View {
         GeometryReader { geometry in
@@ -39,12 +42,15 @@ struct ContentView: View {
                 VStack {
                     cityProgressBanner
                     Spacer()
-                    DebugDrawerView(
-                        locationTracker: locationTracker,
-                        isExpanded: $drawerExpanded,
-                        cityProgress: cityProgress,
-                        parentGeometry: geometry
-                    )
+                    if debugDrawerVisible {
+                        DebugDrawerView(
+                            locationTracker: locationTracker,
+                            isExpanded: $drawerExpanded,
+                            cityProgress: cityProgress,
+                            parentGeometry: geometry
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
 
                 VStack {
@@ -62,9 +68,15 @@ struct ContentView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .padding(.trailing, 16)
-                        .padding(.bottom, geometry.size.height * drawerExpandedFraction + 16)
+                        .padding(.bottom, locationButtonBottomPadding(in: geometry))
                     }
                 }
+
+                ThreeFingerPressCatcher {
+                    toggleDebugDrawerVisibility()
+                }
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
             }
         }
         .onAppear {
@@ -103,6 +115,28 @@ struct ContentView: View {
     private func updateCityProgress() {
         Task { [locationTracker] in
             cityProgress = CityBoundary.shared.progress(against: locationTracker.discoveredCells)
+        }
+    }
+
+    private func locationButtonBottomPadding(in geometry: GeometryProxy) -> CGFloat {
+        guard debugDrawerVisible else { return 16 }
+
+        let drawerHeight = drawerExpanded
+            ? geometry.size.height * drawerExpandedFraction
+            : drawerCollapsedHeight
+
+        return drawerHeight + 16
+    }
+
+    private func toggleDebugDrawerVisibility() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        withAnimation(.interpolatingSpring(stiffness: 300, damping: 30)) {
+            debugDrawerVisible.toggle()
+
+            if !debugDrawerVisible {
+                drawerExpanded = false
+            }
         }
     }
 
@@ -156,6 +190,87 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+}
+
+private struct ThreeFingerPressCatcher: UIViewRepresentable {
+    var onPress: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPress: onPress)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+
+        DispatchQueue.main.async {
+            context.coordinator.attach(to: view.window)
+        }
+
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.onPress = onPress
+
+        DispatchQueue.main.async {
+            context.coordinator.attach(to: view.window)
+        }
+    }
+
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onPress: () -> Void
+
+        private weak var attachedView: UIView?
+        private weak var gestureRecognizer: UILongPressGestureRecognizer?
+
+        init(onPress: @escaping () -> Void) {
+            self.onPress = onPress
+        }
+
+        func attach(to view: UIView?) {
+            guard let view, attachedView !== view else { return }
+
+            detach()
+
+            let gestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
+            gestureRecognizer.numberOfTouchesRequired = 3
+            gestureRecognizer.minimumPressDuration = 0.25
+            gestureRecognizer.cancelsTouchesInView = false
+            gestureRecognizer.delaysTouchesBegan = false
+            gestureRecognizer.delaysTouchesEnded = false
+            gestureRecognizer.delegate = self
+
+            view.addGestureRecognizer(gestureRecognizer)
+            attachedView = view
+            self.gestureRecognizer = gestureRecognizer
+        }
+
+        func detach() {
+            if let gestureRecognizer, let attachedView {
+                attachedView.removeGestureRecognizer(gestureRecognizer)
+            }
+
+            attachedView = nil
+            gestureRecognizer = nil
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        @objc private func handlePress(_ gestureRecognizer: UILongPressGestureRecognizer) {
+            guard gestureRecognizer.state == .began else { return }
+            onPress()
+        }
     }
 }
 

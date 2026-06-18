@@ -27,7 +27,7 @@ struct DebugDrawerView: View {
         let expandedHeight = screenHeight * expandedFraction
         let maxOffset = expandedHeight - collapsedHeight
         let baseOffset = isExpanded ? 0 : maxOffset
-        let currentOffset = baseOffset + dragOffset
+        let currentOffset = clampedOffset(baseOffset + dragOffset, maxOffset: maxOffset)
 
         VStack(spacing: 0) {
             drawerHandle(maxOffset: maxOffset)
@@ -54,28 +54,29 @@ struct DebugDrawerView: View {
     private let drawerHandleBottomPadding: CGFloat = 12
 
     private func drawerHandle(maxOffset: CGFloat) -> some View {
-        VStack(spacing: 0) {
+        let dragGesture = DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                let base = isExpanded ? 0 : maxOffset
+                let proposedOffset = clampedOffset(base + value.translation.height, maxOffset: maxOffset)
+                dragOffset = proposedOffset - base
+            }
+            .onEnded { value in
+                let base = isExpanded ? 0 : maxOffset
+                let projectedOffset = clampedOffset(base + value.predictedEndTranslation.height, maxOffset: maxOffset)
+                let threshold = maxOffset / 2
+
+                withAnimation(.interpolatingSpring(stiffness: 300, damping: 30)) {
+                    isExpanded = projectedOffset < threshold
+                    dragOffset = 0
+                }
+            }
+
+        return VStack(spacing: 0) {
             RoundedRectangle(cornerRadius: 2.5)
                 .fill(Color.secondary.opacity(0.5))
                 .frame(width: 40, height: 5)
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            dragOffset = value.translation.height
-                        }
-                        .onEnded { value in
-                            let base = isExpanded ? 0 : maxOffset
-                            let projected = base + dragOffset
-                            let threshold = maxOffset / 2
-
-                            withAnimation(.interpolatingSpring(stiffness: 300, damping: 30)) {
-                                isExpanded = projected < threshold
-                                dragOffset = 0
-                            }
-                        }
-                )
 
             HStack(spacing: 12) {
                 trackingStatusPill
@@ -92,6 +93,7 @@ struct DebugDrawerView: View {
             .padding(.bottom, drawerHandleBottomPadding)
         }
         .contentShape(Rectangle())
+        .gesture(dragGesture)
     }
 
     private var trackingStatusPill: some View {
@@ -252,6 +254,10 @@ struct DebugDrawerView: View {
         formatter.dateStyle = .none
         formatter.timeStyle = .medium
         return formatter.string(from: date)
+    }
+
+    private func clampedOffset(_ offset: CGFloat, maxOffset: CGFloat) -> CGFloat {
+        min(max(offset, 0), maxOffset)
     }
 }
 
