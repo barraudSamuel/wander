@@ -6,10 +6,19 @@
 //
 
 import Foundation
+import SwiftData
 
-struct DiscoveredCell: Identifiable, Codable, Hashable {
-    let id: String
-    let resolution: Int
-    let firstSeenAt: Date
+@Model
+final class DiscoveredCell {
+    @Attribute(.unique) var id: String
+    var resolution: Int
+    var firstSeenAt: Date
     var lastSeenAt: Date
+
+    init(id: String, resolution: Int, firstSeenAt: Date, lastSeenAt: Date) {
+        self.id = id
+        self.resolution = resolution
+        self.firstSeenAt = firstSeenAt
+        self.lastSeenAt = lastSeenAt
+    }
 }

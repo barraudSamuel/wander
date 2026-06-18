@@ -7,77 +7,54 @@
 
 import Foundation
 import Combine
+import SwiftData
 
 final class DiscoveredCellStore: ObservableObject {
     @Published private(set) var cells: [DiscoveredCell] = []
 
-    private var fileURL: URL {
-        let urls = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-        let appSupport = urls.first!
-            .appendingPathComponent("wander", isDirectory: true)
+    private var modelContext: ModelContext?
 
-        if !FileManager.default.fileExists(atPath: appSupport.path) {
-            try? FileManager.default.createDirectory(
-                at: appSupport,
-                withIntermediateDirectories: true
-            )
-        }
-
-        return appSupport.appendingPathComponent("discovered_cells.json")
+    func configure(with context: ModelContext) {
+        modelContext = context
+        load()
     }
 
     func load() {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            cells = []
-            return
-        }
-
+        guard let context = modelContext else { return }
+        var descriptor = FetchDescriptor<DiscoveredCell>()
+        descriptor.sortBy = [SortDescriptor(\.firstSeenAt)]
         do {
-            let data = try Data(contentsOf: fileURL)
-            let decoded = try JSONDecoder().decode([DiscoveredCell].self, from: data)
-            cells = decoded
+            cells = try context.fetch(descriptor)
         } catch {
-            print("[DiscoveredCellStore] failed to load: \(error.localizedDescription)")
+            print("[DiscoveredCellStore] failed to fetch: \(error.localizedDescription)")
             cells = []
-        }
-    }
-
-    func save() {
-        do {
-            let data = try JSONEncoder().encode(cells)
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            print("[DiscoveredCellStore] failed to save: \(error.localizedDescription)")
         }
     }
 
     @discardableResult
     func upsert(cellID: String, resolution: Int, seenAt: Date) -> DiscoveredCell {
-        if let index = cells.firstIndex(where: { $0.id == cellID }) {
-            cells[index].lastSeenAt = seenAt
-            return cells[index]
-        } else {
-            let cell = DiscoveredCell(
-                id: cellID,
-                resolution: resolution,
-                firstSeenAt: seenAt,
-                lastSeenAt: seenAt
-            )
-            cells.append(cell)
+        upsertMany(cellIDs: [cellID], resolution: resolution, seenAt: seenAt)
+        if let cell = cells.first(where: { $0.id == cellID }) {
             return cell
         }
+        let cell = DiscoveredCell(id: cellID, resolution: resolution, firstSeenAt: seenAt, lastSeenAt: seenAt)
+        cells.append(cell)
+        return cell
     }
 
-    /// Upserts many cells at once and persists the store only once.
-    /// Returns the number of cells that were actually added (not updated).
     @discardableResult
     func upsertMany(cellIDs: Set<String>, resolution: Int, seenAt: Date) -> Int {
+        guard let context = modelContext else { return 0 }
         var addedCount = 0
+
         for cellID in cellIDs {
-            if cells.contains(where: { $0.id == cellID }) {
-                if let index = cells.firstIndex(where: { $0.id == cellID }) {
-                    cells[index].lastSeenAt = seenAt
-                }
+            let id = cellID
+            let predicate = #Predicate<DiscoveredCell> { $0.id == id }
+            var descriptor = FetchDescriptor<DiscoveredCell>(predicate: predicate)
+            descriptor.fetchLimit = 1
+
+            if let existing = try? context.fetch(descriptor).first {
+                existing.lastSeenAt = seenAt
             } else {
                 let cell = DiscoveredCell(
                     id: cellID,
@@ -85,11 +62,13 @@ final class DiscoveredCellStore: ObservableObject {
                     firstSeenAt: seenAt,
                     lastSeenAt: seenAt
                 )
-                cells.append(cell)
+                context.insert(cell)
                 addedCount += 1
             }
         }
-        save()
+
+        try? context.save()
+        load()
         return addedCount
     }
 

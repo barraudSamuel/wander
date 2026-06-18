@@ -24,6 +24,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// Fog colour. Defaults to a semi-transparent black.
     var fogColor: UIColor = UIColor.black.withAlphaComponent(0.45)
 
+    /// When toggled, centers the map on the user's current location.
+    @Binding var centerOnUser: Bool
+
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
@@ -63,6 +66,16 @@ struct MapWithFogView: UIViewRepresentable {
                   cityBoundaryCoordinates.count >= 3 {
             context.coordinator.didSetInitialRegion = true
             let region = coordinateRegion(for: cityBoundaryCoordinates)
+            uiView.setRegion(region, animated: true)
+        }
+
+        if centerOnUser, let coordinate = locationTracker.lastLocation?.coordinate {
+            DispatchQueue.main.async { centerOnUser = false }
+            let region = MKCoordinateRegion(
+                center: coordinate,
+                latitudinalMeters: 800,
+                longitudinalMeters: 800
+            )
             uiView.setRegion(region, animated: true)
         }
     }

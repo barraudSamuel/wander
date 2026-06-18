@@ -8,6 +8,7 @@
 import Foundation
 import CoreLocation
 import Combine
+import SwiftData
 
 final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
     enum TrackingMode: String {
@@ -50,15 +51,15 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         self.trackingEnabled = UserDefaults.standard.bool(forKey: trackingEnabledKey)
         super.init()
         locationManager.delegate = self
-        // Default to foreground accuracy until a mode is explicitly applied.
         locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         locationManager.distanceFilter = 20
         locationManager.pausesLocationUpdatesAutomatically = false
-        // Required so startUpdatingLocation keeps working when the app is in the background.
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = true
+    }
 
-        cellStore.load()
+    func configure(with context: ModelContext) {
+        cellStore.configure(with: context)
         discoveredCells = cellStore.cells
     }
 

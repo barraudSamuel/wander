@@ -8,15 +8,18 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import SwiftData
 
 struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.modelContext) private var modelContext
 
     @State private var drawerExpanded = false
     @State private var drawerDragOffset: CGFloat = 0
     @State private var cityProgress: CityProgress?
     @State private var cityBoundaryCoordinates: [CLLocationCoordinate2D] = []
+    @State private var centerOnUser = false
 
     private let drawerCollapsedHeight: CGFloat = 120
     private let drawerExpandedFraction: CGFloat = 0.55
@@ -30,7 +33,8 @@ struct ContentView: View {
                     locationTracker: locationTracker,
                     discoveredCellIDs: Set(locationTracker.discoveredCells.map { $0.id }),
                     cityBoundaryCoordinates: cityBoundaryCoordinates,
-                    fogColor: UIColor.black.withAlphaComponent(0.55)
+                    fogColor: UIColor.black.withAlphaComponent(0.55),
+                    centerOnUser: $centerOnUser
                 )
                 .ignoresSafeArea()
 
@@ -39,14 +43,31 @@ struct ContentView: View {
                     Spacer()
                     debugDrawer(in: geometry)
                 }
+
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button {
+                            centerOnUser = true
+                        } label: {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(width: 44, height: 44)
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .padding(.trailing, 16)
+                        .padding(.bottom, geometry.size.height * drawerExpandedFraction + 16)
+                    }
+                }
             }
         }
         .onAppear {
-            // iOS ne garantit pas le tracking continu après un force quit utilisateur.
-            // Ce flag sert à reprendre le tracking quand l’app est relancée ou quand iOS autorise une reprise.
+            locationTracker.configure(with: modelContext)
             locationTracker.resumeTrackingIfNeeded()
 
-            // Pre-compute the city boundary cells once; heavy H3 work happens inside CityBoundary.
             Task { [locationTracker] in
                 await CityBoundary.shared.load()
                 cityProgress = CityBoundary.shared.progress(against: locationTracker.discoveredCells)
