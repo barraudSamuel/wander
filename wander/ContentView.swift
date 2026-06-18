@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var cityBoundaryCoordinates: [CLLocationCoordinate2D] = []
     @State private var centerOnUser = false
 
+    private let topControlHeight: CGFloat = 64
     private let drawerExpandedFraction: CGFloat = 0.55
     private let drawerCollapsedHeight: CGFloat = 120
 
@@ -40,7 +41,16 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
                 VStack {
-                    cityProgressBanner
+                    HStack(spacing: 8) {
+                        cityProgressBanner
+                        avatarCircle
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                    Spacer()
+                }
+
+                VStack {
                     Spacer()
                     if debugDrawerVisible {
                         DebugDrawerView(
@@ -140,6 +150,19 @@ struct ContentView: View {
         }
     }
 
+    private var avatarCircle: some View {
+        Circle()
+            .fill(.ultraThinMaterial)
+            .overlay {
+                Image(systemName: "person.circle.fill")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .foregroundColor(.white)
+                    .padding(6)
+            }
+            .frame(width: topControlHeight, height: topControlHeight)
+    }
+
     private var cityProgressBanner: some View {
         VStack(spacing: 4) {
             if let progress = cityProgress {
@@ -186,10 +209,9 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
+        .frame(height: topControlHeight)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
     }
 }
 
