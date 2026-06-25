@@ -2,12 +2,13 @@
 //  CityBoundary.swift
 //  wander
 //
-//  Loads a city GeoJSON boundary, normalizes longitudes, turns it into H3
-//  resolution 10 cells, caches the result, and computes the exploration
-//  percentage against the locally discovered cells.
+//  Multi-city support: loads GeoJSON boundaries for all supported cities,
+//  caches H3 polyfill results per city, auto-detects which city the user
+//  is currently in, and computes exploration progress.
 //
 
 import Foundation
+import Combine
 import CoreLocation
 import H3
 
@@ -26,72 +27,157 @@ struct CityProgress {
     }
 }
 
+struct WanderCity {
+    let id: String
+    let name: String
+    let geojson: String
+    let cacheKey: String
+}
+
+extension WanderCity {
+    static let hoChiMinh = WanderCity(
+        id: "hcm",
+        name: "Ho Chi Minh City",
+        geojson: CityGeoJSONData.hoChiMinhCity,
+        cacheKey: "city_hcm_cells"
+    )
+    static let hoiAn = WanderCity(
+        id: "hoian",
+        name: "Hoi An",
+        geojson: CityGeoJSONData.hoiAnCity,
+        cacheKey: "city_hoian_cells"
+    )
+    static let seoul = WanderCity(
+        id: "seoul",
+        name: "Seoul",
+        geojson: CityGeoJSONData.seoulCity,
+        cacheKey: "city_seoul_cells"
+    )
+}
+
 @MainActor
-final class CityBoundary {
+final class CityBoundary: ObservableObject {
     static let shared = CityBoundary()
 
-    let cityName = "Ho Chi Minh City"
+    let allCities: [WanderCity] = [.hoChiMinh, .hoiAn, .seoul]
 
-    /// All H3 resolution 10 cell IDs inside the city boundary.
-    private(set) var cityCellIDs: Set<String> = []
+    @Published var currentCity: WanderCity = .hoChiMinh
+    @Published var boundaryCoordinates: [CLLocationCoordinate2D] = []
+    @Published var cityCellIDs: Set<String> = []
 
-    /// Normalized city boundary coordinates, exposed for the fog overlay.
-    private(set) var boundaryCoordinates: [CLLocationCoordinate2D] = []
+    private var cityData: [String: CityData] = [:]
 
-    private lazy var cacheURL: URL = {
-        guard let appSupportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            fatalError("CityBoundary: applicationSupportDirectory not found")
-        }
-        let appSupport = appSupportDir.appendingPathComponent("wander", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: appSupport.path) {
-            try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        }
-        return appSupport.appendingPathComponent("city_hcm_cells.json")
-    }()
+    private struct CityData {
+        let cells: Set<String>
+        let coordinates: [CLLocationCoordinate2D]
+    }
 
     private init() {}
 
-    // MARK: - Public
+    // MARK: - Load
 
-    /// Loads the city boundary cells from cache, or computes and caches them.
-    /// The heavy H3 polyfill runs on a background task; the rest stays on MainActor.
     func load() async {
-        guard let (h3Ring, clRing) = parseHoChiMinhBoundary() else {
-            cityCellIDs = []
-            return
-        }
-        boundaryCoordinates = clRing
-
-        if let cached = loadCached() {
-            cityCellIDs = cached
-            return
+        for city in allCities {
+            guard let data = await loadCity(city) else { continue }
+            cityData[city.id] = data
         }
 
+        if let data = cityData[currentCity.id] {
+            cityCellIDs = data.cells
+            boundaryCoordinates = data.coordinates
+        } else if let fallback = allCities.first(where: { cityData[$0.id] != nil }) {
+            currentCity = fallback
+            cityCellIDs = cityData[fallback.id]!.cells
+            boundaryCoordinates = cityData[fallback.id]!.coordinates
+        }
+    }
+
+    private func loadCity(_ city: WanderCity) async -> CityData? {
+        let cacheURL = cityCacheURL(for: city.cacheKey)
+
+        // Parse boundary coordinates from GeoJSON.
+        guard let (h3Ring, clRing) = parseBoundary(geojson: city.geojson) else { return nil }
+
+        // Use cached H3 cells if available.
+        if let cached = loadCachedCells(from: cacheURL) {
+            return CityData(cells: cached, coordinates: clRing)
+        }
+
+        // Compute H3 polyfill (heavy — off the main actor).
         let ids = await Task.detached(priority: .userInitiated) {
             let polygon = H3GeoPolygon(exterior: h3Ring)
             let cells = polygon.fill(resolution: 10)
             return Set(cells.map { $0.description })
         }.value
 
-        cityCellIDs = ids
-        cache(ids)
+        cacheCells(ids, to: cacheURL)
+        return CityData(cells: ids, coordinates: clRing)
     }
 
-    /// Computes the current exploration progress for the given discovered cells.
+    // MARK: - City detection
+
+    func detectCity(for coordinate: CLLocationCoordinate2D) {
+        for city in allCities {
+            guard let data = cityData[city.id] else { continue }
+            if isPoint(coordinate, inPolygon: data.coordinates) {
+                if currentCity.id != city.id {
+                    selectCity(city)
+                }
+                return
+            }
+        }
+    }
+
+    private func selectCity(_ city: WanderCity) {
+        currentCity = city
+        if let data = cityData[city.id] {
+            cityCellIDs = data.cells
+            boundaryCoordinates = data.coordinates
+        }
+    }
+
+    // MARK: - Progress
+
     func progress(against discoveredCells: [DiscoveredCell]) -> CityProgress {
         let discoveredIDs = Set(discoveredCells.map { $0.id })
         let explored = cityCellIDs.intersection(discoveredIDs)
         return CityProgress(
-            cityName: cityName,
+            cityName: currentCity.name,
             totalCells: cityCellIDs.count,
             exploredCells: explored.count
         )
     }
 
+    // MARK: - Point-in-polygon (ray casting)
+
+    private func isPoint(_ point: CLLocationCoordinate2D,
+                         inPolygon polygon: [CLLocationCoordinate2D]) -> Bool {
+        guard polygon.count >= 3 else { return false }
+
+        var inside = false
+        var j = polygon.count - 1
+
+        for i in 0..<polygon.count {
+            let pi = polygon[i]
+            let pj = polygon[j]
+
+            let intersect = (pi.longitude > point.longitude) != (pj.longitude > point.longitude)
+                && point.latitude < (pj.latitude - pi.latitude)
+                    * (point.longitude - pi.longitude)
+                    / (pj.longitude - pi.longitude)
+                    + pi.latitude
+
+            if intersect { inside.toggle() }
+            j = i
+        }
+
+        return inside
+    }
+
     // MARK: - Parsing
 
-    private func parseHoChiMinhBoundary() -> (h3Ring: [H3Coordinate], clRing: [CLLocationCoordinate2D])? {
-        guard let data = CityGeoJSONData.hoChiMinhCity.data(using: .utf8) else { return nil }
+    private func parseBoundary(geojson: String) -> (h3Ring: [H3Coordinate], clRing: [CLLocationCoordinate2D])? {
+        guard let data = geojson.data(using: .utf8) else { return nil }
 
         do {
             let collection = try JSONDecoder().decode(GeoJSONFeatureCollection.self, from: data)
@@ -115,7 +201,6 @@ final class CityBoundary {
         }
     }
 
-    /// Wraps a longitude into the [-180, 180] range.
     private func normalizeLongitude(_ longitude: Double) -> Double {
         var lon = longitude.truncatingRemainder(dividingBy: 360)
         if lon > 180 { lon -= 360 }
@@ -125,10 +210,27 @@ final class CityBoundary {
 
     // MARK: - Cache
 
-    private func loadCached() -> Set<String>? {
-        guard FileManager.default.fileExists(atPath: cacheURL.path) else { return nil }
+    private func appSupportDirectory() -> URL {
+        guard let dir = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first else {
+            fatalError("CityBoundary: applicationSupportDirectory not found")
+        }
+        let wanderDir = dir.appendingPathComponent("wander", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: wanderDir.path) {
+            try? FileManager.default.createDirectory(at: wanderDir, withIntermediateDirectories: true)
+        }
+        return wanderDir
+    }
+
+    private func cityCacheURL(for key: String) -> URL {
+        appSupportDirectory().appendingPathComponent("\(key).json")
+    }
+
+    private func loadCachedCells(from url: URL) -> Set<String>? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
-            let data = try Data(contentsOf: cacheURL)
+            let data = try Data(contentsOf: url)
             let decoded = try JSONDecoder().decode([String].self, from: data)
             return Set(decoded)
         } catch {
@@ -137,10 +239,10 @@ final class CityBoundary {
         }
     }
 
-    private func cache(_ ids: Set<String>) {
+    private func cacheCells(_ ids: Set<String>, to url: URL) {
         do {
             let data = try JSONEncoder().encode(Array(ids))
-            try data.write(to: cacheURL, options: .atomic)
+            try data.write(to: url, options: .atomic)
         } catch {
             print("[CityBoundary] failed to cache city cells: \(error.localizedDescription)")
         }

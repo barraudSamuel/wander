@@ -16,14 +16,18 @@ import UIKit
 
 struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
+    @StateObject private var groupSyncService = GroupSyncService()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
+    @AppStorage("profile.displayName") private var displayName = ""
+    @AppStorage("profile.avatarImageData") private var avatarImageData = Data()
 
     @State private var debugDrawerVisible = false
     @State private var drawerExpanded = false
-    @State private var cityProgress: CityProgress?
-    @State private var cityBoundaryCoordinates: [CLLocationCoordinate2D] = []
+    @State private var profileCardVisible = false
     @State private var centerOnUser = false
+
+    @ObservedObject private var cityBoundary = CityBoundary.shared
 
     private let topControlHeight: CGFloat = 64
     private let drawerExpandedFraction: CGFloat = 0.55
@@ -35,7 +39,8 @@ struct ContentView: View {
                 MapWithFogView(
                     locationTracker: locationTracker,
                     discoveredCellIDs: Set(locationTracker.discoveredCells.map { $0.id }),
-                    cityBoundaryCoordinates: cityBoundaryCoordinates,
+                    cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
+                    groupMembers: otherGroupMembers,
                     centerOnUser: $centerOnUser
                 )
                 .ignoresSafeArea()
@@ -93,14 +98,25 @@ struct ContentView: View {
             locationTracker.configure(with: modelContext)
             locationTracker.resumeTrackingIfNeeded()
 
-            Task { [locationTracker] in
-                await CityBoundary.shared.load()
-                cityProgress = CityBoundary.shared.progress(against: locationTracker.discoveredCells)
-                cityBoundaryCoordinates = CityBoundary.shared.boundaryCoordinates
+            Task {
+                await cityBoundary.load()
             }
         }
-        .onChange(of: locationTracker.discoveredCells) { _, _ in
-            updateCityProgress()
+        .onChange(of: groupSyncService.newRemoteCellIDs) { _, newIDs in
+            locationTracker.mergeRemoteCells(newIDs)
+        }
+        .onChange(of: locationTracker.newlyDiscoveredCellIDs) { _, newIDs in
+            groupSyncService.pushCells(newIDs)
+        }
+        .onChange(of: locationTracker.lastLocation) { _, location in
+            guard let location else { return }
+            cityBoundary.detectCity(for: location.coordinate)
+            groupSyncService.updateLocation(
+                lat: location.coordinate.latitude,
+                lng: location.coordinate.longitude,
+                cellID: locationTracker.currentH3CellID,
+                displayName: displayName.isEmpty ? "Explorer" : displayName
+            )
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -120,12 +136,19 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Group members
+
+    private var otherGroupMembers: [GroupMember] {
+        guard let currentUserId = FirebaseService.shared.currentUserId else { return [] }
+        return groupSyncService.groupMembers.values
+            .filter { $0.userId != currentUserId && $0.location != nil }
+    }
+
     // MARK: - City progress
 
-    private func updateCityProgress() {
-        Task { [locationTracker] in
-            cityProgress = CityBoundary.shared.progress(against: locationTracker.discoveredCells)
-        }
+    private var cityProgress: CityProgress? {
+        guard !cityBoundary.cityCellIDs.isEmpty else { return nil }
+        return cityBoundary.progress(against: locationTracker.discoveredCells)
     }
 
     private func locationButtonBottomPadding(in geometry: GeometryProxy) -> CGFloat {
@@ -151,16 +174,22 @@ struct ContentView: View {
     }
 
     private var avatarCircle: some View {
-        Circle()
-            .fill(.ultraThinMaterial)
-            .overlay {
-                Image(systemName: "person.circle.fill")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundColor(.white)
-                    .padding(6)
-            }
-            .frame(width: topControlHeight, height: topControlHeight)
+        Button {
+            profileCardVisible = true
+        } label: {
+            ProfileAvatarView(imageData: avatarImageData, size: topControlHeight)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $profileCardVisible) {
+            ProfileCardView(
+                displayName: displayName,
+                avatarImageData: avatarImageData,
+                cityProgress: cityProgress,
+                isTracking: locationTracker.isTracking
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     private var cityProgressBanner: some View {
@@ -212,6 +241,91 @@ struct ContentView: View {
         .frame(height: topControlHeight)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct ProfileCardView: View {
+    let displayName: String
+    let avatarImageData: Data
+    let cityProgress: CityProgress?
+    let isTracking: Bool
+
+    var body: some View {
+        VStack(spacing: 24) {
+            VStack(spacing: 12) {
+                ProfileAvatarView(imageData: avatarImageData, size: 108)
+
+                VStack(spacing: 4) {
+                    Text(displayName.isEmpty ? "Explorer" : displayName)
+                        .font(.title2.bold())
+
+                    Text(isTracking ? "Exploration active" : "Exploration en pause")
+                        .font(.subheadline)
+                        .foregroundStyle(isTracking ? .green : .secondary)
+                }
+            }
+
+            VStack(spacing: 12) {
+                ProfileInfoRow(
+                    iconName: "map.fill",
+                    title: "Ville",
+                    value: cityProgress?.cityName ?? "Calcul en cours"
+                )
+
+                ProfileInfoRow(
+                    iconName: "chart.pie.fill",
+                    title: "Progression",
+                    value: cityProgress?.percentageText ?? "-"
+                )
+
+                ProfileInfoRow(
+                    iconName: "square.grid.3x3.fill",
+                    title: "Cellules explorées",
+                    value: exploredCellsText
+                )
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 48)
+        .padding(.bottom, 20)
+    }
+
+    private var exploredCellsText: String {
+        guard let cityProgress else { return "-" }
+        return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
+    }
+}
+
+private struct ProfileInfoRow: View {
+    let iconName: String
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.green)
+                .frame(width: 34, height: 34)
+                .background(Color.green.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Text(value)
+                .font(.subheadline.bold())
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 54)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }
 

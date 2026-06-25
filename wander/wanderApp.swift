@@ -11,6 +11,7 @@ import SwiftData
 @main
 struct wanderApp: App {
     let container: ModelContainer
+    @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     init() {
         do {
@@ -19,11 +20,18 @@ struct wanderApp: App {
             fatalError("Failed to create ModelContainer: \(error)")
         }
         LegacyMigration.migrateJSONToSwiftData(container: container)
+
+        FirebaseService.shared.configure()
+        FirebaseService.shared.signIn()
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            if onboardingCompleted {
+                ContentView()
+            } else {
+                OnboardingView()
+            }
         }
         .modelContainer(container)
     }

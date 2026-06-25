@@ -45,6 +45,7 @@ fastlane/test_output
 *.pem
 *.p12
 *.mobileprovision
+GoogleService-Info*.plist
 
 # Archives
 *.ipa

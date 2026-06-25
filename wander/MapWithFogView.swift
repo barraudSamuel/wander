@@ -21,6 +21,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// City boundary used as the outer fog shape. When empty, no fog is drawn.
     var cityBoundaryCoordinates: [CLLocationCoordinate2D]
 
+    /// Group members to display on the map (excluding the current user).
+    var groupMembers: [GroupMember] = []
+
     /// Fog colour — used by the polygon renderer.
     var fogColor: UIColor = UIColor.black.withAlphaComponent(0.45)
 
@@ -46,9 +49,14 @@ struct MapWithFogView: UIViewRepresentable {
     func updateUIView(_ uiView: MKMapView, context: Context) {
         let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
         let discoveredChanged = context.coordinator.lastDiscoveredIDs != discoveredCellIDs
+        let membersChanged = context.coordinator.lastMemberUserIDs != Set(groupMembers.map { $0.userId })
 
         if boundaryChanged || discoveredChanged {
             updateFogOverlay(on: uiView, context: context)
+        }
+
+        if membersChanged {
+            updateMemberAnnotations(on: uiView, context: context)
         }
 
         // Center on the user once we have a location; otherwise fit the city
@@ -82,6 +90,43 @@ struct MapWithFogView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(fogColor: fogColor)
+    }
+
+    // MARK: - Member annotations
+
+    private func updateMemberAnnotations(on mapView: MKMapView, context: Context) {
+        let coordinator = context.coordinator
+
+        // Remove annotations that are no longer in the group.
+        let currentIDs = Set(groupMembers.map { $0.userId })
+        let removedIDs = coordinator.memberAnnotations.keys.filter { !currentIDs.contains($0) }
+        for userId in removedIDs {
+            if let annotation = coordinator.memberAnnotations.removeValue(forKey: userId) {
+                mapView.removeAnnotation(annotation)
+            }
+        }
+
+        // Add or update annotations for current members.
+        for member in groupMembers {
+            guard let location = member.location else { continue }
+
+            if let existing = coordinator.memberAnnotations[member.userId] {
+                UIView.animate(withDuration: 0.5) {
+                    existing.coordinate = location
+                }
+                existing.title = member.displayName
+                existing.subtitle = member.userId
+            } else {
+                let annotation = MKPointAnnotation()
+                annotation.coordinate = location
+                annotation.title = member.displayName
+                annotation.subtitle = member.userId
+                coordinator.memberAnnotations[member.userId] = annotation
+                mapView.addAnnotation(annotation)
+            }
+        }
+
+        coordinator.lastMemberUserIDs = currentIDs
     }
 
     // MARK: - Fog overlay
@@ -162,6 +207,8 @@ struct MapWithFogView: UIViewRepresentable {
         var lastDiscoveredIDs: Set<String> = []
         var lastBoundaryLength: Int = 0
         var didSetInitialRegion = false
+        var memberAnnotations: [String: MKPointAnnotation] = [:]
+        var lastMemberUserIDs: Set<String> = []
 
         init(fogColor: UIColor) {
             self.fogColor = fogColor
@@ -176,6 +223,62 @@ struct MapWithFogView: UIViewRepresentable {
                 return renderer
             }
             return MKOverlayRenderer(overlay: overlay)
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard !(annotation is MKUserLocation) else { return nil }
+
+            let identifier = "GroupMemberAnnotation"
+            var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
+
+            if annotationView == nil {
+                annotationView = MKAnnotationView(annotation: annotation, reuseIdentifier: identifier)
+                annotationView?.canShowCallout = true
+                annotationView?.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
+                annotationView?.layer.cornerRadius = 16
+                annotationView?.layer.borderWidth = 2
+                annotationView?.layer.borderColor = UIColor.white.cgColor
+                annotationView?.clipsToBounds = true
+            } else {
+                annotationView?.annotation = annotation
+            }
+
+            // Colored circle with first letter of display name.
+            let name = annotation.title ?? "?"
+            let initial = String(name?.prefix(1) ?? "?")
+            let stableKey = annotation.subtitle.flatMap { $0 } ?? name ?? "?"
+            let color = memberColor(for: stableKey)
+
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32))
+            let image = renderer.image { ctx in
+                color.setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 14, weight: .bold),
+                    .foregroundColor: UIColor.white
+                ]
+                let size = initial.size(withAttributes: attributes)
+                let point = CGPoint(
+                    x: (32 - size.width) / 2,
+                    y: (32 - size.height) / 2
+                )
+                initial.draw(at: point, withAttributes: attributes)
+            }
+
+            annotationView?.image = image
+            return annotationView
+        }
+
+        private func memberColor(for name: String?) -> UIColor {
+            let colors: [UIColor] = [
+                .systemBlue, .systemGreen, .systemOrange,
+                .systemPink, .systemPurple, .systemTeal,
+                .systemIndigo, .systemRed, .systemYellow,
+                .systemMint
+            ]
+            let hash = abs((name ?? "?").hashValue)
+            return colors[hash % colors.count]
         }
     }
 }

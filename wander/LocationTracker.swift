@@ -36,6 +36,10 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var discoveredCells: [DiscoveredCell] = []
     @Published var currentH3CellID: String?
 
+    /// Newly discovered cell IDs from the most recent location processing pass.
+    /// ContentView observes this to push new cells to Firestore.
+    @Published var newlyDiscoveredCellIDs: Set<String> = []
+
     // Last accepted segment statistics for the debug panel.
     @Published var lastSegmentDistance: CLLocationDistance?
     @Published var lastSegmentTimeGap: TimeInterval?
@@ -350,11 +354,16 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             to: location
         )
 
+        let existingBefore = Set(cellStore.cells.map { $0.id })
+        let newIDs = discoveredIDs.subtracting(existingBefore)
+
         let newCells = cellStore.upsertMany(
             cellIDs: discoveredIDs,
             resolution: explorationEngine.resolution,
             seenAt: location.timestamp
         )
+
+        newlyDiscoveredCellIDs = newIDs
 
         currentH3CellID = explorationEngine.cellID(for: location)
 
@@ -391,6 +400,21 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         """)
 
         discoveredCells = cellStore.cells
+    }
+
+    func mergeRemoteCells(_ cellIDs: Set<String>) {
+        guard !cellIDs.isEmpty else { return }
+
+        let newCount = cellStore.upsertMany(
+            cellIDs: cellIDs,
+            resolution: explorationEngine.resolution,
+            seenAt: Date()
+        )
+
+        if newCount > 0 {
+            discoveredCells = cellStore.cells
+            print("[LocationTracker] merged \(newCount) remote cells")
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
