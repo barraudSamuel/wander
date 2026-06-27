@@ -14,6 +14,8 @@ final class DiscoveredCell {
     var resolution: Int
     var firstSeenAt: Date
     var lastSeenAt: Date
+    var duration: TimeInterval = 0
+    var visitCount: Int = 1
 
     init(id: String, resolution: Int, firstSeenAt: Date, lastSeenAt: Date) {
         self.id = id

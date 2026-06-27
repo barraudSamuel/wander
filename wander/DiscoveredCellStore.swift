@@ -12,6 +12,12 @@ import Foundation
 import Combine
 import SwiftData
 
+struct CellHeatMapUpdate {
+    let cellID: String
+    let duration: TimeInterval
+    let visitIncrement: Int
+}
+
 final class DiscoveredCellStore: ObservableObject {
     @Published private(set) var cells: [DiscoveredCell] = []
 
@@ -75,6 +81,43 @@ final class DiscoveredCellStore: ObservableObject {
         try? context.save()
         load()
         return addedCount
+    }
+
+    /// Accumulates duration and visit count updates into matching cells.
+    /// Cells that don't exist yet are created first via upsertMany.
+    func applyHeatMapUpdates(_ updates: [CellHeatMapUpdate], resolution: Int, seenAt: Date) {
+        guard let context = modelContext, !updates.isEmpty else { return }
+
+        let allExisting = (try? context.fetch(FetchDescriptor<DiscoveredCell>())) ?? []
+        let existingByID = Dictionary(uniqueKeysWithValues: allExisting.map { ($0.id, $0) })
+
+        var needsLoad = false
+
+        for update in updates {
+            let cell: DiscoveredCell
+            if let existing = existingByID[update.cellID] {
+                cell = existing
+            } else {
+                cell = DiscoveredCell(
+                    id: update.cellID,
+                    resolution: resolution,
+                    firstSeenAt: seenAt,
+                    lastSeenAt: seenAt
+                )
+                context.insert(cell)
+                needsLoad = true
+            }
+
+            cell.duration += update.duration
+            cell.visitCount += update.visitIncrement
+        }
+
+        try? context.save()
+        if needsLoad {
+            load()
+        } else {
+            cells = allExisting
+        }
     }
 
     func contains(_ cellID: String) -> Bool {

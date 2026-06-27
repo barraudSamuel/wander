@@ -25,7 +25,11 @@ struct ContentView: View {
     @State private var debugDrawerVisible = false
     @State private var drawerExpanded = false
     @State private var profileCardVisible = false
+    @State private var filterSheetVisible = false
     @State private var centerOnUser = false
+    @State private var heatMapEnabled = false
+    @State private var selectedFriendUserIDs: Set<String> = []
+    @State private var knownFriendUserIDs: Set<String> = []
 
     @ObservedObject private var cityBoundary = CityBoundary.shared
 
@@ -41,17 +45,22 @@ struct ContentView: View {
                     discoveredCellIDs: Set(locationTracker.discoveredCells.map { $0.id }),
                     cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
                     groupMembers: otherGroupMembers,
-                    centerOnUser: $centerOnUser
+                    centerOnUser: $centerOnUser,
+                    showsHeatMap: heatMapEnabled,
+                    friendCellIDsByUserID: filteredFriendCellIDsByUserID,
+                    heatMapCellData: locationTracker.heatMapCellData
                 )
                 .ignoresSafeArea()
 
                 VStack {
                     HStack(spacing: 8) {
                         cityProgressBanner
+                        filterButton
                         avatarCircle
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
+
                     Spacer()
                 }
 
@@ -101,9 +110,10 @@ struct ContentView: View {
             Task {
                 await cityBoundary.load()
             }
+            syncFriendFilterSelection()
         }
-        .onChange(of: groupSyncService.newRemoteCellIDs) { _, newIDs in
-            locationTracker.mergeRemoteCells(newIDs)
+        .onChange(of: groupSyncService.friendCellIDsByUserID) { _, _ in
+            syncFriendFilterSelection()
         }
         .onChange(of: locationTracker.newlyDiscoveredCellIDs) { _, newIDs in
             groupSyncService.pushCells(newIDs)
@@ -142,6 +152,36 @@ struct ContentView: View {
         guard let currentUserId = FirebaseService.shared.currentUserId else { return [] }
         return groupSyncService.groupMembers.values
             .filter { $0.userId != currentUserId && $0.location != nil }
+    }
+
+    private var friendScratchSummaries: [FriendScratchSummary] {
+        groupSyncService.friendCellIDsByUserID
+            .filter { !$0.value.isEmpty }
+            .map { userID, cellIDs in
+                FriendScratchSummary(
+                    userID: userID,
+                    displayName: groupSyncService.groupMembers[userID]?.displayName ?? "Explorer",
+                    cellCount: cellIDs.count
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+    }
+
+    private var filteredFriendCellIDsByUserID: [String: Set<String>] {
+        groupSyncService.friendCellIDsByUserID.filter { userID, cellIDs in
+            selectedFriendUserIDs.contains(userID) && !cellIDs.isEmpty
+        }
+    }
+
+    private func syncFriendFilterSelection() {
+        let currentUserIDs = Set(groupSyncService.friendCellIDsByUserID.keys)
+        let newUserIDs = currentUserIDs.subtracting(knownFriendUserIDs)
+
+        selectedFriendUserIDs.formUnion(newUserIDs)
+        selectedFriendUserIDs.formIntersection(currentUserIDs)
+        knownFriendUserIDs = currentUserIDs
     }
 
     // MARK: - City progress
@@ -186,6 +226,29 @@ struct ContentView: View {
                 avatarImageData: avatarImageData,
                 cityProgress: cityProgress,
                 isTracking: locationTracker.isTracking
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var filterButton: some View {
+        Button {
+            filterSheetVisible = true
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.primary)
+                .frame(width: topControlHeight, height: topControlHeight)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $filterSheetVisible) {
+            MapFiltersSheet(
+                heatMapEnabled: $heatMapEnabled,
+                selectedFriendUserIDs: $selectedFriendUserIDs,
+                friendScratchSummaries: friendScratchSummaries
             )
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
@@ -295,6 +358,74 @@ private struct ProfileCardView: View {
     private var exploredCellsText: String {
         guard let cityProgress else { return "-" }
         return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
+    }
+}
+
+private struct FriendScratchSummary: Identifiable {
+    let userID: String
+    let displayName: String
+    let cellCount: Int
+
+    var id: String { userID }
+}
+
+private struct MapFiltersSheet: View {
+    @Binding var heatMapEnabled: Bool
+    @Binding var selectedFriendUserIDs: Set<String>
+
+    let friendScratchSummaries: [FriendScratchSummary]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Carte") {
+                    Toggle("Heat", isOn: $heatMapEnabled)
+                }
+
+                Section("Amis") {
+                    if friendScratchSummaries.isEmpty {
+                        Text("Aucun scratch ami")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(friendScratchSummaries) { summary in
+                            Toggle(isOn: friendSelectionBinding(for: summary.userID)) {
+                                HStack(spacing: 10) {
+                                    Circle()
+                                        .fill(Color(uiColor: FriendColor.color(for: summary.userID)))
+                                        .frame(width: 12, height: 12)
+
+                                    Text(summary.displayName)
+                                        .lineLimit(1)
+
+                                    Spacer()
+
+                                    Text("\(summary.cellCount)")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Filtres")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func friendSelectionBinding(for userID: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                selectedFriendUserIDs.contains(userID)
+            },
+            set: { isSelected in
+                if isSelected {
+                    selectedFriendUserIDs.insert(userID)
+                } else {
+                    selectedFriendUserIDs.remove(userID)
+                }
+            }
+        )
     }
 }
 

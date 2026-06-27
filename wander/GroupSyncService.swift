@@ -27,7 +27,7 @@ struct GroupMember: Equatable {
 
 final class GroupSyncService: ObservableObject {
     @Published var groupMembers: [String: GroupMember] = [:]
-    @Published var newRemoteCellIDs: Set<String> = []
+    @Published var friendCellIDsByUserID: [String: Set<String>] = [:]
 
     private let db = Firestore.firestore()
     private let defaultGroupId = "default"
@@ -121,8 +121,8 @@ final class GroupSyncService: ObservableObject {
         for cellID in cellIDs {
             let docRef = groupRef.collection("cells").document(cellID)
             batch.setData([
-                "discoveredBy": userId,
-                "timestamp": FieldValue.serverTimestamp()
+                "discoveredByUserIds": FieldValue.arrayUnion([userId]),
+                "updatedAt": FieldValue.serverTimestamp()
             ], forDocument: docRef, merge: true)
         }
 
@@ -190,17 +190,18 @@ final class GroupSyncService: ObservableObject {
 
                 guard let snapshot else { return }
 
-                var remoteIDs = Set<String>()
+                var friendCells: [String: Set<String>] = [:]
                 for doc in snapshot.documents {
                     let data = doc.data()
-                    let discoveredBy = data["discoveredBy"] as? String ?? ""
-                    if discoveredBy != self.userId {
-                        remoteIDs.insert(doc.documentID)
+                    let discoveredByUserIds = data["discoveredByUserIds"] as? [String] ?? []
+
+                    for discoveredBy in discoveredByUserIds where discoveredBy != self.userId {
+                        friendCells[discoveredBy, default: []].insert(doc.documentID)
                     }
                 }
 
                 DispatchQueue.main.async {
-                    self.newRemoteCellIDs = remoteIDs
+                    self.friendCellIDsByUserID = friendCells
                 }
             }
     }

@@ -21,6 +21,10 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private let explorationEngine = ExplorationEngine()
     private let cellStore = DiscoveredCellStore()
     private var previousAcceptedLocation: CLLocation?
+    private var previousAcceptedCellID: String?
+    private var pendingHeatMapUpdates: [String: CellHeatMapUpdate] = [:]
+    private var heatMapFlushTimer: Timer?
+    private let heatMapFlushInterval: TimeInterval = 30
 
     // Persistence key for the user's tracking intention.
     private let trackingEnabledKey = "trackingEnabled"
@@ -35,6 +39,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var lastError: String?
     @Published var discoveredCells: [DiscoveredCell] = []
     @Published var currentH3CellID: String?
+
+    @Published var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
 
     /// Newly discovered cell IDs from the most recent location processing pass.
     /// ContentView observes this to push new cells to Firestore.
@@ -65,6 +71,35 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     func configure(with context: ModelContext) {
         cellStore.configure(with: context)
         discoveredCells = cellStore.cells
+        rebuildHeatMapData()
+    }
+
+    // MARK: - Heat map persistence
+
+    private func scheduleHeatMapFlush() {
+        heatMapFlushTimer?.invalidate()
+        heatMapFlushTimer = Timer.scheduledTimer(withTimeInterval: heatMapFlushInterval, repeats: false) { [weak self] _ in
+            self?.flushHeatMapUpdates()
+        }
+    }
+
+    private func flushHeatMapUpdates() {
+        guard !pendingHeatMapUpdates.isEmpty else { return }
+        let updates = Array(pendingHeatMapUpdates.values)
+        pendingHeatMapUpdates.removeAll()
+        cellStore.applyHeatMapUpdates(updates, resolution: explorationEngine.resolution, seenAt: Date())
+        discoveredCells = cellStore.cells
+        rebuildHeatMapData()
+    }
+
+    private func rebuildHeatMapData() {
+        var data: [String: (duration: TimeInterval, visitCount: Int)] = [:]
+        for cell in discoveredCells {
+            if cell.duration > 0 || cell.visitCount > 1 {
+                data[cell.id] = (cell.duration, cell.visitCount)
+            }
+        }
+        heatMapCellData = data
     }
 
     // MARK: - Debug info
@@ -154,6 +189,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         UserDefaults.standard.set(false, forKey: trackingEnabledKey)
         trackingEnabled = false
         isTracking = false
+        heatMapFlushTimer?.invalidate()
+        flushHeatMapUpdates()
         locationManager.stopUpdatingLocation()
         locationManager.stopMonitoringSignificantLocationChanges()
         locationManager.stopMonitoringVisits()
@@ -365,9 +402,67 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
         newlyDiscoveredCellIDs = newIDs
 
-        currentH3CellID = explorationEngine.cellID(for: location)
+        let cellID = explorationEngine.cellID(for: location)
+        currentH3CellID = cellID
 
-        // Update segment statistics for the debug panel.
+        if let previous = previous, let cellID = cellID {
+            let timeDelta = location.timestamp.timeIntervalSince(previous.timestamp)
+            if timeDelta > 0, timeDelta <= explorationEngine.maxGapToConnect {
+                let attributedCellID: String
+                let isNewCell: Bool
+
+                if let previousCell = previousAcceptedCellID, previousCell != cellID {
+                    attributedCellID = previousCell
+                    isNewCell = true
+                } else {
+                    attributedCellID = cellID
+                    isNewCell = previousAcceptedCellID == nil
+                }
+
+                var update = pendingHeatMapUpdates[attributedCellID] ?? CellHeatMapUpdate(
+                    cellID: attributedCellID,
+                    duration: 0,
+                    visitIncrement: 0
+                )
+                update = CellHeatMapUpdate(
+                    cellID: attributedCellID,
+                    duration: update.duration + timeDelta,
+                    visitIncrement: update.visitIncrement
+                )
+                pendingHeatMapUpdates[attributedCellID] = update
+
+                if isNewCell, let _ = previousAcceptedCellID {
+                    var newUpdate = pendingHeatMapUpdates[cellID] ?? CellHeatMapUpdate(
+                        cellID: cellID,
+                        duration: 0,
+                        visitIncrement: 0
+                    )
+                    newUpdate = CellHeatMapUpdate(
+                        cellID: cellID,
+                        duration: newUpdate.duration,
+                        visitIncrement: newUpdate.visitIncrement + 1
+                    )
+                    pendingHeatMapUpdates[cellID] = newUpdate
+                }
+
+                scheduleHeatMapFlush()
+            }
+        } else if let cellID = cellID, previousAcceptedCellID == nil {
+            var update = pendingHeatMapUpdates[cellID] ?? CellHeatMapUpdate(
+                cellID: cellID,
+                duration: 0,
+                visitIncrement: 0
+            )
+            update = CellHeatMapUpdate(
+                cellID: cellID,
+                duration: update.duration,
+                visitIncrement: update.visitIncrement + 1
+            )
+            pendingHeatMapUpdates[cellID] = update
+        }
+
+        previousAcceptedCellID = cellID
+
         if let previous = previous {
             let distance = location.distance(from: previous)
             let gap = location.timestamp.timeIntervalSince(previous.timestamp)
@@ -400,21 +495,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         """)
 
         discoveredCells = cellStore.cells
-    }
-
-    func mergeRemoteCells(_ cellIDs: Set<String>) {
-        guard !cellIDs.isEmpty else { return }
-
-        let newCount = cellStore.upsertMany(
-            cellIDs: cellIDs,
-            resolution: explorationEngine.resolution,
-            seenAt: Date()
-        )
-
-        if newCount > 0 {
-            discoveredCells = cellStore.cells
-            print("[LocationTracker] merged \(newCount) remote cells")
-        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

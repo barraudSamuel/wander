@@ -15,7 +15,7 @@ struct wanderApp: App {
 
     init() {
         do {
-            container = try ModelContainer(for: DiscoveredCell.self)
+            container = try ModelContainer(for: DiscoveredCell.self, migrationPlan: WanderMigrationPlan.self)
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }
