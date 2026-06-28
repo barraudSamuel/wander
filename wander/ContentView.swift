@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var profileCardVisible = false
     @State private var filterSheetVisible = false
     @State private var centerOnUser = false
+    @State private var centerOnFriendUserID: String?
     @State private var heatMapEnabled = false
     @State private var selectedFriendUserIDs: Set<String> = []
     @State private var knownFriendUserIDs: Set<String> = []
@@ -46,8 +47,10 @@ struct ContentView: View {
                     cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
                     groupMembers: otherGroupMembers,
                     centerOnUser: $centerOnUser,
+                    centerOnFriendUserID: $centerOnFriendUserID,
                     showsHeatMap: heatMapEnabled,
                     friendCellIDsByUserID: filteredFriendCellIDsByUserID,
+                    allFriendCellIDsByUserID: groupSyncService.friendCellIDsByUserID,
                     heatMapCellData: locationTracker.heatMapCellData
                 )
                 .ignoresSafeArea()
@@ -248,6 +251,7 @@ struct ContentView: View {
             MapFiltersSheet(
                 heatMapEnabled: $heatMapEnabled,
                 selectedFriendUserIDs: $selectedFriendUserIDs,
+                centerOnFriendUserID: $centerOnFriendUserID,
                 friendScratchSummaries: friendScratchSummaries
             )
             .presentationDetents([.medium])
@@ -372,6 +376,7 @@ private struct FriendScratchSummary: Identifiable {
 private struct MapFiltersSheet: View {
     @Binding var heatMapEnabled: Bool
     @Binding var selectedFriendUserIDs: Set<String>
+    @Binding var centerOnFriendUserID: String?
 
     let friendScratchSummaries: [FriendScratchSummary]
 
@@ -419,6 +424,8 @@ private struct MapFiltersSheet: View {
                 selectedFriendUserIDs.contains(userID)
             },
             set: { isSelected in
+                centerOnFriendUserID = userID
+
                 if isSelected {
                     selectedFriendUserIDs.insert(userID)
                 } else {

@@ -145,8 +145,12 @@ struct MapWithFogView: UIViewRepresentable {
     /// When toggled, centers the map on the user's current location.
     @Binding var centerOnUser: Bool
 
+    /// When set, centers the map on the selected friend once.
+    @Binding var centerOnFriendUserID: String?
+
     var showsHeatMap = false
     var friendCellIDsByUserID: [String: Set<String>] = [:]
+    var allFriendCellIDsByUserID: [String: Set<String>] = [:]
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
 
     func makeUIView(context: Context) -> MKMapView {
@@ -206,12 +210,7 @@ struct MapWithFogView: UIViewRepresentable {
         if let coordinate = locationTracker.lastLocation?.coordinate,
            !context.coordinator.didSetInitialRegion {
             context.coordinator.didSetInitialRegion = true
-            let region = MKCoordinateRegion(
-                center: coordinate,
-                latitudinalMeters: 800,
-                longitudinalMeters: 800
-            )
-            uiView.setRegion(region, animated: true)
+            setFocusedRegion(on: uiView, center: coordinate, animated: true)
         } else if !context.coordinator.didSetInitialRegion,
                   cityBoundaryCoordinates.count >= 3 {
             context.coordinator.didSetInitialRegion = true
@@ -221,12 +220,17 @@ struct MapWithFogView: UIViewRepresentable {
 
         if centerOnUser, let coordinate = locationTracker.lastLocation?.coordinate {
             DispatchQueue.main.async { centerOnUser = false }
-            let region = MKCoordinateRegion(
-                center: coordinate,
-                latitudinalMeters: 800,
-                longitudinalMeters: 800
+            setFocusedRegion(on: uiView, center: coordinate, animated: true)
+        }
+
+        if let friendUserID = centerOnFriendUserID {
+            DispatchQueue.main.async { centerOnFriendUserID = nil }
+            centerMap(
+                onFriend: friendUserID,
+                on: uiView,
+                context: context,
+                membersByID: membersByID
             )
-            uiView.setRegion(region, animated: true)
         }
     }
 
@@ -356,6 +360,55 @@ struct MapWithFogView: UIViewRepresentable {
             longitudeDelta: max((maxLon - minLon) * 1.4, 0.01)
         )
         return MKCoordinateRegion(center: center, span: span)
+    }
+
+    private func setFocusedRegion(
+        on mapView: MKMapView,
+        center: CLLocationCoordinate2D,
+        animated: Bool
+    ) {
+        let region = MKCoordinateRegion(
+            center: center,
+            latitudinalMeters: 800,
+            longitudinalMeters: 800
+        )
+        mapView.setRegion(region, animated: animated)
+    }
+
+    private func centerMap(
+        onFriend userID: String,
+        on mapView: MKMapView,
+        context: Context,
+        membersByID: [String: GroupMember]
+    ) {
+        if let coordinate = membersByID[userID]?.location {
+            setFocusedRegion(on: mapView, center: coordinate, animated: true)
+            return
+        }
+
+        if let coordinate = friendScratchCenter(for: userID, context: context) {
+            setFocusedRegion(on: mapView, center: coordinate, animated: true)
+        }
+    }
+
+    private func friendScratchCenter(for userID: String, context: Context) -> CLLocationCoordinate2D? {
+        if let overlay = context.coordinator.friendScratchOverlays.first(where: { $0.userID == userID }),
+           !overlay.cellPolygons.isEmpty {
+            return overlay.coordinate
+        }
+
+        guard let cellIDs = allFriendCellIDsByUserID[userID], !cellIDs.isEmpty else {
+            return nil
+        }
+
+        let overlay = FriendScratchOverlay(
+            userID: userID,
+            cellIDs: cellIDs,
+            color: FriendColor.color(for: userID),
+            explorationEngine: context.coordinator.explorationEngine
+        )
+
+        return overlay.cellPolygons.isEmpty ? nil : overlay.coordinate
     }
 
     // MARK: - Heat map overlay
