@@ -3,9 +3,9 @@
 //  wander
 //
 //  UIViewRepresentable bridge around MKMapView that renders a uniform fog of war.
-//  A large overlay polygon is filled with semi-transparent grey, and every
-//  discovered H3 cell is added as an interior polygon hole so the underlying
-//  Apple Maps content shows through exactly where the user has been.
+//  A world-sized overlay fills the visible map with semi-transparent grey, and
+//  every discovered H3 cell is punched through so Apple Maps shows where the
+//  user has been.
 //
 
 import SwiftUI
@@ -127,13 +127,85 @@ final class FriendScratchOverlayRenderer: MKOverlayRenderer {
     }
 }
 
+struct FogCellPolygon {
+    let coordinates: [CLLocationCoordinate2D]
+    let mapRect: MKMapRect
+}
+
+final class FogOfWarOverlay: NSObject, MKOverlay {
+    let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+    let boundingMapRect = MKMapRect.world
+    let cellPolygons: [FogCellPolygon]
+
+    init(cellIDs: Set<String>, explorationEngine: ExplorationEngine) {
+        self.cellPolygons = cellIDs.compactMap { cellID in
+            let coords = explorationEngine.boundaryCoordinates(for: cellID)
+            guard coords.count >= 3 else { return nil }
+            return FogCellPolygon(
+                coordinates: coords,
+                mapRect: Self.mapRect(for: coords)
+            )
+        }
+        super.init()
+    }
+
+    private static func mapRect(for coordinates: [CLLocationCoordinate2D]) -> MKMapRect {
+        coordinates.reduce(MKMapRect.null) { partialResult, coordinate in
+            let point = MKMapPoint(coordinate)
+            let pointRect = MKMapRect(
+                x: point.x,
+                y: point.y,
+                width: 1,
+                height: 1
+            )
+            return partialResult.union(pointRect)
+        }
+    }
+}
+
+final class FogOfWarOverlayRenderer: MKOverlayRenderer {
+    private let fogColor: UIColor
+
+    init(overlay: FogOfWarOverlay, fogColor: UIColor) {
+        self.fogColor = fogColor
+        super.init(overlay: overlay)
+    }
+
+    override func canDraw(_ mapRect: MKMapRect, zoomScale: MKZoomScale) -> Bool {
+        true
+    }
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
+        guard let overlay = overlay as? FogOfWarOverlay else { return }
+
+        let path = CGMutablePath()
+        path.addRect(rect(for: mapRect))
+
+        for cell in overlay.cellPolygons where cell.mapRect.intersects(mapRect) {
+            for (index, coordinate) in cell.coordinates.enumerated() {
+                let point = self.point(for: MKMapPoint(coordinate))
+                if index == 0 {
+                    path.move(to: point)
+                } else {
+                    path.addLine(to: point)
+                }
+            }
+            path.closeSubpath()
+        }
+
+        context.addPath(path)
+        context.setFillColor(fogColor.cgColor)
+        context.drawPath(using: .eoFill)
+    }
+}
+
 struct MapWithFogView: UIViewRepresentable {
     @ObservedObject var locationTracker: LocationTracker
 
     /// Set of H3 cell IDs that should be punched through the fog.
     var discoveredCellIDs: Set<String>
 
-    /// City boundary used as the outer fog shape. When empty, no fog is drawn.
+    /// City boundary used only for the initial map fit. Fog is global.
     var cityBoundaryCoordinates: [CLLocationCoordinate2D]
 
     /// Group members to display on the map (excluding the current user).
@@ -205,8 +277,8 @@ struct MapWithFogView: UIViewRepresentable {
 
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
-        // Center on the user once we have a location; otherwise fit the city
-        // boundary so the fog overlay is visible immediately.
+        // Center on the user once we have a location; otherwise fit the loaded
+        // city boundary as a useful starting region.
         if let coordinate = locationTracker.lastLocation?.coordinate,
            !context.coordinator.didSetInitialRegion {
             context.coordinator.didSetInitialRegion = true
@@ -298,38 +370,18 @@ struct MapWithFogView: UIViewRepresentable {
     ) {
         let coordinator = context.coordinator
 
-        // Remove the previous fog overlay.
         if let overlay = coordinator.fogOverlay {
             mapView.removeOverlay(overlay)
             coordinator.fogOverlay = nil
         }
 
-        guard cityBoundaryCoordinates.count >= 3 else {
-            coordinator.lastDiscoveredIDs = visibleDiscoveredCellIDs
-            return
-        }
+        let overlay = FogOfWarOverlay(
+            cellIDs: visibleDiscoveredCellIDs,
+            explorationEngine: coordinator.explorationEngine
+        )
 
-        let explorationEngine = coordinator.explorationEngine
-        let holes: [MKPolygon] = visibleDiscoveredCellIDs.compactMap { cellID -> MKPolygon? in
-            let coords = explorationEngine.boundaryCoordinates(for: cellID)
-            guard coords.count >= 3 else { return nil }
-            return coords.withUnsafeBufferPointer { buffer in
-                guard let base = buffer.baseAddress else { return nil }
-                return MKPolygon(coordinates: base, count: coords.count)
-            }
-        }
-
-        // count >= 3 already guaranteed, so buffer.baseAddress is non-nil.
-        let outerPolygon = cityBoundaryCoordinates.withUnsafeBufferPointer { buffer in
-            MKPolygon(
-                coordinates: buffer.baseAddress!,
-                count: cityBoundaryCoordinates.count,
-                interiorPolygons: holes
-            )
-        }
-
-        mapView.addOverlay(outerPolygon, level: .aboveRoads)
-        coordinator.fogOverlay = outerPolygon
+        mapView.addOverlay(overlay, level: .aboveRoads)
+        coordinator.fogOverlay = overlay
         coordinator.lastDiscoveredIDs = visibleDiscoveredCellIDs
         coordinator.lastBoundaryLength = cityBoundaryCoordinates.count
     }
@@ -480,7 +532,7 @@ struct MapWithFogView: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         let explorationEngine = ExplorationEngine()
         let fogColor: UIColor
-        var fogOverlay: MKPolygon?
+        var fogOverlay: FogOfWarOverlay?
         var heatMapOverlay: HeatMapOverlay?
         var friendScratchOverlays: [FriendScratchOverlay] = []
         var lastDiscoveredIDs: Set<String> = []
@@ -497,6 +549,9 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let fogOverlay = overlay as? FogOfWarOverlay {
+                return FogOfWarOverlayRenderer(overlay: fogOverlay, fogColor: fogColor)
+            }
             if let polygon = overlay as? MKPolygon {
                 let renderer = MKPolygonRenderer(polygon: polygon)
                 renderer.fillColor = fogColor
