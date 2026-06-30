@@ -112,6 +112,9 @@ struct ContentView: View {
 
             Task {
                 await cityBoundary.load()
+                if let location = locationTracker.lastLocation {
+                    cityBoundary.detectCity(for: location.coordinate)
+                }
             }
             syncFriendFilterSelection()
         }
@@ -190,8 +193,16 @@ struct ContentView: View {
     // MARK: - City progress
 
     private var cityProgress: CityProgress? {
-        guard !cityBoundary.cityCellIDs.isEmpty else { return nil }
         return cityBoundary.progress(against: locationTracker.discoveredCells)
+    }
+
+    private var cityProgressUnavailableText: String {
+        guard locationTracker.lastLocation != nil,
+              !cityBoundary.cityCellIDs.isEmpty else {
+            return "Calculating city progress…"
+        }
+
+        return "Aucune carte téléchargée ici"
     }
 
     private func locationButtonBottomPadding(in geometry: GeometryProxy) -> CGFloat {
@@ -228,6 +239,7 @@ struct ContentView: View {
                 displayName: displayName,
                 avatarImageData: avatarImageData,
                 cityProgress: cityProgress,
+                cityProgressUnavailableText: cityProgressUnavailableText,
                 isTracking: locationTracker.isTracking
             )
             .presentationDetents([.medium])
@@ -296,7 +308,7 @@ struct ContentView: View {
                         .foregroundColor(.white)
                         .padding(4)
                         .background(Circle().fill(locationTracker.isTracking ? Color.green : Color.secondary.opacity(0.3)))
-                    Text("Calculating city progress…")
+                    Text(cityProgressUnavailableText)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -315,6 +327,7 @@ private struct ProfileCardView: View {
     let displayName: String
     let avatarImageData: Data
     let cityProgress: CityProgress?
+    let cityProgressUnavailableText: String
     let isTracking: Bool
 
     var body: some View {
@@ -336,7 +349,7 @@ private struct ProfileCardView: View {
                 ProfileInfoRow(
                     iconName: "map.fill",
                     title: "Ville",
-                    value: cityProgress?.cityName ?? "Calcul en cours"
+                    value: cityProgress?.cityName ?? cityProgressUnavailableText
                 )
 
                 ProfileInfoRow(

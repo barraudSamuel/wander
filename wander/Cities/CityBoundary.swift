@@ -62,6 +62,7 @@ final class CityBoundary: ObservableObject {
     let allCities: [WanderCity] = [.hoChiMinh, .hoiAn, .seoul]
 
     @Published var currentCity: WanderCity = .hoChiMinh
+    @Published private(set) var localizedCity: WanderCity?
     @Published var boundaryCoordinates: [CLLocationCoordinate2D] = []
     @Published var cityCellIDs: Set<String> = []
 
@@ -123,9 +124,14 @@ final class CityBoundary: ObservableObject {
                 if currentCity.id != city.id {
                     selectCity(city)
                 }
+                if localizedCity?.id != city.id {
+                    localizedCity = city
+                }
                 return
             }
         }
+
+        localizedCity = nil
     }
 
     private func selectCity(_ city: WanderCity) {
@@ -138,12 +144,15 @@ final class CityBoundary: ObservableObject {
 
     // MARK: - Progress
 
-    func progress(against discoveredCells: [DiscoveredCell]) -> CityProgress {
+    func progress(against discoveredCells: [DiscoveredCell]) -> CityProgress? {
+        guard let localizedCity,
+              let data = cityData[localizedCity.id] else { return nil }
+
         let discoveredIDs = Set(discoveredCells.map { $0.id })
-        let explored = cityCellIDs.intersection(discoveredIDs)
+        let explored = data.cells.intersection(discoveredIDs)
         return CityProgress(
-            cityName: currentCity.name,
-            totalCells: cityCellIDs.count,
+            cityName: localizedCity.name,
+            totalCells: data.cells.count,
             exploredCells: explored.count
         )
     }
