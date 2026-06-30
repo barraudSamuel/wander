@@ -53,13 +53,19 @@ extension WanderCity {
         geojson: CityGeoJSONData.seoulCity,
         cacheKey: "city_seoul_cells"
     )
+    static let daNang = WanderCity(
+        id: "danang",
+        name: "Da Nang",
+        geojson: CityGeoJSONData.daNangCity,
+        cacheKey: "city_danang_cells"
+    )
 }
 
 @MainActor
 final class CityBoundary: ObservableObject {
     static let shared = CityBoundary()
 
-    let allCities: [WanderCity] = [.hoChiMinh, .hoiAn, .seoul]
+    let allCities: [WanderCity] = [.hoChiMinh, .hoiAn, .seoul, .daNang]
 
     @Published var currentCity: WanderCity = .hoChiMinh
     @Published private(set) var localizedCity: WanderCity?
