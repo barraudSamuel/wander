@@ -64,14 +64,22 @@ final class HeatMapOverlay: NSObject, MKOverlay {
 }
 
 final class HeatMapOverlayRenderer: MKOverlayRenderer {
+    /// Thirteen anchors create twelve interpolation segments, giving nearby
+    /// durations more distinct shades while preserving the green-to-red scale.
     private static let colorScale: [(red: CGFloat, green: CGFloat, blue: CGFloat)] = [
-        (0.0, 0.8, 0.2),
-        (0.4, 0.9, 0.2),
-        (0.8, 0.9, 0.0),
-        (1.0, 0.8, 0.0),
-        (1.0, 0.5, 0.0),
-        (1.0, 0.2, 0.0),
-        (0.8, 0.0, 0.2)
+        (0.00, 0.68, 0.30),
+        (0.15, 0.76, 0.25),
+        (0.32, 0.82, 0.20),
+        (0.50, 0.87, 0.14),
+        (0.68, 0.90, 0.08),
+        (0.84, 0.88, 0.03),
+        (0.96, 0.82, 0.00),
+        (1.00, 0.70, 0.00),
+        (1.00, 0.56, 0.00),
+        (1.00, 0.40, 0.00),
+        (0.96, 0.24, 0.04),
+        (0.88, 0.10, 0.10),
+        (0.72, 0.00, 0.18)
     ]
 
     override func canDraw(_ mapRect: MKMapRect, zoomScale: MKZoomScale) -> Bool {

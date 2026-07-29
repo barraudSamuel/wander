@@ -35,6 +35,145 @@ enum FriendColor {
     }
 }
 
+final class UserHeadingAnnotation: MKPointAnnotation {}
+
+final class UserHeadingAnnotationView: MKAnnotationView {
+    static let reuseIdentifier = "UserHeadingAnnotation"
+
+    private let accentColor = UIColor(
+        red: 0.31,
+        green: 0.20,
+        blue: 1.00,
+        alpha: 1.00
+    )
+    private let coneLayer = CAGradientLayer()
+    private let coneMaskLayer = CAShapeLayer()
+    private let markerRingView = UIView()
+    private let avatarImageView = UIImageView()
+    private let fallbackLabel = UILabel()
+    private var headingAngle: CGFloat = 0
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        configureView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureView()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+
+        coneLayer.bounds = bounds
+        coneLayer.position = center
+        coneMaskLayer.frame = coneLayer.bounds
+
+        let conePath = UIBezierPath()
+        conePath.move(to: center)
+        conePath.addLine(to: CGPoint(x: 20, y: 5))
+        conePath.addQuadCurve(
+            to: CGPoint(x: bounds.width - 20, y: 5),
+            controlPoint: CGPoint(x: center.x, y: -4)
+        )
+        conePath.close()
+        coneMaskLayer.path = conePath.cgPath
+        coneLayer.setAffineTransform(CGAffineTransform(rotationAngle: headingAngle))
+
+        let markerSize: CGFloat = 48
+        markerRingView.frame = CGRect(
+            x: center.x - markerSize / 2,
+            y: center.y - markerSize / 2,
+            width: markerSize,
+            height: markerSize
+        )
+        markerRingView.layer.cornerRadius = markerSize / 2
+
+        let avatarInset: CGFloat = 4
+        avatarImageView.frame = markerRingView.bounds.insetBy(
+            dx: avatarInset,
+            dy: avatarInset
+        )
+        avatarImageView.layer.cornerRadius = avatarImageView.bounds.width / 2
+        fallbackLabel.frame = avatarImageView.frame
+        fallbackLabel.layer.cornerRadius = fallbackLabel.bounds.width / 2
+    }
+
+    func configure(avatarImageData: Data, displayName: String) {
+        if let image = UIImage(data: avatarImageData) {
+            avatarImageView.image = image
+            avatarImageView.isHidden = false
+            fallbackLabel.isHidden = true
+        } else {
+            let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            fallbackLabel.text = trimmedName.isEmpty
+                ? "W"
+                : String(trimmedName.prefix(1)).uppercased()
+            avatarImageView.image = nil
+            avatarImageView.isHidden = true
+            fallbackLabel.isHidden = false
+        }
+    }
+
+    func setHeadingAngle(_ angle: CGFloat) {
+        headingAngle = angle
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.22)
+        CATransaction.setAnimationTimingFunction(
+            CAMediaTimingFunction(name: .easeOut)
+        )
+        coneLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle))
+        CATransaction.commit()
+    }
+
+    private func configureView() {
+        frame = CGRect(x: 0, y: 0, width: 128, height: 128)
+        backgroundColor = .clear
+        clipsToBounds = false
+        canShowCallout = false
+        collisionMode = .none
+        displayPriority = .required
+
+        coneLayer.colors = [
+            UIColor.systemBlue.withAlphaComponent(0.02).cgColor,
+            accentColor.withAlphaComponent(0.38).cgColor
+        ]
+        coneLayer.locations = [0, 1]
+        coneLayer.startPoint = CGPoint(x: 0.5, y: 0)
+        coneLayer.endPoint = CGPoint(x: 0.5, y: 0.55)
+        coneLayer.mask = coneMaskLayer
+        layer.addSublayer(coneLayer)
+
+        markerRingView.backgroundColor = accentColor
+        markerRingView.layer.borderColor = UIColor.white.cgColor
+        markerRingView.layer.borderWidth = 3
+        markerRingView.layer.shadowColor = accentColor.cgColor
+        markerRingView.layer.shadowOpacity = 0.32
+        markerRingView.layer.shadowRadius = 9
+        markerRingView.layer.shadowOffset = .zero
+        addSubview(markerRingView)
+
+        avatarImageView.contentMode = .scaleAspectFill
+        avatarImageView.clipsToBounds = true
+        avatarImageView.layer.borderColor = UIColor.white.withAlphaComponent(0.85).cgColor
+        avatarImageView.layer.borderWidth = 2
+        markerRingView.addSubview(avatarImageView)
+
+        fallbackLabel.backgroundColor = UIColor.systemBlue
+        fallbackLabel.textColor = .white
+        fallbackLabel.font = .systemFont(ofSize: 18, weight: .black)
+        fallbackLabel.textAlignment = .center
+        fallbackLabel.clipsToBounds = true
+        markerRingView.addSubview(fallbackLabel)
+
+        setNeedsLayout()
+    }
+}
+
 final class FriendScratchOverlay: NSObject, MKOverlay {
     let userID: String
     let color: UIColor
@@ -211,11 +350,17 @@ struct MapWithFogView: UIViewRepresentable {
     /// Group members to display on the map (excluding the current user).
     var groupMembers: [GroupMember] = []
 
+    var userDisplayName = ""
+    var userAvatarImageData = Data()
+
     /// Fog colour — used by the polygon renderer.
     var fogColor: UIColor = UIColor.black.withAlphaComponent(0.45)
 
-    /// When toggled, centers the map on the user's current location.
+    /// When toggled, follows the user's location while keeping north at the top.
     @Binding var centerOnUser: Bool
+
+    /// When toggled, resets the map camera to a north-up, flat orientation.
+    @Binding var resetMapOrientation: Bool
 
     /// When set, centers the map on the selected friend once.
     @Binding var centerOnFriendUserID: String?
@@ -229,6 +374,7 @@ struct MapWithFogView: UIViewRepresentable {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.showsUserLocation = true
+        mapView.showsCompass = true
         mapView.userTrackingMode = .none
 
         // Failsafe initial view over Ho Chi Minh City before the boundary loads.
@@ -275,6 +421,7 @@ struct MapWithFogView: UIViewRepresentable {
             updateMemberAnnotations(on: uiView, context: context, membersByID: membersByID)
         }
 
+        updateUserHeadingAnnotation(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
         // Center on the user once we have a location; otherwise fit the loaded
@@ -290,9 +437,14 @@ struct MapWithFogView: UIViewRepresentable {
             uiView.setRegion(region, animated: true)
         }
 
-        if centerOnUser, let coordinate = locationTracker.lastLocation?.coordinate {
+        if centerOnUser, locationTracker.lastLocation != nil {
             DispatchQueue.main.async { centerOnUser = false }
-            setFocusedRegion(on: uiView, center: coordinate, animated: true)
+            uiView.setUserTrackingMode(.follow, animated: true)
+        }
+
+        if resetMapOrientation {
+            DispatchQueue.main.async { resetMapOrientation = false }
+            resetCameraOrientation(on: uiView)
         }
 
         if let friendUserID = centerOnFriendUserID {
@@ -314,6 +466,41 @@ struct MapWithFogView: UIViewRepresentable {
         return friendCellIDsByUserID.values.reduce(into: discoveredCellIDs) { result, cellIDs in
             result.formUnion(cellIDs)
         }
+    }
+
+    // MARK: - User heading
+
+    private func updateUserHeadingAnnotation(on mapView: MKMapView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.updateUserMarkerAppearance(
+            avatarImageData: userAvatarImageData,
+            displayName: userDisplayName,
+            on: mapView
+        )
+
+        guard let coordinate = locationTracker.lastLocation?.coordinate else {
+            if let annotation = coordinator.userHeadingAnnotation {
+                mapView.removeAnnotation(annotation)
+                coordinator.userHeadingAnnotation = nil
+            }
+            mapView.view(for: mapView.userLocation)?.isHidden = false
+            return
+        }
+
+        let annotation: UserHeadingAnnotation
+        if let existing = coordinator.userHeadingAnnotation {
+            annotation = existing
+            annotation.coordinate = coordinate
+        } else {
+            annotation = UserHeadingAnnotation()
+            annotation.coordinate = coordinate
+            coordinator.userHeadingAnnotation = annotation
+            mapView.addAnnotation(annotation)
+        }
+
+        mapView.view(for: mapView.userLocation)?.isHidden = true
+        coordinator.userHeading = locationTracker.heading ?? coordinator.userHeading ?? 0
+        coordinator.updateUserHeadingRotation(on: mapView)
     }
 
     // MARK: - Member annotations
@@ -427,12 +614,21 @@ struct MapWithFogView: UIViewRepresentable {
         mapView.setRegion(region, animated: animated)
     }
 
+    private func resetCameraOrientation(on mapView: MKMapView) {
+        let camera = mapView.camera.copy() as! MKMapCamera
+        camera.heading = 0
+        camera.pitch = 0
+        mapView.setCamera(camera, animated: true)
+    }
+
     private func centerMap(
         onFriend userID: String,
         on mapView: MKMapView,
         context: Context,
         membersByID: [String: GroupMember]
     ) {
+        mapView.setUserTrackingMode(.none, animated: false)
+
         if let coordinate = membersByID[userID]?.location {
             setFocusedRegion(on: mapView, center: coordinate, animated: true)
             return
@@ -541,6 +737,10 @@ struct MapWithFogView: UIViewRepresentable {
         var lastHeatMapCellDataCount: Int = 0
         var lastFriendCellIDsByUserID: [String: Set<String>] = [:]
         var didSetInitialRegion = false
+        var userHeadingAnnotation: UserHeadingAnnotation?
+        var userHeading: CLLocationDirection?
+        private var userAvatarImageData = Data()
+        private var userDisplayName = ""
         var memberAnnotations: [String: MKPointAnnotation] = [:]
         var lastMembersByID: [String: GroupMember] = [:]
 
@@ -569,6 +769,26 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if annotation is UserHeadingAnnotation {
+                let annotationView = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: UserHeadingAnnotationView.reuseIdentifier
+                ) as? UserHeadingAnnotationView
+                    ?? UserHeadingAnnotationView(
+                        annotation: annotation,
+                        reuseIdentifier: UserHeadingAnnotationView.reuseIdentifier
+                    )
+                annotationView.annotation = annotation
+                annotationView.configure(
+                    avatarImageData: userAvatarImageData,
+                    displayName: userDisplayName
+                )
+
+                DispatchQueue.main.async {
+                    self.updateUserHeadingRotation(on: mapView)
+                }
+                return annotationView
+            }
+
             guard !(annotation is MKUserLocation) else { return nil }
 
             let identifier = "GroupMemberAnnotation"
@@ -590,6 +810,47 @@ struct MapWithFogView: UIViewRepresentable {
             let userID = annotation.subtitle.flatMap { $0 } ?? displayName
             annotationView?.image = memberImage(displayName: displayName, userID: userID)
             return annotationView
+        }
+
+        func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
+            for view in views where view.annotation is MKUserLocation {
+                view.isHidden = userHeadingAnnotation != nil
+            }
+        }
+
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            updateUserHeadingRotation(on: mapView)
+        }
+
+        func updateUserHeadingRotation(on mapView: MKMapView) {
+            guard let annotation = userHeadingAnnotation,
+                  let heading = userHeading,
+                  let annotationView = mapView.view(for: annotation) else { return }
+
+            let relativeHeading = heading - mapView.camera.heading
+            let radians = relativeHeading * .pi / 180
+            (annotationView as? UserHeadingAnnotationView)?.setHeadingAngle(radians)
+        }
+
+        func updateUserMarkerAppearance(
+            avatarImageData: Data,
+            displayName: String,
+            on mapView: MKMapView
+        ) {
+            guard userAvatarImageData != avatarImageData ||
+                    userDisplayName != displayName else { return }
+
+            userAvatarImageData = avatarImageData
+            userDisplayName = displayName
+
+            guard let annotation = userHeadingAnnotation,
+                  let annotationView = mapView.view(for: annotation)
+                    as? UserHeadingAnnotationView else { return }
+
+            annotationView.configure(
+                avatarImageData: avatarImageData,
+                displayName: displayName
+            )
         }
 
         func memberImage(displayName: String, userID: String) -> UIImage {

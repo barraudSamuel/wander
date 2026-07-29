@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var profileCardVisible = false
     @State private var filterSheetVisible = false
     @State private var centerOnUser = false
+    @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
     @State private var heatMapEnabled = false
     @State private var selectedFriendUserIDs: Set<String> = []
@@ -46,7 +47,10 @@ struct ContentView: View {
                     discoveredCellIDs: Set(locationTracker.discoveredCells.map { $0.id }),
                     cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
                     groupMembers: otherGroupMembers,
+                    userDisplayName: displayName,
+                    userAvatarImageData: avatarImageData,
                     centerOnUser: $centerOnUser,
+                    resetMapOrientation: $resetMapOrientation,
                     centerOnFriendUserID: $centerOnFriendUserID,
                     showsHeatMap: heatMapEnabled,
                     friendCellIDsByUserID: filteredFriendCellIDsByUserID,
@@ -84,15 +88,30 @@ struct ContentView: View {
                     Spacer()
                     HStack {
                         Spacer()
-                        Button {
-                            centerOnUser = true
-                        } label: {
-                            Image(systemName: "location.fill")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(width: 44, height: 44)
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        VStack(spacing: 8) {
+                            Button {
+                                resetMapOrientation = true
+                            } label: {
+                                Image(systemName: "safari.fill")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 44, height: 44)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .accessibilityLabel("Orienter la carte vers le nord")
+
+                            Button {
+                                centerOnUser = true
+                            } label: {
+                                Image(systemName: "scope")
+                                    .font(.system(size: 19, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 44, height: 44)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .accessibilityLabel("Centrer la carte sur ma position")
                         }
                         .padding(.trailing, 16)
                         .padding(.bottom, locationButtonBottomPadding(in: geometry))
