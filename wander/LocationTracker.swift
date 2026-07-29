@@ -41,8 +41,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var lastError: String?
     @Published var discoveredCells: [DiscoveredCell] = []
     @Published var currentH3CellID: String?
-    @Published private(set) var heading: CLLocationDirection?
-
     @Published var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
 
     /// Newly discovered cell IDs from the most recent location processing pass.
@@ -69,7 +67,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         locationManager.distanceFilter = 20
-        locationManager.headingFilter = 2
         locationManager.pausesLocationUpdatesAutomatically = false
         locationManager.allowsBackgroundLocationUpdates = backgroundTrackingEnabled
         locationManager.showsBackgroundLocationIndicator = true
@@ -226,7 +223,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         heatMapFlushTimer?.invalidate()
         flushHeatMapUpdates()
         locationManager.stopUpdatingLocation()
-        locationManager.stopUpdatingHeading()
         locationManager.stopMonitoringSignificantLocationChanges()
         locationManager.stopMonitoringVisits()
     }
@@ -263,7 +259,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
         if mode == .background, !backgroundTrackingEnabled {
             locationManager.stopUpdatingLocation()
-            locationManager.stopUpdatingHeading()
             locationManager.stopMonitoringSignificantLocationChanges()
             locationManager.stopMonitoringVisits()
             return
@@ -292,12 +287,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         }
 
         startServicesIfTracking(continuousUpdates: useContinuousUpdates)
-
-        if mode == .foreground, CLLocationManager.headingAvailable() {
-            locationManager.startUpdatingHeading()
-        } else {
-            locationManager.stopUpdatingHeading()
-        }
     }
 
     private func startServicesIfTracking(continuousUpdates: Bool) {
@@ -355,13 +344,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 self.processAcceptedLocation(location, receivedAt: now)
             }
         }
-    }
-
-    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
-        guard newHeading.headingAccuracy >= 0 else { return }
-        heading = newHeading.trueHeading >= 0
-            ? newHeading.trueHeading
-            : newHeading.magneticHeading
     }
 
     func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {

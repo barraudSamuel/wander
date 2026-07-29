@@ -35,10 +35,10 @@ enum FriendColor {
     }
 }
 
-final class UserHeadingAnnotation: MKPointAnnotation {}
+final class UserLocationAnnotation: MKPointAnnotation {}
 
-final class UserHeadingAnnotationView: MKAnnotationView {
-    static let reuseIdentifier = "UserHeadingAnnotation"
+final class UserLocationAnnotationView: MKAnnotationView {
+    static let reuseIdentifier = "UserLocationAnnotation"
 
     private let accentColor = UIColor(
         red: 0.31,
@@ -46,12 +46,9 @@ final class UserHeadingAnnotationView: MKAnnotationView {
         blue: 1.00,
         alpha: 1.00
     )
-    private let coneLayer = CAGradientLayer()
-    private let coneMaskLayer = CAShapeLayer()
     private let markerRingView = UIView()
     private let avatarImageView = UIImageView()
     private let fallbackLabel = UILabel()
-    private var headingAngle: CGFloat = 0
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -66,33 +63,11 @@ final class UserHeadingAnnotationView: MKAnnotationView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-
-        coneLayer.bounds = bounds
-        coneLayer.position = center
-        coneMaskLayer.frame = coneLayer.bounds
-
-        let conePath = UIBezierPath()
-        conePath.move(to: center)
-        conePath.addLine(to: CGPoint(x: 20, y: 5))
-        conePath.addQuadCurve(
-            to: CGPoint(x: bounds.width - 20, y: 5),
-            controlPoint: CGPoint(x: center.x, y: -4)
-        )
-        conePath.close()
-        coneMaskLayer.path = conePath.cgPath
-        coneLayer.setAffineTransform(CGAffineTransform(rotationAngle: headingAngle))
-
-        let markerSize: CGFloat = 48
-        markerRingView.frame = CGRect(
-            x: center.x - markerSize / 2,
-            y: center.y - markerSize / 2,
-            width: markerSize,
-            height: markerSize
-        )
+        let markerSize: CGFloat = 32
+        markerRingView.frame = CGRect(origin: .zero, size: CGSize(width: markerSize, height: markerSize))
         markerRingView.layer.cornerRadius = markerSize / 2
 
-        let avatarInset: CGFloat = 4
+        let avatarInset: CGFloat = 0
         avatarImageView.frame = markerRingView.bounds.insetBy(
             dx: avatarInset,
             dy: avatarInset
@@ -118,39 +93,17 @@ final class UserHeadingAnnotationView: MKAnnotationView {
         }
     }
 
-    func setHeadingAngle(_ angle: CGFloat) {
-        headingAngle = angle
-
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(0.22)
-        CATransaction.setAnimationTimingFunction(
-            CAMediaTimingFunction(name: .easeOut)
-        )
-        coneLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle))
-        CATransaction.commit()
-    }
-
     private func configureView() {
-        frame = CGRect(x: 0, y: 0, width: 128, height: 128)
+        frame = CGRect(x: 0, y: 0, width: 32, height: 32)
         backgroundColor = .clear
         clipsToBounds = false
         canShowCallout = false
         collisionMode = .none
         displayPriority = .required
 
-        coneLayer.colors = [
-            UIColor.systemBlue.withAlphaComponent(0.02).cgColor,
-            accentColor.withAlphaComponent(0.38).cgColor
-        ]
-        coneLayer.locations = [0, 1]
-        coneLayer.startPoint = CGPoint(x: 0.5, y: 0)
-        coneLayer.endPoint = CGPoint(x: 0.5, y: 0.55)
-        coneLayer.mask = coneMaskLayer
-        layer.addSublayer(coneLayer)
-
         markerRingView.backgroundColor = accentColor
         markerRingView.layer.borderColor = UIColor.white.cgColor
-        markerRingView.layer.borderWidth = 3
+        markerRingView.layer.borderWidth = 1
         markerRingView.layer.shadowColor = accentColor.cgColor
         markerRingView.layer.shadowOpacity = 0.32
         markerRingView.layer.shadowRadius = 9
@@ -160,7 +113,7 @@ final class UserHeadingAnnotationView: MKAnnotationView {
         avatarImageView.contentMode = .scaleAspectFill
         avatarImageView.clipsToBounds = true
         avatarImageView.layer.borderColor = UIColor.white.withAlphaComponent(0.85).cgColor
-        avatarImageView.layer.borderWidth = 2
+        avatarImageView.layer.borderWidth = 1
         markerRingView.addSubview(avatarImageView)
 
         fallbackLabel.backgroundColor = UIColor.systemBlue
@@ -425,7 +378,7 @@ struct MapWithFogView: UIViewRepresentable {
             updateMemberAnnotations(on: uiView, context: context, membersByID: membersByID)
         }
 
-        updateUserHeadingAnnotation(on: uiView, context: context)
+        updateUserLocationAnnotation(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
         // Center on the user once we have a location; otherwise fit the loaded
@@ -472,9 +425,9 @@ struct MapWithFogView: UIViewRepresentable {
         }
     }
 
-    // MARK: - User heading
+    // MARK: - User location
 
-    private func updateUserHeadingAnnotation(on mapView: MKMapView, context: Context) {
+    private func updateUserLocationAnnotation(on mapView: MKMapView, context: Context) {
         let coordinator = context.coordinator
         coordinator.updateUserMarkerAppearance(
             avatarImageData: userAvatarImageData,
@@ -483,28 +436,26 @@ struct MapWithFogView: UIViewRepresentable {
         )
 
         guard let coordinate = locationTracker.lastLocation?.coordinate else {
-            if let annotation = coordinator.userHeadingAnnotation {
+            if let annotation = coordinator.userLocationAnnotation {
                 mapView.removeAnnotation(annotation)
-                coordinator.userHeadingAnnotation = nil
+                coordinator.userLocationAnnotation = nil
             }
             mapView.view(for: mapView.userLocation)?.isHidden = false
             return
         }
 
-        let annotation: UserHeadingAnnotation
-        if let existing = coordinator.userHeadingAnnotation {
+        let annotation: UserLocationAnnotation
+        if let existing = coordinator.userLocationAnnotation {
             annotation = existing
             annotation.coordinate = coordinate
         } else {
-            annotation = UserHeadingAnnotation()
+            annotation = UserLocationAnnotation()
             annotation.coordinate = coordinate
-            coordinator.userHeadingAnnotation = annotation
+            coordinator.userLocationAnnotation = annotation
             mapView.addAnnotation(annotation)
         }
 
         mapView.view(for: mapView.userLocation)?.isHidden = true
-        coordinator.userHeading = locationTracker.heading ?? coordinator.userHeading ?? 0
-        coordinator.updateUserHeadingRotation(on: mapView)
     }
 
     // MARK: - Member annotations
@@ -741,8 +692,7 @@ struct MapWithFogView: UIViewRepresentable {
         var lastHeatMapCellDataCount: Int = 0
         var lastFriendCellIDsByUserID: [String: Set<String>] = [:]
         var didSetInitialRegion = false
-        var userHeadingAnnotation: UserHeadingAnnotation?
-        var userHeading: CLLocationDirection?
+        var userLocationAnnotation: UserLocationAnnotation?
         private var userAvatarImageData = Data()
         private var userDisplayName = ""
         var memberAnnotations: [String: MKPointAnnotation] = [:]
@@ -773,23 +723,19 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-            if annotation is UserHeadingAnnotation {
+            if annotation is UserLocationAnnotation {
                 let annotationView = mapView.dequeueReusableAnnotationView(
-                    withIdentifier: UserHeadingAnnotationView.reuseIdentifier
-                ) as? UserHeadingAnnotationView
-                    ?? UserHeadingAnnotationView(
+                    withIdentifier: UserLocationAnnotationView.reuseIdentifier
+                ) as? UserLocationAnnotationView
+                    ?? UserLocationAnnotationView(
                         annotation: annotation,
-                        reuseIdentifier: UserHeadingAnnotationView.reuseIdentifier
+                        reuseIdentifier: UserLocationAnnotationView.reuseIdentifier
                     )
                 annotationView.annotation = annotation
                 annotationView.configure(
                     avatarImageData: userAvatarImageData,
                     displayName: userDisplayName
                 )
-
-                DispatchQueue.main.async {
-                    self.updateUserHeadingRotation(on: mapView)
-                }
                 return annotationView
             }
 
@@ -818,22 +764,8 @@ struct MapWithFogView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
             for view in views where view.annotation is MKUserLocation {
-                view.isHidden = userHeadingAnnotation != nil
+                view.isHidden = userLocationAnnotation != nil
             }
-        }
-
-        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
-            updateUserHeadingRotation(on: mapView)
-        }
-
-        func updateUserHeadingRotation(on mapView: MKMapView) {
-            guard let annotation = userHeadingAnnotation,
-                  let heading = userHeading,
-                  let annotationView = mapView.view(for: annotation) else { return }
-
-            let relativeHeading = heading - mapView.camera.heading
-            let radians = relativeHeading * .pi / 180
-            (annotationView as? UserHeadingAnnotationView)?.setHeadingAngle(radians)
         }
 
         func updateUserMarkerAppearance(
@@ -847,9 +779,9 @@ struct MapWithFogView: UIViewRepresentable {
             userAvatarImageData = avatarImageData
             userDisplayName = displayName
 
-            guard let annotation = userHeadingAnnotation,
+            guard let annotation = userLocationAnnotation,
                   let annotationView = mapView.view(for: annotation)
-                    as? UserHeadingAnnotationView else { return }
+                    as? UserLocationAnnotationView else { return }
 
             annotationView.configure(
                 avatarImageData: avatarImageData,
