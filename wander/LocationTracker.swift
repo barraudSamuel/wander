@@ -28,12 +28,14 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     // Persistence key for the user's tracking intention.
     private let trackingEnabledKey = "trackingEnabled"
+    private let backgroundTrackingEnabledKey = "backgroundTrackingEnabled"
 
     @Published var authorizationStatus: CLAuthorizationStatus
     @Published var lastLocation: CLLocation?
     @Published var locationsReceived: Int = 0
     @Published var isTracking: Bool = false
     @Published var trackingEnabled: Bool
+    @Published var backgroundTrackingEnabled: Bool
     @Published var trackingMode: TrackingMode = .foreground
     @Published var visitsReceived: Int = 0
     @Published var lastError: String?
@@ -60,13 +62,16 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     override init() {
         self.authorizationStatus = locationManager.authorizationStatus
         self.trackingEnabled = UserDefaults.standard.bool(forKey: trackingEnabledKey)
+        self.backgroundTrackingEnabled = UserDefaults.standard.bool(
+            forKey: backgroundTrackingEnabledKey
+        )
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         locationManager.distanceFilter = 20
         locationManager.headingFilter = 2
         locationManager.pausesLocationUpdatesAutomatically = false
-        locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.allowsBackgroundLocationUpdates = backgroundTrackingEnabled
         locationManager.showsBackgroundLocationIndicator = true
     }
 
@@ -133,15 +138,38 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     // MARK: - Permissions
 
-    /// Requests the highest level of location permission we can get.
-    /// On first launch this asks the user for "When In Use"; iOS can later
-    /// offer an upgrade to "Always" after the app has used background location.
+    /// Requests foreground access first. The optional background upgrade is
+    /// presented later, once the user has experienced the core exploration flow.
     private func requestPermissionIfNeeded() {
         switch authorizationStatus {
         case .notDetermined:
-            locationManager.requestAlwaysAuthorization()
+            locationManager.requestWhenInUseAuthorization()
         default:
             break
+        }
+    }
+
+    /// Applies the user's explicit background-tracking preference and, when
+    /// necessary, asks iOS to upgrade the foreground permission.
+    func setBackgroundTrackingEnabled(_ isEnabled: Bool) {
+        backgroundTrackingEnabled = isEnabled
+        UserDefaults.standard.set(isEnabled, forKey: backgroundTrackingEnabledKey)
+        locationManager.allowsBackgroundLocationUpdates = isEnabled
+
+        guard isEnabled else {
+            locationManager.stopMonitoringSignificantLocationChanges()
+            locationManager.stopMonitoringVisits()
+            return
+        }
+
+        if authorizationStatus == .authorizedWhenInUse {
+            locationManager.requestAlwaysAuthorization()
+        } else if authorizationStatus == .notDetermined {
+            requestPermissionIfNeeded()
+        }
+
+        if trackingEnabled, isTracking {
+            applyTrackingMode(.foreground)
         }
     }
 
@@ -157,8 +185,10 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         trackingEnabled = true
 
         guard CLLocationManager.locationServicesEnabled() else {
-            lastError = "Location services are disabled on this device."
+            lastError = "Les services de localisation sont désactivés sur cet appareil."
             isTracking = false
+            trackingEnabled = false
+            UserDefaults.standard.set(false, forKey: trackingEnabledKey)
             return
         }
 
@@ -168,12 +198,14 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             requestPermissionIfNeeded()
             return
         case .restricted, .denied:
-            lastError = "Location permission is denied or restricted."
+            lastError = "L’accès à la localisation est refusé ou restreint."
+            trackingEnabled = false
+            UserDefaults.standard.set(false, forKey: trackingEnabledKey)
             return
         case .authorizedAlways, .authorizedWhenInUse:
             break
         @unknown default:
-            lastError = "Unknown authorization status."
+            lastError = "L’état de l’autorisation de localisation est inconnu."
             trackingEnabled = false
             UserDefaults.standard.set(false, forKey: trackingEnabledKey)
             return
@@ -214,17 +246,28 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
         guard CLLocationManager.locationServicesEnabled() else {
             isTracking = false
+            trackingEnabled = false
+            lastError = "Les services de localisation sont désactivés sur cet appareil."
+            UserDefaults.standard.set(false, forKey: trackingEnabledKey)
             return
         }
 
         isTracking = true
-        applyTrackingMode(trackingMode)
+        applyTrackingMode(.foreground)
     }
 
     /// Applies accuracy/distance settings and starts or stops the appropriate location services.
     /// Only starts services if the user has enabled tracking.
     func applyTrackingMode(_ mode: TrackingMode) {
         trackingMode = mode
+
+        if mode == .background, !backgroundTrackingEnabled {
+            locationManager.stopUpdatingLocation()
+            locationManager.stopUpdatingHeading()
+            locationManager.stopMonitoringSignificantLocationChanges()
+            locationManager.stopMonitoringVisits()
+            return
+        }
 
         let useContinuousUpdates: Bool
 
@@ -265,8 +308,13 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         } else {
             locationManager.stopUpdatingLocation()
         }
-        locationManager.startMonitoringSignificantLocationChanges()
-        locationManager.startMonitoringVisits()
+        if backgroundTrackingEnabled {
+            locationManager.startMonitoringSignificantLocationChanges()
+            locationManager.startMonitoringVisits()
+        } else {
+            locationManager.stopMonitoringSignificantLocationChanges()
+            locationManager.stopMonitoringVisits()
+        }
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -282,7 +330,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 self.trackingEnabled = false
                 UserDefaults.standard.set(false, forKey: self.trackingEnabledKey)
                 self.isTracking = false
-                self.lastError = "Location permission was denied or restricted."
+                self.lastError = "L’accès à la localisation a été refusé ou restreint."
             } else if newStatus == .authorizedWhenInUse || newStatus == .authorizedAlways {
                 if self.shouldStartAfterPermission {
                     self.shouldStartAfterPermission = false

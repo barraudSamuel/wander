@@ -2,17 +2,31 @@
 //  ContentView.swift
 //  wander
 //
-//  Root view: map with fog-of-war overlay, city progress banner,
-//  a floating location button, and a draggable debug drawer.
-//
-//  Created by Samuel Barraud on 17/06/2026.
+//  Map-first experience with native Apple navigation and controls.
 //
 
-import SwiftUI
-import MapKit
 import CoreLocation
+import MapKit
+import PhotosUI
 import SwiftData
+import SwiftUI
 import UIKit
+
+private enum RootTab: Hashable {
+    case explore
+    case friends
+    case profile
+}
+
+private struct FriendMapSummary: Identifiable, Hashable {
+    let userID: String
+    let displayName: String
+    let cellCount: Int
+    let hasLiveLocation: Bool
+    let lastSeenAt: Date?
+
+    var id: String { userID }
+}
 
 struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
@@ -22,108 +36,72 @@ struct ContentView: View {
     @AppStorage("profile.displayName") private var displayName = ""
     @AppStorage("profile.avatarImageData") private var avatarImageData = Data()
 
-    @State private var debugDrawerVisible = false
-    @State private var drawerExpanded = false
-    @State private var profileCardVisible = false
+    @ObservedObject private var cityBoundary = CityBoundary.shared
+
+    @State private var selectedTab: RootTab = .explore
     @State private var filterSheetVisible = false
     @State private var centerOnUser = false
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
     @State private var heatMapEnabled = false
     @State private var selectedFriendUserIDs: Set<String> = []
-    @State private var knownFriendUserIDs: Set<String> = []
 
-    @ObservedObject private var cityBoundary = CityBoundary.shared
-
-    private let topControlHeight: CGFloat = 64
-    private let drawerExpandedFraction: CGFloat = 0.55
-    private let drawerCollapsedHeight: CGFloat = 120
+    #if DEBUG
+    @State private var debugDrawerVisible = false
+    @State private var drawerExpanded = false
+    #endif
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                MapWithFogView(
-                    locationTracker: locationTracker,
-                    discoveredCellIDs: Set(locationTracker.discoveredCells.map { $0.id }),
-                    cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
-                    groupMembers: otherGroupMembers,
-                    userDisplayName: displayName,
-                    userAvatarImageData: avatarImageData,
-                    centerOnUser: $centerOnUser,
-                    resetMapOrientation: $resetMapOrientation,
-                    centerOnFriendUserID: $centerOnFriendUserID,
-                    showsHeatMap: heatMapEnabled,
-                    friendCellIDsByUserID: filteredFriendCellIDsByUserID,
-                    allFriendCellIDsByUserID: groupSyncService.friendCellIDsByUserID,
-                    heatMapCellData: locationTracker.heatMapCellData
+            TabView(selection: $selectedTab) {
+                exploreTab
+                    .tabItem {
+                        Label("Explorer", systemImage: "map")
+                    }
+                    .tag(RootTab.explore)
+
+                FriendsView(
+                    friends: friendSummaries,
+                    selectedFriendUserIDs: $selectedFriendUserIDs,
+                    onShowOnMap: showFriendOnMap
                 )
-                .ignoresSafeArea()
-
-                VStack {
-                    HStack(spacing: 8) {
-                        cityProgressBanner
-                        filterButton
-                        avatarCircle
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-
-                    Spacer()
+                .tabItem {
+                    Label("Amis", systemImage: "person.2")
                 }
+                .tag(RootTab.friends)
 
-                VStack {
-                    Spacer()
-                    if debugDrawerVisible {
-                        DebugDrawerView(
-                            locationTracker: locationTracker,
-                            isExpanded: $drawerExpanded,
-                            cityProgress: cityProgress,
-                            parentGeometry: geometry
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
+                ProfileView(
+                    displayName: $displayName,
+                    avatarImageData: $avatarImageData,
+                    locationTracker: locationTracker,
+                    cityProgress: cityProgress,
+                    cityProgressUnavailableText: cityProgressUnavailableText
+                )
+                .tabItem {
+                    Label("Profil", systemImage: "person.crop.circle")
                 }
-
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        VStack(spacing: 8) {
-                            Button {
-                                resetMapOrientation = true
-                            } label: {
-                                Image(systemName: "safari.fill")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundColor(.white)
-                                    .frame(width: 44, height: 44)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                            .accessibilityLabel("Orienter la carte vers le nord")
-
-                            Button {
-                                centerOnUser = true
-                            } label: {
-                                Image(systemName: "scope")
-                                    .font(.system(size: 19, weight: .semibold))
-                                    .foregroundColor(.white)
-                                    .frame(width: 44, height: 44)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                            .accessibilityLabel("Centrer la carte sur ma position")
-                        }
-                        .padding(.trailing, 16)
-                        .padding(.bottom, locationButtonBottomPadding(in: geometry))
-                    }
+                .tag(RootTab.profile)
+            }
+            #if DEBUG
+            .overlay(alignment: .bottom) {
+                if debugDrawerVisible {
+                    DebugDrawerView(
+                        locationTracker: locationTracker,
+                        isExpanded: $drawerExpanded,
+                        cityProgress: cityProgress,
+                        parentGeometry: geometry
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-
+            }
+            .overlay {
                 ThreeFingerPressCatcher {
                     toggleDebugDrawerVisibility()
                 }
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
             }
+            #endif
         }
         .onAppear {
             locationTracker.configure(with: modelContext)
@@ -135,6 +113,7 @@ struct ContentView: View {
                     cityBoundary.detectCity(for: location.coordinate)
                 }
             }
+
             syncFriendFilterSelection()
         }
         .onChange(of: groupSyncService.friendCellIDsByUserID) { _, _ in
@@ -145,6 +124,7 @@ struct ContentView: View {
         }
         .onChange(of: locationTracker.lastLocation) { _, location in
             guard let location else { return }
+
             cityBoundary.detectCity(for: location.coordinate)
             groupSyncService.updateLocation(
                 lat: location.coordinate.latitude,
@@ -156,9 +136,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
-                if locationTracker.trackingEnabled {
-                    locationTracker.applyTrackingMode(.foreground)
-                }
+                locationTracker.resumeTrackingIfNeeded()
             case .background:
                 if locationTracker.trackingEnabled {
                     locationTracker.applyTrackingMode(.background)
@@ -171,22 +149,110 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Explore
+
+    private var exploreTab: some View {
+        ZStack(alignment: .topTrailing) {
+            MapWithFogView(
+                locationTracker: locationTracker,
+                discoveredCellIDs: Set(locationTracker.discoveredCells.map(\.id)),
+                cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
+                groupMembers: otherGroupMembers,
+                userDisplayName: displayName,
+                userAvatarImageData: avatarImageData,
+                centerOnUser: $centerOnUser,
+                resetMapOrientation: $resetMapOrientation,
+                centerOnFriendUserID: $centerOnFriendUserID,
+                showsHeatMap: heatMapEnabled,
+                friendCellIDsByUserID: filteredFriendCellIDsByUserID,
+                allFriendCellIDsByUserID: groupSyncService.friendCellIDsByUserID,
+                heatMapCellData: locationTracker.heatMapCellData
+            )
+            .ignoresSafeArea()
+
+            Button {
+                filterSheetVisible = true
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
+            .accessibilityLabel("Filtres de la carte")
+            .accessibilityHint("Choisir les informations visibles sur la carte")
+            .padding(.top, 8)
+            .padding(.trailing, 16)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack {
+                Spacer()
+
+                VStack(spacing: 10) {
+                    Button {
+                        resetMapOrientation = true
+                    } label: {
+                        Image(systemName: "safari")
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .accessibilityLabel("Orienter la carte vers le nord")
+
+                    Button {
+                        centerOnUser = true
+                    } label: {
+                        Image(systemName: "scope")
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .accessibilityLabel("Recentrer la carte sur ma position")
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+        }
+        .sheet(isPresented: $filterSheetVisible) {
+            MapFiltersSheet(
+                heatMapEnabled: $heatMapEnabled,
+                selectedFriendUserIDs: $selectedFriendUserIDs,
+                friends: friendSummaries.filter { $0.cellCount > 0 }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+    }
+
     // MARK: - Group members
 
     private var otherGroupMembers: [GroupMember] {
-        guard let currentUserId = FirebaseService.shared.currentUserId else { return [] }
+        let currentUserID = FirebaseService.shared.currentUserId
+
         return groupSyncService.groupMembers.values
-            .filter { $0.userId != currentUserId && $0.location != nil }
+            .filter { member in
+                member.userId != currentUserID && member.location != nil
+            }
+            .sorted { lhs, rhs in
+                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
     }
 
-    private var friendScratchSummaries: [FriendScratchSummary] {
-        groupSyncService.friendCellIDsByUserID
-            .filter { !$0.value.isEmpty }
-            .map { userID, cellIDs in
-                FriendScratchSummary(
+    private var friendSummaries: [FriendMapSummary] {
+        let currentUserID = FirebaseService.shared.currentUserId
+        let userIDs = Set(groupSyncService.groupMembers.keys)
+            .union(groupSyncService.friendCellIDsByUserID.keys)
+
+        return userIDs
+            .filter { $0 != currentUserID }
+            .map { userID in
+                let member = groupSyncService.groupMembers[userID]
+
+                return FriendMapSummary(
                     userID: userID,
-                    displayName: groupSyncService.groupMembers[userID]?.displayName ?? "Explorer",
-                    cellCount: cellIDs.count
+                    displayName: member?.displayName ?? "Explorer",
+                    cellCount: groupSyncService.friendCellIDsByUserID[userID]?.count ?? 0,
+                    hasLiveLocation: member?.location != nil,
+                    lastSeenAt: member?.lastSeenAt
                 )
             }
             .sorted { lhs, rhs in
@@ -202,42 +268,41 @@ struct ContentView: View {
 
     private func syncFriendFilterSelection() {
         let currentUserIDs = Set(groupSyncService.friendCellIDsByUserID.keys)
-        let newUserIDs = currentUserIDs.subtracting(knownFriendUserIDs)
-
-        selectedFriendUserIDs.formUnion(newUserIDs)
         selectedFriendUserIDs.formIntersection(currentUserIDs)
-        knownFriendUserIDs = currentUserIDs
+    }
+
+    private func showFriendOnMap(_ friend: FriendMapSummary) {
+        if friend.cellCount > 0 {
+            selectedFriendUserIDs.insert(friend.userID)
+        }
+
+        centerOnFriendUserID = friend.userID
+        selectedTab = .explore
     }
 
     // MARK: - City progress
 
     private var cityProgress: CityProgress? {
-        return cityBoundary.progress(against: locationTracker.discoveredCells)
+        cityBoundary.progress(against: locationTracker.discoveredCells)
     }
 
     private var cityProgressUnavailableText: String {
-        guard locationTracker.lastLocation != nil,
-              !cityBoundary.cityCellIDs.isEmpty else {
-            return "Calculating city progress…"
+        guard locationTracker.lastLocation != nil else {
+            return "Active l’exploration pour révéler la carte."
         }
 
-        return "Aucune carte téléchargée ici"
+        guard !cityBoundary.cityCellIDs.isEmpty else {
+            return "Préparation de la ville…"
+        }
+
+        return "Cette ville n’est pas encore disponible."
     }
 
-    private func locationButtonBottomPadding(in geometry: GeometryProxy) -> CGFloat {
-        guard debugDrawerVisible else { return 16 }
-
-        let drawerHeight = drawerExpanded
-            ? geometry.size.height * drawerExpandedFraction
-            : drawerCollapsedHeight
-
-        return drawerHeight + 16
-    }
-
+    #if DEBUG
     private func toggleDebugDrawerVisibility() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        withAnimation(.interpolatingSpring(stiffness: 300, damping: 30)) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             debugDrawerVisible.toggle()
 
             if !debugDrawerVisible {
@@ -245,208 +310,43 @@ struct ContentView: View {
             }
         }
     }
-
-    private var avatarCircle: some View {
-        Button {
-            profileCardVisible = true
-        } label: {
-            ProfileAvatarView(imageData: avatarImageData, size: topControlHeight)
-        }
-        .buttonStyle(.plain)
-        .sheet(isPresented: $profileCardVisible) {
-            ProfileCardView(
-                displayName: displayName,
-                avatarImageData: avatarImageData,
-                cityProgress: cityProgress,
-                cityProgressUnavailableText: cityProgressUnavailableText,
-                isTracking: locationTracker.isTracking
-            )
-            .presentationDetents([.medium])
-            .presentationDragIndicator(.visible)
-        }
-    }
-
-    private var filterButton: some View {
-        Button {
-            filterSheetVisible = true
-        } label: {
-            Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(.primary)
-                .frame(width: topControlHeight, height: topControlHeight)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
-        .sheet(isPresented: $filterSheetVisible) {
-            MapFiltersSheet(
-                heatMapEnabled: $heatMapEnabled,
-                selectedFriendUserIDs: $selectedFriendUserIDs,
-                centerOnFriendUserID: $centerOnFriendUserID,
-                friendScratchSummaries: friendScratchSummaries
-            )
-            .presentationDetents([.medium])
-            .presentationDragIndicator(.visible)
-        }
-    }
-
-    private var cityProgressBanner: some View {
-        VStack(spacing: 4) {
-            if let progress = cityProgress {
-                HStack(spacing: 6) {
-                    Image(systemName: "location.fill")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(4)
-                        .background(Circle().fill(locationTracker.isTracking ? Color.green : Color.secondary.opacity(0.3)))
-                    Text(progress.cityName)
-                        .font(.caption.bold())
-                        .foregroundColor(.primary)
-                }
-
-                Text("\(progress.percentageText) explored — \(progress.exploredCells) / \(progress.totalCells) cells")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.secondary.opacity(0.2))
-                            .frame(height: 4)
-
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.green)
-                            .frame(width: geo.size.width * progress.percentage, height: 4)
-                    }
-                }
-                .frame(height: 4)
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "location.fill")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(4)
-                        .background(Circle().fill(locationTracker.isTracking ? Color.green : Color.secondary.opacity(0.3)))
-                    Text(cityProgressUnavailableText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity)
-        .frame(height: topControlHeight)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
+    #endif
 }
 
-private struct ProfileCardView: View {
-    let displayName: String
-    let avatarImageData: Data
-    let cityProgress: CityProgress?
-    let cityProgressUnavailableText: String
-    let isTracking: Bool
+// MARK: - Friends
 
-    var body: some View {
-        VStack(spacing: 24) {
-            VStack(spacing: 12) {
-                ProfileAvatarView(imageData: avatarImageData, size: 108)
-
-                VStack(spacing: 4) {
-                    Text(displayName.isEmpty ? "Explorer" : displayName)
-                        .font(.title2.bold())
-
-                    Text(isTracking ? "Exploration active" : "Exploration en pause")
-                        .font(.subheadline)
-                        .foregroundStyle(isTracking ? .green : .secondary)
-                }
-            }
-
-            VStack(spacing: 12) {
-                ProfileInfoRow(
-                    iconName: "map.fill",
-                    title: "Ville",
-                    value: cityProgress?.cityName ?? cityProgressUnavailableText
-                )
-
-                ProfileInfoRow(
-                    iconName: "chart.pie.fill",
-                    title: "Progression",
-                    value: cityProgress?.percentageText ?? "-"
-                )
-
-                ProfileInfoRow(
-                    iconName: "square.grid.3x3.fill",
-                    title: "Cellules explorées",
-                    value: exploredCellsText
-                )
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 24)
-        .padding(.top, 48)
-        .padding(.bottom, 20)
-    }
-
-    private var exploredCellsText: String {
-        guard let cityProgress else { return "-" }
-        return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
-    }
-}
-
-private struct FriendScratchSummary: Identifiable {
-    let userID: String
-    let displayName: String
-    let cellCount: Int
-
-    var id: String { userID }
-}
-
-private struct MapFiltersSheet: View {
-    @Binding var heatMapEnabled: Bool
+private struct FriendsView: View {
+    let friends: [FriendMapSummary]
     @Binding var selectedFriendUserIDs: Set<String>
-    @Binding var centerOnFriendUserID: String?
-
-    let friendScratchSummaries: [FriendScratchSummary]
+    let onShowOnMap: (FriendMapSummary) -> Void
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Carte") {
-                    Toggle("Heat", isOn: $heatMapEnabled)
-                }
-
-                Section("Amis") {
-                    if friendScratchSummaries.isEmpty {
-                        Text("Aucun scratch ami")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(friendScratchSummaries) { summary in
-                            Toggle(isOn: friendSelectionBinding(for: summary.userID)) {
-                                HStack(spacing: 10) {
-                                    Circle()
-                                        .fill(Color(uiColor: FriendColor.color(for: summary.userID)))
-                                        .frame(width: 12, height: 12)
-
-                                    Text(summary.displayName)
-                                        .lineLimit(1)
-
-                                    Spacer()
-
-                                    Text("\(summary.cellCount)")
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
+            Group {
+                if friends.isEmpty {
+                    ContentUnavailableView {
+                        Label("Aucun ami pour le moment", systemImage: "person.2")
+                    } description: {
+                        Text("Les personnes de ton groupe apparaîtront ici dès qu’elles auront rejoint Wander.")
+                    }
+                } else {
+                    List(friends) { friend in
+                        NavigationLink(value: friend) {
+                            FriendRow(friend: friend)
                         }
+                    }
+                    .navigationDestination(for: FriendMapSummary.self) { friend in
+                        FriendDetailView(
+                            friend: friend,
+                            showsScratch: friendSelectionBinding(for: friend.userID),
+                            onShowOnMap: {
+                                onShowOnMap(friend)
+                            }
+                        )
                     }
                 }
             }
-            .navigationTitle("Filtres")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Amis")
         }
     }
 
@@ -456,8 +356,6 @@ private struct MapFiltersSheet: View {
                 selectedFriendUserIDs.contains(userID)
             },
             set: { isSelected in
-                centerOnFriendUserID = userID
-
                 if isSelected {
                     selectedFriendUserIDs.insert(userID)
                 } else {
@@ -468,37 +366,327 @@ private struct MapFiltersSheet: View {
     }
 }
 
-private struct ProfileInfoRow: View {
-    let iconName: String
-    let title: String
-    let value: String
+private struct FriendRow: View {
+    let friend: FriendMapSummary
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: iconName)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.green)
-                .frame(width: 34, height: 34)
-                .background(Color.green.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            Text(title)
-                .font(.subheadline)
+            Image(systemName: "person.crop.circle.fill")
+                .font(.title2)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
 
-            Spacer()
+            VStack(alignment: .leading, spacing: 3) {
+                Text(friend.displayName)
+                    .font(.body.weight(.medium))
 
-            Text(value)
-                .font(.subheadline.bold())
-                .multilineTextAlignment(.trailing)
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .padding(.horizontal, 14)
-        .frame(height: 54)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .padding(.vertical, 2)
+    }
+
+    private var statusText: String {
+        if friend.hasLiveLocation {
+            return "Position disponible"
+        }
+
+        if friend.cellCount > 0 {
+            return "\(friend.cellCount) zones partagées"
+        }
+
+        return "Aucune activité partagée"
     }
 }
 
+private struct FriendDetailView: View {
+    let friend: FriendMapSummary
+    @Binding var showsScratch: Bool
+    let onShowOnMap: () -> Void
+
+    var body: some View {
+        Form {
+            Section {
+                VStack(spacing: 10) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.system(size: 72))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+
+                    Text(friend.displayName)
+                        .font(.title2.bold())
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .accessibilityElement(children: .combine)
+            }
+
+            Section("Activité") {
+                LabeledContent("Position") {
+                    if friend.hasLiveLocation, let lastSeenAt = friend.lastSeenAt {
+                        Text(lastSeenAt, style: .relative)
+                    } else {
+                        Text("Indisponible")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                LabeledContent("Zones explorées") {
+                    Text(friend.cellCount, format: .number)
+                        .monospacedDigit()
+                }
+            }
+
+            Section("Carte") {
+                Toggle("Afficher son parcours", isOn: $showsScratch)
+                    .disabled(friend.cellCount == 0)
+
+                Button(action: onShowOnMap) {
+                    Label("Afficher sur la carte", systemImage: "map")
+                }
+                .disabled(!friend.hasLiveLocation && friend.cellCount == 0)
+            }
+        }
+        .navigationTitle(friend.displayName)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Profile
+
+private struct ProfileView: View {
+    @Binding var displayName: String
+    @Binding var avatarImageData: Data
+    @ObservedObject var locationTracker: LocationTracker
+
+    let cityProgress: CityProgress?
+    let cityProgressUnavailableText: String
+
+    @State private var selectedPhoto: PhotosPickerItem?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack(spacing: 16) {
+                        ProfileAvatarView(imageData: avatarImageData, size: 72)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(displayName.isEmpty ? "Explorer" : displayName)
+                                .font(.title2.bold())
+
+                            Label(
+                                locationTracker.isTracking ? "Exploration active" : "Exploration en pause",
+                                systemImage: locationTracker.isTracking ? "location.fill" : "pause.circle"
+                            )
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 8)
+
+                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                        Label("Choisir une photo", systemImage: "photo")
+                    }
+                }
+
+                Section("Identité") {
+                    TextField("Pseudo", text: $displayName)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.done)
+                }
+
+                Section {
+                    Toggle("Enregistrer mes déplacements", isOn: trackingBinding)
+
+                    if locationTracker.authorizationStatus == .authorizedWhenInUse
+                        || locationTracker.authorizationStatus == .authorizedAlways {
+                        Toggle(
+                            "Continuer en arrière-plan",
+                            isOn: backgroundTrackingBinding
+                        )
+                    }
+
+                    if locationTracker.authorizationStatus == .denied
+                        || locationTracker.authorizationStatus == .restricted {
+                        Label(
+                            "Autorise la localisation dans Réglages pour reprendre l’exploration.",
+                            systemImage: "location.slash"
+                        )
+                        .foregroundStyle(.secondary)
+
+                        Button {
+                            openSettings()
+                        } label: {
+                            Label("Ouvrir Réglages", systemImage: "gear")
+                        }
+                    } else if let lastError = locationTracker.lastError {
+                        Label(lastError, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Localisation")
+                } footer: {
+                    Text(
+                        "Quand l’exploration est active, Wander utilise ta position pour révéler la carte et alimenter les fonctions entre amis. Le suivi en arrière-plan reste optionnel."
+                    )
+                }
+
+                Section("Progression") {
+                    LabeledContent(
+                        "Ville",
+                        value: cityProgress?.cityName ?? cityProgressUnavailableText
+                    )
+
+                    LabeledContent(
+                        "Progression",
+                        value: cityProgress?.percentageText ?? "—"
+                    )
+
+                    LabeledContent("Zones explorées") {
+                        Text(exploredCellsText)
+                            .monospacedDigit()
+                    }
+                }
+            }
+            .navigationTitle("Profil")
+        }
+        .onChange(of: selectedPhoto) { _, newPhoto in
+            loadAvatar(from: newPhoto)
+        }
+    }
+
+    private var trackingBinding: Binding<Bool> {
+        Binding(
+            get: {
+                locationTracker.trackingEnabled
+            },
+            set: { isEnabled in
+                if isEnabled {
+                    locationTracker.startTracking()
+                } else {
+                    locationTracker.stopTracking()
+                }
+            }
+        )
+    }
+
+    private var backgroundTrackingBinding: Binding<Bool> {
+        Binding(
+            get: {
+                locationTracker.backgroundTrackingEnabled
+            },
+            set: { isEnabled in
+                locationTracker.setBackgroundTrackingEnabled(isEnabled)
+            }
+        )
+    }
+
+    private var exploredCellsText: String {
+        guard let cityProgress else { return "—" }
+        return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
+    }
+
+    private func loadAvatar(from item: PhotosPickerItem?) {
+        guard let item else { return }
+
+        Task {
+            guard
+                let data = try? await item.loadTransferable(type: Data.self),
+                let image = UIImage(data: data),
+                let jpegData = image
+                    .preparingThumbnail(of: CGSize(width: 360, height: 360))?
+                    .jpegData(compressionQuality: 0.82)
+            else {
+                return
+            }
+
+            await MainActor.run {
+                avatarImageData = jpegData
+            }
+        }
+    }
+
+    private func openSettings() {
+        guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(settingsURL)
+    }
+}
+
+// MARK: - Map filters
+
+private struct MapFiltersSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var heatMapEnabled: Bool
+    @Binding var selectedFriendUserIDs: Set<String>
+
+    let friends: [FriendMapSummary]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
+                } header: {
+                    Text("Exploration")
+                } footer: {
+                    Text("Affiche les zones où tu as passé le plus de temps.")
+                }
+
+                Section {
+                    if friends.isEmpty {
+                        Text("Aucun parcours partagé pour le moment.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(friends) { friend in
+                            Toggle(isOn: friendSelectionBinding(for: friend.userID)) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(friend.displayName)
+
+                                    Text("\(friend.cellCount) zones")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Parcours des amis")
+                } footer: {
+                    Text("Choisis les parcours à superposer au tien. Le recentrage se fait depuis l’onglet Amis.")
+                }
+            }
+            .navigationTitle("Affichage")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Terminé") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func friendSelectionBinding(for userID: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                selectedFriendUserIDs.contains(userID)
+            },
+            set: { isSelected in
+                if isSelected {
+                    selectedFriendUserIDs.insert(userID)
+                } else {
+                    selectedFriendUserIDs.remove(userID)
+                }
+            }
+        )
+    }
+}
+
+#if DEBUG
 private struct ThreeFingerPressCatcher: UIViewRepresentable {
     var onPress: () -> Void
 
@@ -544,7 +732,10 @@ private struct ThreeFingerPressCatcher: UIViewRepresentable {
 
             detach()
 
-            let gestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
+            let gestureRecognizer = UILongPressGestureRecognizer(
+                target: self,
+                action: #selector(handlePress(_:))
+            )
             gestureRecognizer.numberOfTouchesRequired = 3
             gestureRecognizer.minimumPressDuration = 0.25
             gestureRecognizer.cancelsTouchesInView = false
@@ -579,6 +770,7 @@ private struct ThreeFingerPressCatcher: UIViewRepresentable {
         }
     }
 }
+#endif
 
 #Preview {
     ContentView()

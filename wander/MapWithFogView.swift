@@ -373,6 +373,10 @@ struct MapWithFogView: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
+        mapView.preferredConfiguration = MKStandardMapConfiguration(
+            elevationStyle: .flat,
+            emphasisStyle: .muted
+        )
         mapView.showsUserLocation = true
         mapView.showsCompass = true
         mapView.userTrackingMode = .none

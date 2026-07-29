@@ -2,10 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>Wander</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>We use your location to show where you are on the map.</string>
+	<string>Wander utilise votre position pour révéler votre carte et mettre à jour les fonctions entre amis lorsque l’exploration est active.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>We use your location in the background to reveal the areas you explore.</string>
+	<string>Wander utilise votre position en arrière-plan pour poursuivre une exploration et mettre à jour les fonctions entre amis.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
