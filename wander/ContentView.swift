@@ -460,11 +460,14 @@ private struct ProfileView: View {
     @Binding var displayName: String
     @Binding var avatarImageData: Data
     @ObservedObject var locationTracker: LocationTracker
+    @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     let cityProgress: CityProgress?
     let cityProgressUnavailableText: String
 
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var resetConfirmationPresented = false
+    @State private var resetFailed = false
 
     var body: some View {
         NavigationStack {
@@ -550,11 +553,43 @@ private struct ProfileView: View {
                             .monospacedDigit()
                     }
                 }
+
+                Section {
+                    Button(role: .destructive) {
+                        resetConfirmationPresented = true
+                    } label: {
+                        Label("Effacer mes données locales", systemImage: "trash")
+                    }
+                } footer: {
+                    Text(
+                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Les données déjà synchronisées ne sont pas effacées."
+                    )
+                }
             }
             .navigationTitle("Profil")
         }
         .onChange(of: selectedPhoto) { _, newPhoto in
             loadAvatar(from: newPhoto)
+        }
+        .confirmationDialog(
+            "Effacer les données locales ?",
+            isPresented: $resetConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Effacer et recommencer", role: .destructive) {
+                resetLocalData()
+            }
+
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text(
+                "Cette action est irréversible sur cet appareil. Tu seras redirigé vers l’onboarding."
+            )
+        }
+        .alert("Impossible d’effacer les données", isPresented: $resetFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Réessaie dans quelques instants.")
         }
     }
 
@@ -606,6 +641,22 @@ private struct ProfileView: View {
             await MainActor.run {
                 avatarImageData = jpegData
             }
+        }
+    }
+
+    private func resetLocalData() {
+        do {
+            try locationTracker.resetLocalData()
+            selectedPhoto = nil
+            displayName = ""
+            avatarImageData = Data()
+
+            withAnimation(.easeInOut(duration: 0.25)) {
+                onboardingCompleted = false
+            }
+        } catch {
+            resetFailed = true
+            print("[Profile] failed to reset local data: \(error.localizedDescription)")
         }
     }
 

@@ -227,6 +227,38 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         locationManager.stopMonitoringVisits()
     }
 
+    /// Stops location services and removes every user-owned value persisted on
+    /// this device. System location permissions are managed by iOS and remain
+    /// unchanged.
+    func resetLocalData() throws {
+        stopTracking()
+        setBackgroundTrackingEnabled(false)
+
+        heatMapFlushTimer?.invalidate()
+        heatMapFlushTimer = nil
+        pendingHeatMapUpdates.removeAll()
+
+        try cellStore.deleteAll()
+
+        UserDefaults.standard.removeObject(forKey: trackingEnabledKey)
+        UserDefaults.standard.removeObject(forKey: backgroundTrackingEnabledKey)
+
+        lastLocation = nil
+        previousAcceptedLocation = nil
+        previousAcceptedCellID = nil
+        currentH3CellID = nil
+        newlyDiscoveredCellIDs = []
+        discoveredCells = []
+        heatMapCellData = [:]
+        locationsReceived = 0
+        visitsReceived = 0
+        lastSegmentDistance = nil
+        lastSegmentTimeGap = nil
+        lastSegmentSpeed = nil
+        lastCellsAdded = 0
+        lastError = nil
+    }
+
     // MARK: - Tracking resume & modes
 
     /// Resumes location services if the user previously opted in and permission is valid.

@@ -123,4 +123,18 @@ final class DiscoveredCellStore: ObservableObject {
     func contains(_ cellID: String) -> Bool {
         cells.contains(where: { $0.id == cellID })
     }
+
+    // MARK: - Deletion
+
+    func deleteAll() throws {
+        guard let context = modelContext else { return }
+
+        let storedCells = try context.fetch(FetchDescriptor<DiscoveredCell>())
+        for cell in storedCells {
+            context.delete(cell)
+        }
+
+        try context.save()
+        cells = []
+    }
 }
