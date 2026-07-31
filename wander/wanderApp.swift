@@ -22,6 +22,7 @@ struct wanderApp: App {
         LegacyMigration.migrateJSONToSwiftData(container: container)
 
         FirebaseService.shared.configure()
+        _ = FriendSyncService.shared
         FirebaseService.shared.signIn()
     }
 

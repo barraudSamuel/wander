@@ -127,98 +127,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
     }
 }
 
-final class FriendScratchOverlay: NSObject, MKOverlay {
-    let userID: String
-    let color: UIColor
-    let boundingMapRect: MKMapRect
-    let coordinate: CLLocationCoordinate2D
-    let cellPolygons: [String: [CLLocationCoordinate2D]]
-
-    init(
-        userID: String,
-        cellIDs: Set<String>,
-        color: UIColor,
-        explorationEngine: ExplorationEngine
-    ) {
-        self.userID = userID
-        self.color = color
-
-        var polygons: [String: [CLLocationCoordinate2D]] = [:]
-        var minLat = 90.0
-        var maxLat = -90.0
-        var minLng = 180.0
-        var maxLng = -180.0
-
-        for cellID in cellIDs {
-            let coords = explorationEngine.boundaryCoordinates(for: cellID)
-            guard coords.count >= 3 else { continue }
-
-            polygons[cellID] = coords
-
-            for coord in coords {
-                minLat = min(minLat, coord.latitude)
-                maxLat = max(maxLat, coord.latitude)
-                minLng = min(minLng, coord.longitude)
-                maxLng = max(maxLng, coord.longitude)
-            }
-        }
-
-        self.cellPolygons = polygons
-
-        if polygons.isEmpty {
-            self.coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
-            self.boundingMapRect = MKMapRect.null
-        } else {
-            self.coordinate = CLLocationCoordinate2D(
-                latitude: (minLat + maxLat) / 2,
-                longitude: (minLng + maxLng) / 2
-            )
-
-            let topLeft = MKMapPoint(CLLocationCoordinate2D(latitude: maxLat, longitude: minLng))
-            let bottomRight = MKMapPoint(CLLocationCoordinate2D(latitude: minLat, longitude: maxLng))
-            let padding = 1000.0
-            self.boundingMapRect = MKMapRect(
-                x: topLeft.x - padding,
-                y: topLeft.y - padding,
-                width: bottomRight.x - topLeft.x + padding * 2,
-                height: bottomRight.y - topLeft.y + padding * 2
-            )
-        }
-
-        super.init()
-    }
-}
-
-final class FriendScratchOverlayRenderer: MKOverlayRenderer {
-    override func canDraw(_ mapRect: MKMapRect, zoomScale: MKZoomScale) -> Bool {
-        true
-    }
-
-    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
-        guard let overlay = self.overlay as? FriendScratchOverlay,
-              !overlay.cellPolygons.isEmpty else { return }
-
-        let color = overlay.color
-        context.setLineWidth(1.0 / zoomScale)
-        context.setFillColor(color.withAlphaComponent(0.34).cgColor)
-        context.setStrokeColor(color.withAlphaComponent(0.75).cgColor)
-
-        for coords in overlay.cellPolygons.values {
-            context.beginPath()
-            for (index, coord) in coords.enumerated() {
-                let point = self.point(for: MKMapPoint(coord))
-                if index == 0 {
-                    context.move(to: point)
-                } else {
-                    context.addLine(to: point)
-                }
-            }
-            context.closePath()
-            context.drawPath(using: .fillStroke)
-        }
-    }
-}
-
 struct FogCellPolygon {
     let coordinates: [CLLocationCoordinate2D]
     let mapRect: MKMapRect
@@ -300,8 +208,8 @@ struct MapWithFogView: UIViewRepresentable {
     /// City boundary used only for the initial map fit. Fog is global.
     var cityBoundaryCoordinates: [CLLocationCoordinate2D]
 
-    /// Group members to display on the map (excluding the current user).
-    var groupMembers: [GroupMember] = []
+    /// Fresh locations belonging to accepted friends.
+    var friendLocations: [String: FriendLocation] = [:]
 
     var userDisplayName = ""
     var userAvatarImageData = Data()
@@ -319,8 +227,6 @@ struct MapWithFogView: UIViewRepresentable {
     @Binding var centerOnFriendUserID: String?
 
     var showsHeatMap = false
-    var friendCellIDsByUserID: [String: Set<String>] = [:]
-    var allFriendCellIDsByUserID: [String: Set<String>] = [:]
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
 
     func makeUIView(context: Context) -> MKMapView {
@@ -343,26 +249,22 @@ struct MapWithFogView: UIViewRepresentable {
         updateFogOverlay(
             on: mapView,
             context: context,
-            visibleDiscoveredCellIDs: visibleDiscoveredCellIDs
+            visibleDiscoveredCellIDs: discoveredCellIDs
         )
         return mapView
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
-        let visibleCellIDs = visibleDiscoveredCellIDs
-        let membersByID = Dictionary(uniqueKeysWithValues: groupMembers.map { ($0.userId, $0) })
         let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
-        let discoveredChanged = context.coordinator.lastDiscoveredIDs != visibleCellIDs
-        let membersChanged = context.coordinator.lastMembersByID != membersByID
+        let discoveredChanged = context.coordinator.lastDiscoveredIDs != discoveredCellIDs
         let heatMapVisibilityChanged = context.coordinator.lastShowsHeatMap != showsHeatMap
-        let friendCellsChanged = context.coordinator.lastFriendCellIDsByUserID != friendCellIDsByUserID
         let heatMapDataChanged = context.coordinator.lastHeatMapCellDataCount != heatMapCellData.count
 
         if boundaryChanged || discoveredChanged {
             updateFogOverlay(
                 on: uiView,
                 context: context,
-                visibleDiscoveredCellIDs: visibleCellIDs
+                visibleDiscoveredCellIDs: discoveredCellIDs
             )
         }
 
@@ -370,14 +272,7 @@ struct MapWithFogView: UIViewRepresentable {
             updateHeatMapOverlay(on: uiView, context: context)
         }
 
-        if friendCellsChanged {
-            updateFriendScratchOverlays(on: uiView, context: context)
-        }
-
-        if membersChanged {
-            updateMemberAnnotations(on: uiView, context: context, membersByID: membersByID)
-        }
-
+        updateFriendAnnotations(on: uiView, context: context)
         updateUserLocationAnnotation(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
@@ -409,20 +304,13 @@ struct MapWithFogView: UIViewRepresentable {
             centerMap(
                 onFriend: friendUserID,
                 on: uiView,
-                context: context,
-                membersByID: membersByID
+                friendLocations: friendLocations
             )
         }
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(fogColor: fogColor)
-    }
-
-    private var visibleDiscoveredCellIDs: Set<String> {
-        return friendCellIDsByUserID.values.reduce(into: discoveredCellIDs) { result, cellIDs in
-            result.formUnion(cellIDs)
-        }
     }
 
     // MARK: - User location
@@ -458,49 +346,48 @@ struct MapWithFogView: UIViewRepresentable {
         mapView.view(for: mapView.userLocation)?.isHidden = true
     }
 
-    // MARK: - Member annotations
+    // MARK: - Friend annotations
 
-    private func updateMemberAnnotations(
+    private func updateFriendAnnotations(
         on mapView: MKMapView,
-        context: Context,
-        membersByID: [String: GroupMember]
+        context: Context
     ) {
         let coordinator = context.coordinator
 
-        // Remove annotations that are no longer in the group.
-        let currentIDs = Set(membersByID.keys)
-        let removedIDs = coordinator.memberAnnotations.keys.filter { !currentIDs.contains($0) }
-        for userId in removedIDs {
-            if let annotation = coordinator.memberAnnotations.removeValue(forKey: userId) {
+        // Remove annotations when a friendship ends or its fresh location expires.
+        let currentIDs = Set(friendLocations.keys)
+        let removedIDs = coordinator.friendAnnotations.keys.filter { !currentIDs.contains($0) }
+        for userID in removedIDs {
+            if let annotation = coordinator.friendAnnotations.removeValue(forKey: userID) {
                 mapView.removeAnnotation(annotation)
             }
         }
 
-        // Add or update annotations for current members.
-        for member in membersByID.values {
-            guard let location = member.location else { continue }
-
-            if let existing = coordinator.memberAnnotations[member.userId] {
-                UIView.animate(withDuration: 0.5) {
-                    existing.coordinate = location
+        // Incrementally add or move annotations for fresh accepted-friend locations.
+        for friendLocation in friendLocations.values {
+            if let existing = coordinator.friendAnnotations[friendLocation.userID] {
+                if existing.coordinate.latitude != friendLocation.coordinate.latitude
+                    || existing.coordinate.longitude != friendLocation.coordinate.longitude {
+                    UIView.animate(withDuration: 0.5) {
+                        existing.coordinate = friendLocation.coordinate
+                    }
                 }
-                existing.title = member.displayName
-                existing.subtitle = member.userId
-                mapView.view(for: existing)?.image = coordinator.memberImage(
-                    displayName: member.displayName,
-                    userID: member.userId
+
+                existing.title = friendLocation.displayName
+                existing.subtitle = friendLocation.userID
+                mapView.view(for: existing)?.image = coordinator.friendImage(
+                    displayName: friendLocation.displayName,
+                    userID: friendLocation.userID
                 )
             } else {
                 let annotation = MKPointAnnotation()
-                annotation.coordinate = location
-                annotation.title = member.displayName
-                annotation.subtitle = member.userId
-                coordinator.memberAnnotations[member.userId] = annotation
+                annotation.coordinate = friendLocation.coordinate
+                annotation.title = friendLocation.displayName
+                annotation.subtitle = friendLocation.userID
+                coordinator.friendAnnotations[friendLocation.userID] = annotation
                 mapView.addAnnotation(annotation)
             }
         }
-
-        coordinator.lastMembersByID = membersByID
     }
 
     // MARK: - Fog overlay
@@ -579,39 +466,13 @@ struct MapWithFogView: UIViewRepresentable {
     private func centerMap(
         onFriend userID: String,
         on mapView: MKMapView,
-        context: Context,
-        membersByID: [String: GroupMember]
+        friendLocations: [String: FriendLocation]
     ) {
         mapView.setUserTrackingMode(.none, animated: false)
 
-        if let coordinate = membersByID[userID]?.location {
-            setFocusedRegion(on: mapView, center: coordinate, animated: true)
-            return
-        }
-
-        if let coordinate = friendScratchCenter(for: userID, context: context) {
+        if let coordinate = friendLocations[userID]?.coordinate {
             setFocusedRegion(on: mapView, center: coordinate, animated: true)
         }
-    }
-
-    private func friendScratchCenter(for userID: String, context: Context) -> CLLocationCoordinate2D? {
-        if let overlay = context.coordinator.friendScratchOverlays.first(where: { $0.userID == userID }),
-           !overlay.cellPolygons.isEmpty {
-            return overlay.coordinate
-        }
-
-        guard let cellIDs = allFriendCellIDsByUserID[userID], !cellIDs.isEmpty else {
-            return nil
-        }
-
-        let overlay = FriendScratchOverlay(
-            userID: userID,
-            cellIDs: cellIDs,
-            color: FriendColor.color(for: userID),
-            explorationEngine: context.coordinator.explorationEngine
-        )
-
-        return overlay.cellPolygons.isEmpty ? nil : overlay.coordinate
     }
 
     // MARK: - Heat map overlay
@@ -647,37 +508,6 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.lastHeatMapCellDataCount = heatMapCellData.count
     }
 
-    // MARK: - Friend scratch overlays
-
-    private func updateFriendScratchOverlays(on mapView: MKMapView, context: Context) {
-        let coordinator = context.coordinator
-
-        for overlay in coordinator.friendScratchOverlays {
-            mapView.removeOverlay(overlay)
-        }
-        coordinator.friendScratchOverlays.removeAll()
-
-        let overlays = friendCellIDsByUserID
-            .filter { !$0.value.isEmpty }
-            .sorted { $0.key < $1.key }
-            .compactMap { userID, cellIDs -> FriendScratchOverlay? in
-                let overlay = FriendScratchOverlay(
-                    userID: userID,
-                    cellIDs: cellIDs,
-                    color: FriendColor.color(for: userID),
-                    explorationEngine: coordinator.explorationEngine
-                )
-                return overlay.cellPolygons.isEmpty ? nil : overlay
-            }
-
-        for overlay in overlays {
-            mapView.addOverlay(overlay, level: .aboveRoads)
-        }
-
-        coordinator.friendScratchOverlays = overlays
-        coordinator.lastFriendCellIDsByUserID = friendCellIDsByUserID
-    }
-
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, MKMapViewDelegate {
@@ -685,18 +515,15 @@ struct MapWithFogView: UIViewRepresentable {
         let fogColor: UIColor
         var fogOverlay: FogOfWarOverlay?
         var heatMapOverlay: HeatMapOverlay?
-        var friendScratchOverlays: [FriendScratchOverlay] = []
         var lastDiscoveredIDs: Set<String> = []
         var lastBoundaryLength: Int = 0
         var lastShowsHeatMap = false
         var lastHeatMapCellDataCount: Int = 0
-        var lastFriendCellIDsByUserID: [String: Set<String>] = [:]
         var didSetInitialRegion = false
         var userLocationAnnotation: UserLocationAnnotation?
         private var userAvatarImageData = Data()
         private var userDisplayName = ""
-        var memberAnnotations: [String: MKPointAnnotation] = [:]
-        var lastMembersByID: [String: GroupMember] = [:]
+        var friendAnnotations: [String: MKPointAnnotation] = [:]
 
         init(fogColor: UIColor) {
             self.fogColor = fogColor
@@ -712,9 +539,6 @@ struct MapWithFogView: UIViewRepresentable {
                 renderer.strokeColor = nil
                 renderer.lineWidth = 0
                 return renderer
-            }
-            if overlay is FriendScratchOverlay {
-                return FriendScratchOverlayRenderer(overlay: overlay)
             }
             if overlay is HeatMapOverlay {
                 return HeatMapOverlayRenderer(overlay: overlay)
@@ -741,7 +565,7 @@ struct MapWithFogView: UIViewRepresentable {
 
             guard !(annotation is MKUserLocation) else { return nil }
 
-            let identifier = "GroupMemberAnnotation"
+            let identifier = "FriendLocationAnnotation"
             var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
 
             if annotationView == nil {
@@ -758,7 +582,7 @@ struct MapWithFogView: UIViewRepresentable {
 
             let displayName = annotation.title.flatMap { $0 } ?? "?"
             let userID = annotation.subtitle.flatMap { $0 } ?? displayName
-            annotationView?.image = memberImage(displayName: displayName, userID: userID)
+            annotationView?.image = friendImage(displayName: displayName, userID: userID)
             return annotationView
         }
 
@@ -789,7 +613,7 @@ struct MapWithFogView: UIViewRepresentable {
             )
         }
 
-        func memberImage(displayName: String, userID: String) -> UIImage {
+        func friendImage(displayName: String, userID: String) -> UIImage {
             let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
             let initial = trimmedName.isEmpty ? "?" : String(trimmedName.prefix(1)).uppercased()
             let color = FriendColor.color(for: userID)

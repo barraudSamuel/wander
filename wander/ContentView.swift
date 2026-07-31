@@ -21,16 +21,14 @@ private enum RootTab: Hashable {
 private struct FriendMapSummary: Identifiable, Hashable {
     let userID: String
     let displayName: String
-    let cellCount: Int
     let hasLiveLocation: Bool
-    let lastSeenAt: Date?
 
     var id: String { userID }
 }
 
 struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
-    @StateObject private var groupSyncService = GroupSyncService()
+    @StateObject private var friendSyncService = FriendSyncService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @AppStorage("profile.displayName") private var displayName = ""
@@ -44,7 +42,6 @@ struct ContentView: View {
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
     @State private var heatMapEnabled = false
-    @State private var selectedFriendUserIDs: Set<String> = []
 
     #if DEBUG
     @State private var debugDrawerVisible = false
@@ -61,8 +58,8 @@ struct ContentView: View {
                     .tag(RootTab.explore)
 
                 FriendsView(
+                    service: friendSyncService,
                     friends: friendSummaries,
-                    selectedFriendUserIDs: $selectedFriendUserIDs,
                     onShowOnMap: showFriendOnMap
                 )
                 .tabItem {
@@ -75,7 +72,8 @@ struct ContentView: View {
                     avatarImageData: $avatarImageData,
                     locationTracker: locationTracker,
                     cityProgress: cityProgress,
-                    cityProgressUnavailableText: cityProgressUnavailableText
+                    cityProgressUnavailableText: cityProgressUnavailableText,
+                    onStopSharingLocation: friendSyncService.stopSharingLocation
                 )
                 .tabItem {
                     Label("Profil", systemImage: "person.crop.circle")
@@ -106,6 +104,7 @@ struct ContentView: View {
         .onAppear {
             locationTracker.configure(with: modelContext)
             locationTracker.resumeTrackingIfNeeded()
+            friendSyncService.updateDisplayName(displayName)
 
             Task {
                 await cityBoundary.load()
@@ -113,25 +112,33 @@ struct ContentView: View {
                     cityBoundary.detectCity(for: location.coordinate)
                 }
             }
-
-            syncFriendFilterSelection()
-        }
-        .onChange(of: groupSyncService.friendCellIDsByUserID) { _, _ in
-            syncFriendFilterSelection()
-        }
-        .onChange(of: locationTracker.newlyDiscoveredCellIDs) { _, newIDs in
-            groupSyncService.pushCells(newIDs)
         }
         .onChange(of: locationTracker.lastLocation) { _, location in
             guard let location else { return }
 
             cityBoundary.detectCity(for: location.coordinate)
-            groupSyncService.updateLocation(
-                lat: location.coordinate.latitude,
-                lng: location.coordinate.longitude,
-                cellID: locationTracker.currentH3CellID,
+            guard locationTracker.trackingEnabled else { return }
+
+            friendSyncService.updateLocation(
+                location,
                 displayName: displayName.isEmpty ? "Explorer" : displayName
             )
+        }
+        .onChange(of: locationTracker.trackingEnabled, initial: true) { _, isEnabled in
+            if !isEnabled {
+                friendSyncService.stopSharingLocation()
+            }
+        }
+        .onChange(of: displayName) { _, newDisplayName in
+            friendSyncService.updateDisplayName(newDisplayName)
+        }
+        .onChange(of: friendSyncService.isProfileReady) { _, isReady in
+            guard isReady else { return }
+
+            friendSyncService.updateDisplayName(displayName)
+            if !locationTracker.trackingEnabled {
+                friendSyncService.stopSharingLocation()
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -157,15 +164,13 @@ struct ContentView: View {
                 locationTracker: locationTracker,
                 discoveredCellIDs: Set(locationTracker.discoveredCells.map(\.id)),
                 cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
-                groupMembers: otherGroupMembers,
+                friendLocations: friendSyncService.friendLocations,
                 userDisplayName: displayName,
                 userAvatarImageData: avatarImageData,
                 centerOnUser: $centerOnUser,
                 resetMapOrientation: $resetMapOrientation,
                 centerOnFriendUserID: $centerOnFriendUserID,
                 showsHeatMap: heatMapEnabled,
-                friendCellIDsByUserID: filteredFriendCellIDsByUserID,
-                allFriendCellIDsByUserID: groupSyncService.friendCellIDsByUserID,
                 heatMapCellData: locationTracker.heatMapCellData
             )
             .ignoresSafeArea()
@@ -214,45 +219,24 @@ struct ContentView: View {
         }
         .sheet(isPresented: $filterSheetVisible) {
             MapFiltersSheet(
-                heatMapEnabled: $heatMapEnabled,
-                selectedFriendUserIDs: $selectedFriendUserIDs,
-                friends: friendSummaries.filter { $0.cellCount > 0 }
+                heatMapEnabled: $heatMapEnabled
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
     }
 
-    // MARK: - Group members
-
-    private var otherGroupMembers: [GroupMember] {
-        let currentUserID = FirebaseService.shared.currentUserId
-
-        return groupSyncService.groupMembers.values
-            .filter { member in
-                member.userId != currentUserID && member.location != nil
-            }
-            .sorted { lhs, rhs in
-                lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-            }
-    }
+    // MARK: - Friends
 
     private var friendSummaries: [FriendMapSummary] {
-        let currentUserID = FirebaseService.shared.currentUserId
-        let userIDs = Set(groupSyncService.groupMembers.keys)
-            .union(groupSyncService.friendCellIDsByUserID.keys)
-
-        return userIDs
-            .filter { $0 != currentUserID }
-            .map { userID in
-                let member = groupSyncService.groupMembers[userID]
+        friendSyncService.acceptedFriends
+            .map { friend in
+                let location = friendSyncService.friendLocations[friend.userID]
 
                 return FriendMapSummary(
-                    userID: userID,
-                    displayName: member?.displayName ?? "Explorer",
-                    cellCount: groupSyncService.friendCellIDsByUserID[userID]?.count ?? 0,
-                    hasLiveLocation: member?.location != nil,
-                    lastSeenAt: member?.lastSeenAt
+                    userID: friend.userID,
+                    displayName: location?.displayName ?? friend.displayName,
+                    hasLiveLocation: location != nil
                 )
             }
             .sorted { lhs, rhs in
@@ -260,22 +244,8 @@ struct ContentView: View {
             }
     }
 
-    private var filteredFriendCellIDsByUserID: [String: Set<String>] {
-        groupSyncService.friendCellIDsByUserID.filter { userID, cellIDs in
-            selectedFriendUserIDs.contains(userID) && !cellIDs.isEmpty
-        }
-    }
-
-    private func syncFriendFilterSelection() {
-        let currentUserIDs = Set(groupSyncService.friendCellIDsByUserID.keys)
-        selectedFriendUserIDs.formIntersection(currentUserIDs)
-    }
-
     private func showFriendOnMap(_ friend: FriendMapSummary) {
-        if friend.cellCount > 0 {
-            selectedFriendUserIDs.insert(friend.userID)
-        }
-
+        guard friend.hasLiveLocation else { return }
         centerOnFriendUserID = friend.userID
         selectedTab = .explore
     }
@@ -316,53 +286,220 @@ struct ContentView: View {
 // MARK: - Friends
 
 private struct FriendsView: View {
+    @ObservedObject var service: FriendSyncService
     let friends: [FriendMapSummary]
-    @Binding var selectedFriendUserIDs: Set<String>
     let onShowOnMap: (FriendMapSummary) -> Void
+
+    @State private var friendCodeInput = ""
+    @State private var processingRequestID: String?
 
     var body: some View {
         NavigationStack {
-            Group {
-                if friends.isEmpty {
-                    ContentUnavailableView {
-                        Label("Aucun ami pour le moment", systemImage: "person.2")
-                    } description: {
-                        Text("Les personnes de ton groupe apparaîtront ici dès qu’elles auront rejoint Wander.")
-                    }
-                } else {
-                    List(friends) { friend in
-                        NavigationLink(value: friend) {
-                            FriendRow(friend: friend)
+            List {
+                Section("Ton code ami") {
+                    if service.isPreparingProfile {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Création de ton code…")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let friendCode = service.friendCode, !friendCode.isEmpty {
+                        HStack {
+                            Text(friendCode)
+                                .font(.title3.weight(.semibold))
+                                .monospaced()
+                                .textSelection(.enabled)
+
+                            Spacer()
+
+                            Button {
+                                UIPasteboard.general.string = friendCode
+                            } label: {
+                                Label("Copier", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+
+                        ShareLink(item: shareMessage(for: friendCode)) {
+                            Label("Partager mon code", systemImage: "square.and.arrow.up")
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(
+                                "Code indisponible",
+                                systemImage: "exclamationmark.circle"
+                            )
+                            .foregroundStyle(.secondary)
+
+                            Button("Réessayer") {
+                                service.retryProfileSetup()
+                            }
                         }
                     }
-                    .navigationDestination(for: FriendMapSummary.self) { friend in
-                        FriendDetailView(
-                            friend: friend,
-                            showsScratch: friendSelectionBinding(for: friend.userID),
-                            onShowOnMap: {
-                                onShowOnMap(friend)
+                }
+
+                Section("Ajouter un ami") {
+                    TextField("Code ami", text: $friendCodeInput)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .submitLabel(.send)
+                        .onSubmit(sendFriendRequest)
+
+                    Button(action: sendFriendRequest) {
+                        if service.isProcessingFriendAction
+                            && processingRequestID == nil {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                        } else {
+                            Label("Ajouter un ami", systemImage: "person.badge.plus")
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        friendCodeInput.isEmpty
+                            || !service.isProfileReady
+                            || service.isProcessingFriendAction
+                    )
+                }
+
+                if !service.incomingRequests.isEmpty {
+                    Section("Demandes reçues") {
+                        ForEach(service.incomingRequests) { request in
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label(request.displayName, systemImage: "person.crop.circle")
+
+                                if processingRequestID == request.id {
+                                    HStack(spacing: 10) {
+                                        ProgressView()
+                                        Text("Mise à jour…")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } else {
+                                    HStack {
+                                        Button("Accepter") {
+                                            process(request, accepting: true)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .disabled(service.isProcessingFriendAction)
+
+                                        Button("Refuser", role: .destructive) {
+                                            process(request, accepting: false)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(service.isProcessingFriendAction)
+                                    }
+                                }
                             }
-                        )
+                            .padding(.vertical, 3)
+                        }
+                    }
+                }
+
+                Section("Mes amis") {
+                    if friends.isEmpty {
+                        Text("Aucun ami pour le moment.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(friends) { friend in
+                            HStack {
+                                FriendRow(friend: friend)
+
+                                Spacer()
+
+                                if friend.hasLiveLocation {
+                                    Button {
+                                        onShowOnMap(friend)
+                                    } label: {
+                                        Image(systemName: "map")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel(
+                                        "Afficher \(friend.displayName) sur la carte"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !service.outgoingRequests.isEmpty {
+                    Section("En attente") {
+                        ForEach(service.outgoingRequests) { request in
+                            HStack {
+                                Text(request.displayName)
+                                Spacer()
+                                Text("Demande envoyée")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
             }
             .navigationTitle("Amis")
+            .alert(
+                "Impossible de terminer l’action",
+                isPresented: errorIsPresented
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(service.errorMessage ?? "Réessaie dans quelques instants.")
+            }
+            .onChange(of: service.isProcessingFriendAction) { _, isProcessing in
+                if !isProcessing {
+                    processingRequestID = nil
+                }
+            }
         }
     }
 
-    private func friendSelectionBinding(for userID: String) -> Binding<Bool> {
+    private var errorIsPresented: Binding<Bool> {
         Binding(
             get: {
-                selectedFriendUserIDs.contains(userID)
+                service.errorMessage != nil
             },
-            set: { isSelected in
-                if isSelected {
-                    selectedFriendUserIDs.insert(userID)
-                } else {
-                    selectedFriendUserIDs.remove(userID)
+            set: { isPresented in
+                if !isPresented {
+                    service.clearError()
                 }
             }
         )
+    }
+
+    private func shareMessage(for friendCode: String) -> String {
+        "Ajoute-moi sur Wander avec le code \(friendCode)."
+    }
+
+    private func sendFriendRequest() {
+        guard service.isProfileReady,
+              !friendCodeInput.isEmpty,
+              !service.isProcessingFriendAction else { return }
+        let submittedCode = friendCodeInput
+
+        service.sendFriendRequest(code: submittedCode) { didSend in
+            guard didSend else { return }
+
+            DispatchQueue.main.async {
+                if friendCodeInput == submittedCode {
+                    friendCodeInput = ""
+                }
+            }
+        }
+    }
+
+    private func process(_ request: FriendRequest, accepting: Bool) {
+        processingRequestID = request.id
+
+        if accepting {
+            service.accept(request)
+        } else {
+            service.decline(request)
+        }
+
+        if !service.isProcessingFriendAction {
+            processingRequestID = nil
+        }
     }
 }
 
@@ -389,68 +526,7 @@ private struct FriendRow: View {
     }
 
     private var statusText: String {
-        if friend.hasLiveLocation {
-            return "Position disponible"
-        }
-
-        if friend.cellCount > 0 {
-            return "\(friend.cellCount) zones partagées"
-        }
-
-        return "Aucune activité partagée"
-    }
-}
-
-private struct FriendDetailView: View {
-    let friend: FriendMapSummary
-    @Binding var showsScratch: Bool
-    let onShowOnMap: () -> Void
-
-    var body: some View {
-        Form {
-            Section {
-                VStack(spacing: 10) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.system(size: 72))
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-
-                    Text(friend.displayName)
-                        .font(.title2.bold())
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .accessibilityElement(children: .combine)
-            }
-
-            Section("Activité") {
-                LabeledContent("Position") {
-                    if friend.hasLiveLocation, let lastSeenAt = friend.lastSeenAt {
-                        Text(lastSeenAt, style: .relative)
-                    } else {
-                        Text("Indisponible")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                LabeledContent("Zones explorées") {
-                    Text(friend.cellCount, format: .number)
-                        .monospacedDigit()
-                }
-            }
-
-            Section("Carte") {
-                Toggle("Afficher son parcours", isOn: $showsScratch)
-                    .disabled(friend.cellCount == 0)
-
-                Button(action: onShowOnMap) {
-                    Label("Afficher sur la carte", systemImage: "map")
-                }
-                .disabled(!friend.hasLiveLocation && friend.cellCount == 0)
-            }
-        }
-        .navigationTitle(friend.displayName)
-        .navigationBarTitleDisplayMode(.inline)
+        friend.hasLiveLocation ? "En direct" : "Position indisponible"
     }
 }
 
@@ -464,6 +540,7 @@ private struct ProfileView: View {
 
     let cityProgress: CityProgress?
     let cityProgressUnavailableText: String
+    let onStopSharingLocation: () -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var resetConfirmationPresented = false
@@ -562,7 +639,7 @@ private struct ProfileView: View {
                     }
                 } footer: {
                     Text(
-                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Les données déjà synchronisées ne sont pas effacées."
+                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Le compte Firebase et les relations d’amitié ne sont pas effacés."
                     )
                 }
             }
@@ -646,6 +723,7 @@ private struct ProfileView: View {
 
     private func resetLocalData() {
         do {
+            onStopSharingLocation()
             try locationTracker.resetLocalData()
             selectedPhoto = nil
             displayName = ""
@@ -671,9 +749,6 @@ private struct ProfileView: View {
 private struct MapFiltersSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var heatMapEnabled: Bool
-    @Binding var selectedFriendUserIDs: Set<String>
-
-    let friends: [FriendMapSummary]
 
     var body: some View {
         NavigationStack {
@@ -684,29 +759,6 @@ private struct MapFiltersSheet: View {
                     Text("Exploration")
                 } footer: {
                     Text("Affiche les zones où tu as passé le plus de temps.")
-                }
-
-                Section {
-                    if friends.isEmpty {
-                        Text("Aucun parcours partagé pour le moment.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(friends) { friend in
-                            Toggle(isOn: friendSelectionBinding(for: friend.userID)) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(friend.displayName)
-
-                                    Text("\(friend.cellCount) zones")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Parcours des amis")
-                } footer: {
-                    Text("Choisis les parcours à superposer au tien. Le recentrage se fait depuis l’onglet Amis.")
                 }
             }
             .navigationTitle("Affichage")
@@ -719,21 +771,6 @@ private struct MapFiltersSheet: View {
                 }
             }
         }
-    }
-
-    private func friendSelectionBinding(for userID: String) -> Binding<Bool> {
-        Binding(
-            get: {
-                selectedFriendUserIDs.contains(userID)
-            },
-            set: { isSelected in
-                if isSelected {
-                    selectedFriendUserIDs.insert(userID)
-                } else {
-                    selectedFriendUserIDs.remove(userID)
-                }
-            }
-        )
     }
 }
 

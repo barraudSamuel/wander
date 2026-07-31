@@ -97,7 +97,7 @@ struct OnboardingView: View {
 
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Suis ta progression quartier par quartier", systemImage: "map.fill")
-                        Label("Partage tes découvertes avec tes amis", systemImage: "person.2.fill")
+                        Label("Retrouve tes amis en direct", systemImage: "person.2.fill")
                     }
                     .font(.headline)
                 }
@@ -246,7 +246,7 @@ struct OnboardingView: View {
                     OnboardingInformationRow(
                         iconName: "pause.circle.fill",
                         title: "Garder le contrôle",
-                        detail: "Un contrôle visible sur la carte te permet de mettre l’exploration en pause à tout moment."
+                        detail: "Le contrôle du profil te permet de mettre l’exploration et le partage en pause à tout moment."
                     )
                 }
 

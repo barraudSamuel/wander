@@ -43,8 +43,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var currentH3CellID: String?
     @Published var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
 
-    /// Newly discovered cell IDs from the most recent location processing pass.
-    /// ContentView observes this to push new cells to Firestore.
+    /// Newly discovered cell IDs from the most recent local processing pass.
+    /// Exploration cells stay on-device and are not shared with friends.
     @Published var newlyDiscoveredCellIDs: Set<String> = []
 
     // Last accepted segment statistics for the debug panel.
