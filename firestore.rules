@@ -26,6 +26,11 @@ service cloud.firestore {
         && code.matches('[A-HJ-NP-Z2-9]{10,12}');
     }
 
+    function isValidProfileColorHex(color) {
+      return color is string
+        && color.matches('^#[0-9A-F]{6}$');
+    }
+
     function hasExactUserFields(data) {
       return data.keys().hasAll([
           'displayName',
@@ -37,7 +42,8 @@ service cloud.firestore {
           'displayName',
           'friendCode',
           'createdAt',
-          'updatedAt'
+          'updatedAt',
+          'profileColorHex'
         ]);
     }
 
@@ -45,6 +51,12 @@ service cloud.firestore {
       return hasExactUserFields(data)
         && isValidDisplayName(data.displayName)
         && isValidFriendCode(data.friendCode)
+        // profileColorHex remains optional while legacy clients/documents are
+        // still in circulation. New clients always write a generated color.
+        && (
+          !data.keys().hasAny(['profileColorHex'])
+          || isValidProfileColorHex(data.profileColorHex)
+        )
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -224,6 +236,19 @@ service cloud.firestore {
         && data.updatedAt == request.time;
     }
 
+    function isValidH3CellId(cellId) {
+      return cellId is string
+        && cellId.matches('^[0-9a-f]{15}$');
+    }
+
+    function isValidExplorationCell(data, cellId) {
+      return isValidH3CellId(cellId)
+        && data.keys().hasAll(['sharedAt'])
+        && data.keys().hasOnly(['sharedAt'])
+        && data.sharedAt is timestamp
+        && data.sharedAt == request.time;
+    }
+
     match /users/{uid} {
       allow get: if isSignedIn()
         && (
@@ -239,6 +264,7 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.auth.uid == uid
         && isValidUser(request.resource.data)
+        && request.resource.data.keys().hasAll(['profileColorHex'])
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time
         && friendCodeMatchesProfile(
@@ -250,8 +276,12 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && request.auth.uid == uid
         && isValidUser(request.resource.data)
+        && (
+          !resource.data.keys().hasAny(['profileColorHex'])
+          || request.resource.data.keys().hasAll(['profileColorHex'])
+        )
         && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['displayName', 'updatedAt'])
+          .hasOnly(['displayName', 'profileColorHex', 'updatedAt'])
         && request.resource.data.friendCode == resource.data.friendCode
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.updatedAt == request.time
@@ -365,6 +395,25 @@ service cloud.firestore {
       allow create, update: if isSignedIn()
         && request.auth.uid == uid
         && isValidLocation(request.resource.data);
+
+      allow delete: if isSignedIn()
+        && request.auth.uid == uid;
+    }
+
+    match /explorations/{uid}/cells/{cellId} {
+      allow get, list: if isSignedIn()
+        && (
+          request.auth.uid == uid
+          || usersAreLinked(
+            request.auth.uid,
+            uid,
+            ['accepted']
+          )
+        );
+
+      allow create, update: if isSignedIn()
+        && request.auth.uid == uid
+        && isValidExplorationCell(request.resource.data, cellId);
 
       allow delete: if isSignedIn()
         && request.auth.uid == uid;

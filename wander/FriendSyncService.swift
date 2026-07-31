@@ -11,6 +11,7 @@ import Foundation
 struct FriendContact: Identifiable, Equatable {
     let userID: String
     let displayName: String
+    let profileColorHex: String
 
     var id: String { userID }
 }
@@ -27,6 +28,7 @@ struct FriendRequest: Identifiable, Equatable {
 struct FriendLocation: Equatable {
     let userID: String
     let displayName: String
+    let profileColorHex: String
     let coordinate: CLLocationCoordinate2D
     let horizontalAccuracy: CLLocationAccuracy
     let sampledAt: Date
@@ -36,6 +38,7 @@ struct FriendLocation: Equatable {
     static func == (lhs: FriendLocation, rhs: FriendLocation) -> Bool {
         lhs.userID == rhs.userID
             && lhs.displayName == rhs.displayName
+            && lhs.profileColorHex == rhs.profileColorHex
             && lhs.coordinate.latitude == rhs.coordinate.latitude
             && lhs.coordinate.longitude == rhs.coordinate.longitude
             && lhs.horizontalAccuracy == rhs.horizontalAccuracy
@@ -43,6 +46,18 @@ struct FriendLocation: Equatable {
             && lhs.updatedAt == rhs.updatedAt
             && lhs.receivedAt == rhs.receivedAt
     }
+}
+
+struct FriendExploration: Equatable {
+    let userID: String
+    let displayName: String
+    let profileColorHex: String
+    let cellIDs: Set<String>
+}
+
+private struct RemoteProfile {
+    let displayName: String
+    let profileColorHex: String
 }
 
 private struct FriendshipRecord {
@@ -65,15 +80,30 @@ final class FriendSyncService: ObservableObject {
     @Published private(set) var outgoingRequests: [FriendRequest] = []
     @Published private(set) var acceptedFriends: [FriendContact] = []
     @Published private var receivedFriendLocations: [String: FriendLocation] = [:]
+    @Published private var receivedFriendExplorationCellIDs: [String: Set<String>] = [:]
     @Published private(set) var isProfileReady = false
     @Published private(set) var isPreparingProfile = true
     @Published private(set) var isProcessingFriendAction = false
     @Published var errorMessage: String?
 
     var friendLocations: [String: FriendLocation] {
-        receivedFriendLocations.filter { _, location in
-            isFresh(location, at: Date())
-        }
+        receivedFriendLocations
+    }
+
+    var friendExplorations: [String: FriendExploration] {
+        Dictionary(
+            uniqueKeysWithValues: acceptedFriends.map { friend in
+                (
+                    friend.userID,
+                    FriendExploration(
+                        userID: friend.userID,
+                        displayName: friend.displayName,
+                        profileColorHex: friend.profileColorHex,
+                        cellIDs: receivedFriendExplorationCellIDs[friend.userID] ?? []
+                    )
+                )
+            }
+        )
     }
 
     private let db = Firestore.firestore()
@@ -87,28 +117,48 @@ final class FriendSyncService: ObservableObject {
 
     private var currentUserID: String?
     private var desiredDisplayName: String
+    private var desiredProfileColorHex: String
+    private var shouldAdoptRemoteProfileColor: Bool
     private var lastKnownProfileDisplayName: String?
+    private var lastKnownProfileColorHex: String?
     private var friendshipRecords: [String: FriendshipRecord] = [:]
-    private var profilesByUserID: [String: String] = [:]
+    private var profilesByUserID: [String: RemoteProfile] = [:]
 
     private var ownProfileListener: ListenerRegistration?
+    private var ownExplorationListener: ListenerRegistration?
     private var friendshipsListener: ListenerRegistration?
     private var profileListeners: [String: ListenerRegistration] = [:]
     private var locationListeners: [String: ListenerRegistration] = [:]
-    private var locationExpirationTasks: [String: Task<Void, Never>] = [:]
-    private var displayNameUpdateTask: Task<Void, Never>?
+    private var explorationListeners: [String: ListenerRegistration] = [:]
+    private var profileUpdateTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     private var isCreatingProfile = false
-    private var isUpdatingDisplayName = false
+    private var isUpdatingProfile = false
+    private var isUploadingExploration = false
+    private var hasPendingUserSelectedProfileColor = false
+    private var hasLoadedOwnExploration = false
+    private var uploadedExplorationCellIDs: Set<String> = []
+    private var desiredExplorationCellIDs: Set<String> = []
     private var authenticationGeneration = 0
     private var latestLocationForSharing: (location: CLLocation, displayName: String)?
     private var lastLocationPush: (location: CLLocation, attemptedAt: Date)?
     private var shouldDeleteLocationWhenAuthenticated = false
 
     private init() {
+        let storedProfileColorHex = UserDefaults.standard.string(
+            forKey: ProfileColor.storageKey
+        )
         desiredDisplayName = Self.normalizedDisplayName(
             UserDefaults.standard.string(forKey: "profile.displayName") ?? ""
+        )
+        shouldAdoptRemoteProfileColor =
+            storedProfileColorHex.flatMap(ProfileColor.normalizedHex) == nil
+        desiredProfileColorHex =
+            storedProfileColorHex.flatMap(ProfileColor.normalizedHex)
+            ?? ProfileColor.storedOrGeneratedHex()
+        hasPendingUserSelectedProfileColor = UserDefaults.standard.bool(
+            forKey: ProfileColor.pendingUserSelectionStorageKey
         )
         shouldDeleteLocationWhenAuthenticated =
             !UserDefaults.standard.bool(forKey: "trackingEnabled")
@@ -131,7 +181,7 @@ final class FriendSyncService: ObservableObject {
 
     deinit {
         removeAllListeners()
-        displayNameUpdateTask?.cancel()
+        profileUpdateTask?.cancel()
     }
 
     // MARK: - Public actions
@@ -153,7 +203,52 @@ final class FriendSyncService: ObservableObject {
 
     func updateDisplayName(_ displayName: String) {
         desiredDisplayName = Self.normalizedDisplayName(displayName)
-        scheduleDisplayNameUpdate()
+        scheduleProfileUpdate()
+    }
+
+    func updateProfileColor(
+        _ profileColorHex: String,
+        userInitiated: Bool = false
+    ) {
+        let normalizedProfileColorHex =
+            ProfileColor.normalizedHex(profileColorHex)
+        desiredProfileColorHex =
+            normalizedProfileColorHex ?? ProfileColor.storedOrGeneratedHex()
+
+        if userInitiated {
+            shouldAdoptRemoteProfileColor = false
+            UserDefaults.standard.removeObject(
+                forKey: ProfileColor.pendingOwnerStorageKey
+            )
+            if let currentUserID {
+                hasPendingUserSelectedProfileColor = false
+                UserDefaults.standard.set(
+                    currentUserID,
+                    forKey: ProfileColor.ownerStorageKey
+                )
+                UserDefaults.standard.set(
+                    false,
+                    forKey: ProfileColor.pendingUserSelectionStorageKey
+                )
+            } else {
+                hasPendingUserSelectedProfileColor = true
+                UserDefaults.standard.set(
+                    true,
+                    forKey: ProfileColor.pendingUserSelectionStorageKey
+                )
+            }
+        } else if normalizedProfileColorHex == nil {
+            shouldAdoptRemoteProfileColor = true
+        }
+        scheduleProfileUpdate()
+    }
+
+    /// Keeps the user's complete local exploration mirrored in Firestore.
+    /// Existing remote cells are loaded first, so relaunching the app does not
+    /// rewrite the full history.
+    func syncDiscoveredCells(_ cellIDs: Set<String>) {
+        desiredExplorationCellIDs.formUnion(cellIDs.filter(Self.isValidH3CellID))
+        uploadMissingExplorationCellsIfNeeded()
     }
 
     func sendFriendRequest(
@@ -376,22 +471,27 @@ final class FriendSyncService: ObservableObject {
 
         authenticationGeneration &+= 1
         removeAllListeners()
-        displayNameUpdateTask?.cancel()
-        displayNameUpdateTask = nil
+        profileUpdateTask?.cancel()
+        profileUpdateTask = nil
         currentUserID = userID
         friendCode = nil
         isProfileReady = false
         isPreparingProfile =
             userID != nil || !FirebaseService.shared.isAuthenticationResolved
         isCreatingProfile = false
-        isUpdatingDisplayName = false
+        isUpdatingProfile = false
+        isUploadingExploration = false
+        hasLoadedOwnExploration = false
+        uploadedExplorationCellIDs = []
         lastKnownProfileDisplayName = nil
+        lastKnownProfileColorHex = nil
         friendshipRecords = [:]
         profilesByUserID = [:]
         incomingRequests = []
         outgoingRequests = []
         acceptedFriends = []
         receivedFriendLocations = [:]
+        receivedFriendExplorationCellIDs = [:]
         isProcessingFriendAction = false
         lastLocationPush = nil
         if userID != nil {
@@ -400,7 +500,77 @@ final class FriendSyncService: ObservableObject {
 
         guard let userID else { return }
 
+        let storedProfileColorHex = UserDefaults.standard.string(
+            forKey: ProfileColor.storageKey
+        )
+        let storedProfileColorOwnerID = UserDefaults.standard.string(
+            forKey: ProfileColor.ownerStorageKey
+        )
+        var pendingProfileColorOwnerID = UserDefaults.standard.string(
+            forKey: ProfileColor.pendingOwnerStorageKey
+        )
+        let profileColorBelongsToAnotherUser =
+            storedProfileColorOwnerID != nil
+            && storedProfileColorOwnerID != userID
+
+        if hasPendingUserSelectedProfileColor {
+            hasPendingUserSelectedProfileColor = false
+            shouldAdoptRemoteProfileColor = false
+            UserDefaults.standard.removeObject(
+                forKey: ProfileColor.pendingOwnerStorageKey
+            )
+            UserDefaults.standard.set(
+                false,
+                forKey: ProfileColor.pendingUserSelectionStorageKey
+            )
+            UserDefaults.standard.set(
+                userID,
+                forKey: ProfileColor.ownerStorageKey
+            )
+        } else {
+            if pendingProfileColorOwnerID == "" {
+                pendingProfileColorOwnerID = userID
+                UserDefaults.standard.set(
+                    userID,
+                    forKey: ProfileColor.pendingOwnerStorageKey
+                )
+            } else if let candidateOwnerID = pendingProfileColorOwnerID,
+                      candidateOwnerID != userID {
+                let generatedProfileColorHex = ProfileColor.randomHex()
+                desiredProfileColorHex = generatedProfileColorHex
+                UserDefaults.standard.set(
+                    generatedProfileColorHex,
+                    forKey: ProfileColor.storageKey
+                )
+                UserDefaults.standard.set(
+                    userID,
+                    forKey: ProfileColor.pendingOwnerStorageKey
+                )
+                pendingProfileColorOwnerID = userID
+            } else if pendingProfileColorOwnerID == nil,
+                      profileColorBelongsToAnotherUser {
+                let generatedProfileColorHex = ProfileColor.randomHex()
+                desiredProfileColorHex = generatedProfileColorHex
+                UserDefaults.standard.set(
+                    generatedProfileColorHex,
+                    forKey: ProfileColor.storageKey
+                )
+                UserDefaults.standard.set(
+                    userID,
+                    forKey: ProfileColor.pendingOwnerStorageKey
+                )
+                pendingProfileColorOwnerID = userID
+            }
+
+            shouldAdoptRemoteProfileColor =
+                storedProfileColorHex.flatMap(ProfileColor.normalizedHex) == nil
+                || storedProfileColorOwnerID == nil
+                || profileColorBelongsToAnotherUser
+                || pendingProfileColorOwnerID == userID
+        }
+
         listenToOwnProfile(for: userID)
+        listenToOwnExploration(for: userID)
         listenToFriendships(for: userID)
         ensureProfile(for: userID)
 
@@ -432,6 +602,7 @@ final class FriendSyncService: ObservableObject {
         let userReference = db.collection("users").document(userID)
         let codeReference = db.collection("friendCodes").document(proposedCode)
         let displayName = desiredDisplayName
+        let profileColorHex = desiredProfileColorHex
 
         db.runTransaction({ transaction, errorPointer -> Any? in
             do {
@@ -452,6 +623,7 @@ final class FriendSyncService: ObservableObject {
                 transaction.setData(
                     [
                         "displayName": displayName,
+                        "profileColorHex": profileColorHex,
                         "friendCode": proposedCode,
                         "createdAt": FieldValue.serverTimestamp(),
                         "updatedAt": FieldValue.serverTimestamp()
@@ -500,7 +672,7 @@ final class FriendSyncService: ObservableObject {
                     return
                 }
 
-                self.scheduleDisplayNameUpdate()
+                self.scheduleProfileUpdate()
             }
         }
     }
@@ -509,7 +681,7 @@ final class FriendSyncService: ObservableObject {
         let generation = authenticationGeneration
         ownProfileListener?.remove()
         ownProfileListener = db.collection("users").document(userID)
-            .addSnapshotListener { [weak self] snapshot, error in
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
                 DispatchQueue.main.async {
                     guard let self,
                           self.currentUserID == userID,
@@ -539,19 +711,57 @@ final class FriendSyncService: ObservableObject {
                     self.isPreparingProfile = false
                     self.lastKnownProfileDisplayName =
                         data["displayName"] as? String
+                    self.lastKnownProfileColorHex =
+                        (data["profileColorHex"] as? String).flatMap(
+                            ProfileColor.normalizedHex
+                        )
 
-                    if self.lastKnownProfileDisplayName != self.desiredDisplayName {
-                        self.scheduleDisplayNameUpdate()
+                    if self.shouldAdoptRemoteProfileColor {
+                        guard !snapshot.metadata.isFromCache else {
+                            // Metadata changes are included, so an identical
+                            // server snapshot will still arrive after this
+                            // potentially stale cached value.
+                            return
+                        }
+
+                        self.shouldAdoptRemoteProfileColor = false
+                        let resolvedProfileColorHex =
+                            self.lastKnownProfileColorHex
+                            ?? self.desiredProfileColorHex
+                        self.desiredProfileColorHex = resolvedProfileColorHex
+                        UserDefaults.standard.set(
+                            resolvedProfileColorHex,
+                            forKey: ProfileColor.storageKey
+                        )
+                    }
+
+                    if !snapshot.metadata.isFromCache {
+                        UserDefaults.standard.set(
+                            userID,
+                            forKey: ProfileColor.ownerStorageKey
+                        )
+                        UserDefaults.standard.removeObject(
+                            forKey: ProfileColor.pendingOwnerStorageKey
+                        )
+                        UserDefaults.standard.set(
+                            false,
+                            forKey: ProfileColor.pendingUserSelectionStorageKey
+                        )
+                    }
+
+                    if self.lastKnownProfileDisplayName != self.desiredDisplayName
+                        || self.lastKnownProfileColorHex != self.desiredProfileColorHex {
+                        self.scheduleProfileUpdate()
                     }
                 }
             }
     }
 
-    private func scheduleDisplayNameUpdate() {
-        displayNameUpdateTask?.cancel()
+    private func scheduleProfileUpdate() {
+        profileUpdateTask?.cancel()
 
         guard currentUserID != nil else { return }
-        displayNameUpdateTask = Task { [weak self] in
+        profileUpdateTask = Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: 450_000_000)
             } catch {
@@ -559,38 +769,46 @@ final class FriendSyncService: ObservableObject {
             }
 
             guard !Task.isCancelled else { return }
-            self?.performDisplayNameUpdate()
+            self?.performProfileUpdate()
         }
     }
 
-    private func performDisplayNameUpdate() {
-        guard !isUpdatingDisplayName,
+    private func performProfileUpdate() {
+        guard !isUpdatingProfile,
+              !shouldAdoptRemoteProfileColor,
               let currentUserID,
               let friendCode,
               isProfileReady,
-              lastKnownProfileDisplayName != desiredDisplayName else {
+              lastKnownProfileDisplayName != desiredDisplayName
+                || lastKnownProfileColorHex != desiredProfileColorHex else {
             return
         }
 
-        isUpdatingDisplayName = true
+        isUpdatingProfile = true
         let newDisplayName = desiredDisplayName
+        let newProfileColorHex = desiredProfileColorHex
+        let displayNameChanged =
+            lastKnownProfileDisplayName != newDisplayName
         let batch = db.batch()
         batch.updateData(
             [
                 "displayName": newDisplayName,
+                "profileColorHex": newProfileColorHex,
                 "updatedAt": FieldValue.serverTimestamp()
             ],
             forDocument: db.collection("users").document(currentUserID)
         )
-        batch.updateData(
-            ["displayName": newDisplayName],
-            forDocument: db.collection("friendCodes").document(friendCode)
-        )
+        if displayNameChanged {
+            batch.updateData(
+                ["displayName": newDisplayName],
+                forDocument: db.collection("friendCodes").document(friendCode)
+            )
+        }
 
         batch.commit { [weak self] error in
             DispatchQueue.main.async {
                 guard let self, self.currentUserID == currentUserID else { return }
-                self.isUpdatingDisplayName = false
+                self.isUpdatingProfile = false
 
                 if let error {
                     self.errorMessage = self.friendlyMessage(
@@ -601,11 +819,151 @@ final class FriendSyncService: ObservableObject {
                 }
 
                 self.lastKnownProfileDisplayName = newDisplayName
-                if self.desiredDisplayName != newDisplayName {
-                    self.scheduleDisplayNameUpdate()
+                self.lastKnownProfileColorHex = newProfileColorHex
+                if self.desiredDisplayName != newDisplayName
+                    || self.desiredProfileColorHex != newProfileColorHex {
+                    self.scheduleProfileUpdate()
                 }
             }
         }
+    }
+
+    // MARK: - Exploration sharing
+
+    private func listenToOwnExploration(for userID: String) {
+        let generation = authenticationGeneration
+        ownExplorationListener?.remove()
+        ownExplorationListener = explorationCellsCollection(for: userID)
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.currentUserID == userID,
+                          self.authenticationGeneration == generation else {
+                        return
+                    }
+
+                    if let error {
+                        self.hasLoadedOwnExploration = false
+                        self.errorMessage = self.friendlyMessage(
+                            for: error,
+                            fallback: "Impossible de synchroniser ta carte découverte."
+                        )
+                        return
+                    }
+
+                    guard let snapshot else { return }
+                    if !self.hasLoadedOwnExploration,
+                       snapshot.metadata.isFromCache {
+                        // A cold/offline cache can be empty even when Firestore
+                        // already contains the full history. Wait for the first
+                        // server-backed snapshot before computing missing cells.
+                        return
+                    }
+
+                    self.uploadedExplorationCellIDs = Set(
+                        snapshot.documents
+                            .map(\.documentID)
+                            .filter(Self.isValidH3CellID)
+                    )
+                    self.hasLoadedOwnExploration = true
+                    self.uploadMissingExplorationCellsIfNeeded()
+                }
+            }
+    }
+
+    private func uploadMissingExplorationCellsIfNeeded() {
+        guard let currentUserID,
+              hasLoadedOwnExploration,
+              !isUploadingExploration else {
+            return
+        }
+
+        let missingCellIDs = desiredExplorationCellIDs
+            .subtracting(uploadedExplorationCellIDs)
+            .sorted()
+        guard !missingCellIDs.isEmpty else { return }
+
+        // Firestore batches support at most 500 writes. Leave some headroom for
+        // future metadata writes without changing the batching contract.
+        let batchCellIDs = Array(missingCellIDs.prefix(450))
+        let generation = authenticationGeneration
+        let batch = db.batch()
+        let collection = explorationCellsCollection(for: currentUserID)
+
+        for cellID in batchCellIDs {
+            batch.setData(
+                ["sharedAt": FieldValue.serverTimestamp()],
+                forDocument: collection.document(cellID)
+            )
+        }
+
+        isUploadingExploration = true
+        batch.commit { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self,
+                      self.currentUserID == currentUserID,
+                      self.authenticationGeneration == generation else {
+                    return
+                }
+
+                self.isUploadingExploration = false
+                if let error {
+                    self.errorMessage = self.friendlyMessage(
+                        for: error,
+                        fallback: "Impossible de partager ta carte découverte."
+                    )
+                    return
+                }
+
+                self.uploadedExplorationCellIDs.formUnion(batchCellIDs)
+                self.uploadMissingExplorationCellsIfNeeded()
+            }
+        }
+    }
+
+    private func reconcileExplorationListeners(for acceptedUserIDs: Set<String>) {
+        let removedUserIDs = explorationListeners.keys.filter {
+            !acceptedUserIDs.contains($0)
+        }
+
+        for userID in removedUserIDs {
+            explorationListeners.removeValue(forKey: userID)?.remove()
+            receivedFriendExplorationCellIDs.removeValue(forKey: userID)
+        }
+
+        for userID in acceptedUserIDs where explorationListeners[userID] == nil {
+            let generation = authenticationGeneration
+            explorationListeners[userID] = explorationCellsCollection(for: userID)
+                .addSnapshotListener { [weak self] snapshot, error in
+                    DispatchQueue.main.async {
+                        guard let self,
+                              self.authenticationGeneration == generation,
+                              self.explorationListeners[userID] != nil,
+                              self.isAcceptedFriend(userID) else {
+                            return
+                        }
+
+                        if let error {
+                            self.errorMessage = self.friendlyMessage(
+                                for: error,
+                                fallback: "Impossible de charger la carte d’un ami."
+                            )
+                            return
+                        }
+
+                        guard let snapshot else { return }
+                        self.receivedFriendExplorationCellIDs[userID] = Set(
+                            snapshot.documents
+                                .map(\.documentID)
+                                .filter(Self.isValidH3CellID)
+                        )
+                    }
+                }
+        }
+    }
+
+    private func explorationCellsCollection(for userID: String) -> CollectionReference {
+        db.collection("explorations").document(userID).collection("cells")
     }
 
     // MARK: - Friendships
@@ -679,6 +1037,7 @@ final class FriendSyncService: ObservableObject {
             }
         )
         reconcileLocationListeners(for: acceptedUserIDs)
+        reconcileExplorationListeners(for: acceptedUserIDs)
     }
 
     private func reconcileProfileListeners(for requiredUserIDs: Set<String>) {
@@ -711,15 +1070,25 @@ final class FriendSyncService: ObservableObject {
                             return
                         }
 
-                        let displayName = snapshot?.data()?["displayName"] as? String
-                        self.profilesByUserID[userID] = displayName.map {
+                        let data = snapshot?.data()
+                        let displayName = (data?["displayName"] as? String).map {
                             Self.normalizedDisplayName($0)
                         } ?? "Explorer"
+                        let profileColorHex =
+                            (data?["profileColorHex"] as? String).flatMap(
+                                ProfileColor.normalizedHex
+                            ) ?? ProfileColor.generatedHex(seed: userID)
+                        let profile = RemoteProfile(
+                            displayName: displayName,
+                            profileColorHex: profileColorHex
+                        )
+                        self.profilesByUserID[userID] = profile
 
                         if let currentLocation = self.receivedFriendLocations[userID] {
                             self.receivedFriendLocations[userID] = FriendLocation(
                                 userID: currentLocation.userID,
-                                displayName: self.profilesByUserID[userID] ?? "Explorer",
+                                displayName: profile.displayName,
+                                profileColorHex: profile.profileColorHex,
                                 coordinate: currentLocation.coordinate,
                                 horizontalAccuracy: currentLocation.horizontalAccuracy,
                                 sampledAt: currentLocation.sampledAt,
@@ -750,13 +1119,18 @@ final class FriendSyncService: ObservableObject {
             guard let otherUserID = record.otherUserID(for: currentUserID) else {
                 continue
             }
-            let displayName = profilesByUserID[otherUserID] ?? "Explorer"
+            let profile = profilesByUserID[otherUserID] ?? RemoteProfile(
+                displayName: "Explorer",
+                profileColorHex: ProfileColor.generatedHex(seed: otherUserID)
+            )
+            let displayName = profile.displayName
 
             if record.status == "accepted" {
                 friends.append(
                     FriendContact(
                         userID: otherUserID,
-                        displayName: displayName
+                        displayName: displayName,
+                        profileColorHex: profile.profileColorHex
                     )
                 )
             } else {
@@ -900,7 +1274,6 @@ final class FriendSyncService: ObservableObject {
 
         for userID in removedUserIDs {
             locationListeners.removeValue(forKey: userID)?.remove()
-            locationExpirationTasks.removeValue(forKey: userID)?.cancel()
             receivedFriendLocations.removeValue(forKey: userID)
         }
 
@@ -936,22 +1309,21 @@ final class FriendSyncService: ObservableObject {
                         let receivedAt = Date()
                         let sampledAt = sampledTimestamp.dateValue()
                         let updatedAt = timestamp.dateValue()
-                        guard self.isFresh(sampledAt, at: receivedAt),
-                              self.isFresh(updatedAt, at: receivedAt) else {
-                            self.removeFriendLocation(for: userID)
-                            return
-                        }
 
-                        let displayName =
-                            self.profilesByUserID[userID]
+                        let profile = self.profilesByUserID[userID]
+                        let displayName = profile?.displayName
                             ?? (data["displayName"] as? String).map {
                                 Self.normalizedDisplayName($0)
                             }
                             ?? "Explorer"
+                        let profileColorHex =
+                            profile?.profileColorHex
+                            ?? ProfileColor.generatedHex(seed: userID)
 
                         let friendLocation = FriendLocation(
                             userID: userID,
                             displayName: displayName,
+                            profileColorHex: profileColorHex,
                             coordinate: CLLocationCoordinate2D(
                                 latitude: geoPoint.latitude,
                                 longitude: geoPoint.longitude
@@ -962,7 +1334,6 @@ final class FriendSyncService: ObservableObject {
                             receivedAt: receivedAt
                         )
                         self.receivedFriendLocations[userID] = friendLocation
-                        self.scheduleExpiration(for: friendLocation)
                     }
                 }
         }
@@ -976,40 +1347,7 @@ final class FriendSyncService: ObservableObject {
         }
     }
 
-    private func scheduleExpiration(for location: FriendLocation) {
-        locationExpirationTasks.removeValue(forKey: location.userID)?.cancel()
-        let freshnessReference = min(
-            min(location.sampledAt, location.updatedAt),
-            location.receivedAt
-        )
-        let delay = max(
-            0,
-            maximumLocationAge - Date().timeIntervalSince(freshnessReference)
-        )
-        let nanoseconds = UInt64(delay * 1_000_000_000)
-
-        locationExpirationTasks[location.userID] = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: nanoseconds)
-            } catch {
-                return
-            }
-
-            guard !Task.isCancelled, let self,
-                  let currentLocation =
-                    self.receivedFriendLocations[location.userID],
-                  currentLocation.sampledAt == location.sampledAt,
-                  currentLocation.updatedAt == location.updatedAt,
-                  currentLocation.receivedAt == location.receivedAt else {
-                return
-            }
-            self.receivedFriendLocations.removeValue(forKey: location.userID)
-            self.locationExpirationTasks.removeValue(forKey: location.userID)
-        }
-    }
-
     private func removeFriendLocation(for userID: String) {
-        locationExpirationTasks.removeValue(forKey: userID)?.cancel()
         receivedFriendLocations.removeValue(forKey: userID)
     }
 
@@ -1090,6 +1428,8 @@ final class FriendSyncService: ObservableObject {
     private func removeAllListeners() {
         ownProfileListener?.remove()
         ownProfileListener = nil
+        ownExplorationListener?.remove()
+        ownExplorationListener = nil
         friendshipsListener?.remove()
         friendshipsListener = nil
 
@@ -1103,10 +1443,11 @@ final class FriendSyncService: ObservableObject {
         }
         locationListeners.removeAll()
 
-        for task in locationExpirationTasks.values {
-            task.cancel()
+        for listener in explorationListeners.values {
+            listener.remove()
         }
-        locationExpirationTasks.removeAll()
+        explorationListeners.removeAll()
+
     }
 
     private func finishFriendAction(
@@ -1138,12 +1479,6 @@ final class FriendSyncService: ObservableObject {
         }
 
         return fallback
-    }
-
-    private func isFresh(_ location: FriendLocation, at date: Date) -> Bool {
-        isFresh(location.sampledAt, at: date)
-            && isFresh(location.updatedAt, at: date)
-            && isFresh(location.receivedAt, at: date)
     }
 
     private func isFresh(_ timestamp: Date, at date: Date) -> Bool {
@@ -1179,5 +1514,11 @@ final class FriendSyncService: ObservableObject {
         guard (10...12).contains(code.count) else { return false }
         let allowedCharacters = Set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
         return code.allSatisfy { allowedCharacters.contains($0) }
+    }
+
+    nonisolated private static func isValidH3CellID(_ cellID: String) -> Bool {
+        guard cellID.count == 15 else { return false }
+        let allowedCharacters = Set("0123456789abcdef")
+        return cellID.allSatisfy { allowedCharacters.contains($0) }
     }
 }

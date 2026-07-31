@@ -44,7 +44,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
 
     /// Newly discovered cell IDs from the most recent local processing pass.
-    /// Exploration cells stay on-device and are not shared with friends.
+    /// The complete local set is mirrored to Firebase by `FriendSyncService`
+    /// and remains readable only by accepted friends.
     @Published var newlyDiscoveredCellIDs: Set<String> = []
 
     // Last accepted segment statistics for the debug panel.

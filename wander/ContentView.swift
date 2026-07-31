@@ -21,9 +21,12 @@ private enum RootTab: Hashable {
 private struct FriendMapSummary: Identifiable, Hashable {
     let userID: String
     let displayName: String
-    let hasLiveLocation: Bool
+    let profileColorHex: String
+    let locationSampledAt: Date?
+    let cellCount: Int
 
     var id: String { userID }
+    var canShowOnMap: Bool { locationSampledAt != nil || cellCount > 0 }
 }
 
 struct ContentView: View {
@@ -33,6 +36,7 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @AppStorage("profile.displayName") private var displayName = ""
     @AppStorage("profile.avatarImageData") private var avatarImageData = Data()
+    @AppStorage(ProfileColor.storageKey) private var profileColorHex = ""
 
     @ObservedObject private var cityBoundary = CityBoundary.shared
 
@@ -42,6 +46,8 @@ struct ContentView: View {
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
     @State private var heatMapEnabled = false
+    @State private var selectedFriendExplorationUserIDs: Set<String> = []
+    @State private var knownFriendUserIDs: Set<String> = []
 
     #if DEBUG
     @State private var debugDrawerVisible = false
@@ -70,9 +76,16 @@ struct ContentView: View {
                 ProfileView(
                     displayName: $displayName,
                     avatarImageData: $avatarImageData,
+                    profileColorHex: $profileColorHex,
                     locationTracker: locationTracker,
                     cityProgress: cityProgress,
                     cityProgressUnavailableText: cityProgressUnavailableText,
+                    onProfileColorSelected: { selectedColorHex in
+                        friendSyncService.updateProfileColor(
+                            selectedColorHex,
+                            userInitiated: true
+                        )
+                    },
                     onStopSharingLocation: friendSyncService.stopSharingLocation
                 )
                 .tabItem {
@@ -105,6 +118,10 @@ struct ContentView: View {
             locationTracker.configure(with: modelContext)
             locationTracker.resumeTrackingIfNeeded()
             friendSyncService.updateDisplayName(displayName)
+            syncProfileColor(profileColorHex)
+            friendSyncService.syncDiscoveredCells(
+                Set(locationTracker.discoveredCells.map(\.id))
+            )
 
             Task {
                 await cityBoundary.load()
@@ -132,13 +149,26 @@ struct ContentView: View {
         .onChange(of: displayName) { _, newDisplayName in
             friendSyncService.updateDisplayName(newDisplayName)
         }
+        .onChange(of: profileColorHex) { _, newProfileColorHex in
+            syncProfileColor(newProfileColorHex)
+        }
+        .onChange(of: locationTracker.discoveredCells.map(\.id)) { _, cellIDs in
+            friendSyncService.syncDiscoveredCells(Set(cellIDs))
+        }
         .onChange(of: friendSyncService.isProfileReady) { _, isReady in
             guard isReady else { return }
 
             friendSyncService.updateDisplayName(displayName)
+            friendSyncService.updateProfileColor(profileColorHex)
+            friendSyncService.syncDiscoveredCells(
+                Set(locationTracker.discoveredCells.map(\.id))
+            )
             if !locationTracker.trackingEnabled {
                 friendSyncService.stopSharingLocation()
             }
+        }
+        .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
+            selectNewFriends(from: userIDs)
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -165,8 +195,11 @@ struct ContentView: View {
                 discoveredCellIDs: Set(locationTracker.discoveredCells.map(\.id)),
                 cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
                 friendLocations: friendSyncService.friendLocations,
+                friendExplorations: selectedFriendExplorations,
+                allFriendExplorations: friendSyncService.friendExplorations,
                 userDisplayName: displayName,
                 userAvatarImageData: avatarImageData,
+                userProfileColorHex: profileColorHex,
                 centerOnUser: $centerOnUser,
                 resetMapOrientation: $resetMapOrientation,
                 centerOnFriendUserID: $centerOnFriendUserID,
@@ -219,7 +252,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $filterSheetVisible) {
             MapFiltersSheet(
-                heatMapEnabled: $heatMapEnabled
+                heatMapEnabled: $heatMapEnabled,
+                friends: friendSummaries.filter { $0.cellCount > 0 },
+                selectedFriendUserIDs: $selectedFriendExplorationUserIDs
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -232,11 +267,20 @@ struct ContentView: View {
         friendSyncService.acceptedFriends
             .map { friend in
                 let location = friendSyncService.friendLocations[friend.userID]
+                let exploration = friendSyncService.friendExplorations[friend.userID]
 
                 return FriendMapSummary(
                     userID: friend.userID,
-                    displayName: location?.displayName ?? friend.displayName,
-                    hasLiveLocation: location != nil
+                    displayName: location?.displayName
+                        ?? exploration?.displayName
+                        ?? friend.displayName,
+                    profileColorHex: ProfileColor.normalizedHex(
+                        location?.profileColorHex
+                            ?? exploration?.profileColorHex
+                            ?? friend.profileColorHex
+                    ) ?? ProfileColor.generatedHex(seed: friend.userID),
+                    locationSampledAt: location?.sampledAt,
+                    cellCount: exploration?.cellIDs.count ?? 0
                 )
             }
             .sorted { lhs, rhs in
@@ -245,9 +289,39 @@ struct ContentView: View {
     }
 
     private func showFriendOnMap(_ friend: FriendMapSummary) {
-        guard friend.hasLiveLocation else { return }
+        guard friend.canShowOnMap else { return }
+        selectedFriendExplorationUserIDs.insert(friend.userID)
         centerOnFriendUserID = friend.userID
         selectedTab = .explore
+    }
+
+    private var acceptedFriendUserIDs: Set<String> {
+        Set(friendSyncService.acceptedFriends.map(\.userID))
+    }
+
+    private var selectedFriendExplorations: [String: FriendExploration] {
+        friendSyncService.friendExplorations.filter {
+            selectedFriendExplorationUserIDs.contains($0.key)
+        }
+    }
+
+    private func selectNewFriends(from currentUserIDs: Set<String>) {
+        let newUserIDs = currentUserIDs.subtracting(knownFriendUserIDs)
+        selectedFriendExplorationUserIDs.formUnion(newUserIDs)
+        selectedFriendExplorationUserIDs.formIntersection(currentUserIDs)
+        knownFriendUserIDs = currentUserIDs
+    }
+
+    private func syncProfileColor(_ rawValue: String) {
+        let normalizedValue =
+            ProfileColor.normalizedHex(rawValue)
+            ?? ProfileColor.storedOrGeneratedHex()
+
+        if profileColorHex != normalizedValue {
+            profileColorHex = normalizedValue
+        }
+
+        friendSyncService.updateProfileColor(normalizedValue)
     }
 
     // MARK: - City progress
@@ -407,7 +481,7 @@ private struct FriendsView: View {
 
                                 Spacer()
 
-                                if friend.hasLiveLocation {
+                                if friend.canShowOnMap {
                                     Button {
                                         onShowOnMap(friend)
                                     } label: {
@@ -508,16 +582,26 @@ private struct FriendRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.title2)
-                .foregroundStyle(.secondary)
+            ZStack {
+                Circle()
+                    .fill(ProfileColor.color(hex: friend.profileColorHex))
+
+                Image(systemName: "person.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(
+                        ProfileColor.foregroundColor(
+                            hex: friend.profileColorHex
+                        )
+                    )
+            }
+            .frame(width: 30, height: 30)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(friend.displayName)
                     .font(.body.weight(.medium))
 
-                Text(statusText)
+                statusLabel
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -525,8 +609,32 @@ private struct FriendRow: View {
         .padding(.vertical, 2)
     }
 
-    private var statusText: String {
-        friend.hasLiveLocation ? "En direct" : "Position indisponible"
+    @ViewBuilder
+    private var statusLabel: some View {
+        if let sampledAt = friend.locationSampledAt {
+            HStack(spacing: 0) {
+                Text("Position ")
+                Text(sampledAt, style: .relative)
+                if let explorationText = explorationStatusText {
+                    Text(" · \(explorationText)")
+                }
+            }
+        } else if let explorationText = explorationStatusText {
+            Text(explorationText)
+        } else {
+            Text("Position indisponible")
+        }
+    }
+
+    private var explorationStatusText: String? {
+        switch friend.cellCount {
+        case 0:
+            nil
+        case 1:
+            "1 zone explorée"
+        default:
+            "\(friend.cellCount) zones explorées"
+        }
     }
 }
 
@@ -535,11 +643,13 @@ private struct FriendRow: View {
 private struct ProfileView: View {
     @Binding var displayName: String
     @Binding var avatarImageData: Data
+    @Binding var profileColorHex: String
     @ObservedObject var locationTracker: LocationTracker
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     let cityProgress: CityProgress?
     let cityProgressUnavailableText: String
+    let onProfileColorSelected: (String) -> Void
     let onStopSharingLocation: () -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
@@ -552,6 +662,13 @@ private struct ProfileView: View {
                 Section {
                     HStack(spacing: 16) {
                         ProfileAvatarView(imageData: avatarImageData, size: 72)
+                            .overlay {
+                                Circle()
+                                    .stroke(
+                                        ProfileColor.color(hex: profileColorHex),
+                                        lineWidth: 4
+                                    )
+                            }
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(displayName.isEmpty ? "Explorer" : displayName)
@@ -572,10 +689,22 @@ private struct ProfileView: View {
                     }
                 }
 
-                Section("Identité") {
+                Section {
                     TextField("Pseudo", text: $displayName)
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
+
+                    ColorPicker(
+                        "Couleur de ma carte",
+                        selection: profileColorBinding,
+                        supportsOpacity: false
+                    )
+                } header: {
+                    Text("Identité")
+                } footer: {
+                    Text(
+                        "Cette couleur identifie tes zones explorées chez tes amis et entoure ton avatar sur la carte."
+                    )
                 }
 
                 Section {
@@ -639,7 +768,7 @@ private struct ProfileView: View {
                     }
                 } footer: {
                     Text(
-                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Le compte Firebase et les relations d’amitié ne sont pas effacés."
+                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Les zones déjà partagées, le compte Firebase et les relations d’amitié ne sont pas effacés."
                     )
                 }
             }
@@ -742,6 +871,19 @@ private struct ProfileView: View {
         guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(settingsURL)
     }
+
+    private var profileColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                ProfileColor.color(hex: profileColorHex)
+            },
+            set: { newColor in
+                let selectedColorHex = ProfileColor.hex(from: newColor)
+                profileColorHex = selectedColorHex
+                onProfileColorSelected(selectedColorHex)
+            }
+        )
+    }
 }
 
 // MARK: - Map filters
@@ -749,6 +891,8 @@ private struct ProfileView: View {
 private struct MapFiltersSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var heatMapEnabled: Bool
+    let friends: [FriendMapSummary]
+    @Binding var selectedFriendUserIDs: Set<String>
 
     var body: some View {
         NavigationStack {
@@ -759,6 +903,45 @@ private struct MapFiltersSheet: View {
                     Text("Exploration")
                 } footer: {
                     Text("Affiche les zones où tu as passé le plus de temps.")
+                }
+
+                Section {
+                    if friends.isEmpty {
+                        Text(
+                            "Les cartes de tes amis apparaîtront dès qu’ils auront exploré une zone."
+                        )
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(friends) { friend in
+                            Toggle(
+                                isOn: selectionBinding(for: friend.userID)
+                            ) {
+                                HStack(spacing: 10) {
+                                    Circle()
+                                        .fill(
+                                            ProfileColor.color(
+                                                hex: friend.profileColorHex
+                                            )
+                                        )
+                                        .frame(width: 12, height: 12)
+                                        .accessibilityHidden(true)
+
+                                    Text(friend.displayName)
+
+                                    Spacer()
+
+                                    Text(friend.cellCount.formatted())
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .monospacedDigit()
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Cartes des amis")
+                } footer: {
+                    Text("Le nombre indique les zones explorées par chaque ami.")
                 }
             }
             .navigationTitle("Affichage")
@@ -771,6 +954,21 @@ private struct MapFiltersSheet: View {
                 }
             }
         }
+    }
+
+    private func selectionBinding(for userID: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                selectedFriendUserIDs.contains(userID)
+            },
+            set: { isSelected in
+                if isSelected {
+                    selectedFriendUserIDs.insert(userID)
+                } else {
+                    selectedFriendUserIDs.remove(userID)
+                }
+            }
+        )
     }
 }
 

@@ -240,13 +240,13 @@ struct OnboardingView: View {
                     OnboardingInformationRow(
                         iconName: "person.2.fill",
                         title: "Explorer entre amis",
-                        detail: "Quand l’exploration est active, ta position met aussi à jour les fonctions entre amis."
+                        detail: "Tes nouvelles zones explorées sont partagées avec tes amis acceptés. Ta position en direct n’est envoyée que pendant l’exploration."
                     )
 
                     OnboardingInformationRow(
                         iconName: "pause.circle.fill",
                         title: "Garder le contrôle",
-                        detail: "Le contrôle du profil te permet de mettre l’exploration et le partage en pause à tout moment."
+                        detail: "Le profil permet de suspendre la collecte et l’envoi de nouvelles données. Les zones déjà partagées restent visibles par tes amis acceptés."
                     )
                 }
 
