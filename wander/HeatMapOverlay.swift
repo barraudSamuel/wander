@@ -8,16 +8,22 @@
 import Foundation
 import MapKit
 
+struct HeatMapCellPolygon {
+    let coordinates: [CLLocationCoordinate2D]
+    let mapRect: MKMapRect
+    let duration: TimeInterval
+}
+
 final class HeatMapOverlay: NSObject, MKOverlay {
     let boundingMapRect: MKMapRect
     let coordinate: CLLocationCoordinate2D
-    let cellPolygons: [String: [CLLocationCoordinate2D]]
-    let cellDurations: [String: TimeInterval]
+    let cellPolygons: [String: HeatMapCellPolygon]
+    let maxDuration: TimeInterval
 
     init(cellData: [String: (duration: TimeInterval, visitCount: Int)],
          explorationEngine: ExplorationEngine) {
-        var polygons: [String: [CLLocationCoordinate2D]] = [:]
-        var durations: [String: TimeInterval] = [:]
+        var polygons: [String: HeatMapCellPolygon] = [:]
+        var maximumDuration: TimeInterval = 0
         var minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0
 
         for (cellID, value) in cellData {
@@ -25,8 +31,12 @@ final class HeatMapOverlay: NSObject, MKOverlay {
             let coords = explorationEngine.boundaryCoordinates(for: cellID)
             guard coords.count >= 3 else { continue }
 
-            polygons[cellID] = coords
-            durations[cellID] = value.duration
+            polygons[cellID] = HeatMapCellPolygon(
+                coordinates: coords,
+                mapRect: Self.mapRect(for: coords),
+                duration: value.duration
+            )
+            maximumDuration = max(maximumDuration, value.duration)
 
             for coord in coords {
                 minLat = min(minLat, coord.latitude)
@@ -37,7 +47,7 @@ final class HeatMapOverlay: NSObject, MKOverlay {
         }
 
         self.cellPolygons = polygons
-        self.cellDurations = durations
+        self.maxDuration = maximumDuration
 
         if polygons.isEmpty {
             self.coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
@@ -60,6 +70,17 @@ final class HeatMapOverlay: NSObject, MKOverlay {
         }
 
         super.init()
+    }
+
+    private static func mapRect(
+        for coordinates: [CLLocationCoordinate2D]
+    ) -> MKMapRect {
+        coordinates.reduce(.null) { partialResult, coordinate in
+            let point = MKMapPoint(coordinate)
+            return partialResult.union(
+                MKMapRect(x: point.x, y: point.y, width: 1, height: 1)
+            )
+        }
     }
 }
 
@@ -89,22 +110,22 @@ final class HeatMapOverlayRenderer: MKOverlayRenderer {
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
         guard let overlay = self.overlay as? HeatMapOverlay,
               !overlay.cellPolygons.isEmpty,
-              let maxDuration = overlay.cellDurations.values.max(),
-              maxDuration > 0 else { return }
+              overlay.maxDuration > 0 else { return }
 
         context.setLineWidth(1.0 / zoomScale)
 
-        for (cellID, coords) in overlay.cellPolygons {
-            guard let duration = overlay.cellDurations[cellID], duration > 0 else { continue }
+        for cell in overlay.cellPolygons.values
+            where cell.mapRect.intersects(mapRect) {
+            guard cell.duration > 0 else { continue }
 
-            let intensity = CGFloat(min(duration / maxDuration, 1.0))
+            let intensity = CGFloat(min(cell.duration / overlay.maxDuration, 1.0))
             let color = Self.colorForIntensity(intensity)
 
             context.setFillColor(red: color.red, green: color.green, blue: color.blue, alpha: 0.6)
             context.setStrokeColor(red: color.red, green: color.green, blue: color.blue, alpha: 0.3)
 
             context.beginPath()
-            for (index, coord) in coords.enumerated() {
+            for (index, coord) in cell.coordinates.enumerated() {
                 let point = self.point(for: MKMapPoint(coord))
                 if index == 0 {
                     context.move(to: point)

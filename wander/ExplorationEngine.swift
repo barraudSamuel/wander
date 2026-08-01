@@ -10,6 +10,48 @@ import CoreLocation
 import H3
 
 struct ExplorationEngine {
+    private final class BoundaryCache: @unchecked Sendable {
+        private final class Box: NSObject {
+            let coordinates: [CLLocationCoordinate2D]
+
+            init(coordinates: [CLLocationCoordinate2D]) {
+                self.coordinates = coordinates
+            }
+        }
+
+        private let storage: NSCache<NSString, Box> = {
+            let cache = NSCache<NSString, Box>()
+            cache.countLimit = 30_000
+            cache.totalCostLimit = 16 * 1_024 * 1_024
+            return cache
+        }()
+
+        func coordinates(
+            for cellID: String,
+            compute: () -> [CLLocationCoordinate2D]
+        ) -> [CLLocationCoordinate2D] {
+            let key = cellID as NSString
+            if let cached = storage.object(forKey: key) {
+                return cached.coordinates
+            }
+
+            let computedCoordinates = compute()
+            let estimatedCost = 128
+                + computedCoordinates.count
+                    * MemoryLayout<CLLocationCoordinate2D>.stride
+            storage.setObject(
+                Box(coordinates: computedCoordinates),
+                forKey: key,
+                cost: estimatedCost
+            )
+            return computedCoordinates
+        }
+    }
+
+    private let boundaryCache = BoundaryCache()
+
+    init() {}
+
     let resolution = 10
     let maxAccuracy: CLLocationAccuracy = 150
     let maxGapToConnect: TimeInterval = 10 * 60
@@ -37,9 +79,11 @@ struct ExplorationEngine {
     // MARK: - Boundary for map rendering
 
     func boundaryCoordinates(for cellID: String) -> [CLLocationCoordinate2D] {
-        guard let index = H3Index(string: cellID) else { return [] }
-        return index.boundary().map { vertex in
-            CLLocationCoordinate2D(latitude: vertex.lat, longitude: vertex.lng)
+        boundaryCache.coordinates(for: cellID) {
+            guard let index = H3Index(string: cellID) else { return [] }
+            return index.boundary().map { vertex in
+                CLLocationCoordinate2D(latitude: vertex.lat, longitude: vertex.lng)
+            }
         }
     }
 

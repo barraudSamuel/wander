@@ -16,14 +16,32 @@ private func markerForegroundColor(for backgroundColor: UIColor) -> UIColor {
     ProfileColor.contrastingUIColor(for: backgroundColor)
 }
 
+struct MapUserCalloutInfo: Equatable {
+    let displayName: String
+    let relationshipText: String
+    let isExplorationLoaded: Bool
+    let cityProgress: CityProgress?
+    let totalExploredCellCount: Int
+    let locationSampledAt: Date?
+}
+
 final class UserLocationAnnotation: MKPointAnnotation {}
+
+final class FriendLocationAnnotation: MKPointAnnotation {
+    var userID = ""
+}
 
 final class UserLocationAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "UserLocationAnnotation"
+    static let friendReuseIdentifier = "FriendLocationAnnotation"
 
     private let markerRingView = UIView()
     private let avatarImageView = UIImageView()
     private let fallbackLabel = UILabel()
+    private var configuredAvatarImageData: Data?
+    private var configuredDisplayName: String?
+    private var configuredProfileColorHex: String?
+    private var configuredCalloutInfo: MapUserCalloutInfo?
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -39,7 +57,12 @@ final class UserLocationAnnotationView: MKAnnotationView {
         super.layoutSubviews()
 
         let markerSize: CGFloat = 32
-        markerRingView.frame = CGRect(origin: .zero, size: CGSize(width: markerSize, height: markerSize))
+        markerRingView.frame = CGRect(
+            x: (bounds.width - markerSize) / 2,
+            y: (bounds.height - markerSize) / 2,
+            width: markerSize,
+            height: markerSize
+        )
         markerRingView.layer.cornerRadius = markerSize / 2
         markerRingView.layer.shadowPath = UIBezierPath(
             ovalIn: markerRingView.bounds
@@ -58,42 +81,63 @@ final class UserLocationAnnotationView: MKAnnotationView {
     func configure(
         avatarImageData: Data,
         displayName: String,
-        profileColorHex: String
+        profileColorHex: String,
+        calloutInfo: MapUserCalloutInfo
     ) {
-        let profileColor = ProfileColor.uiColor(hex: profileColorHex)
-        markerRingView.backgroundColor = profileColor
-        markerRingView.layer.shadowColor = profileColor.cgColor
-        fallbackLabel.backgroundColor = profileColor
-        fallbackLabel.textColor = markerForegroundColor(for: profileColor)
+        if configuredAvatarImageData != avatarImageData
+            || configuredDisplayName != displayName
+            || configuredProfileColorHex != profileColorHex {
+            let profileColor = ProfileColor.uiColor(hex: profileColorHex)
+            markerRingView.backgroundColor = profileColor
+            markerRingView.layer.shadowColor = profileColor.cgColor
+            fallbackLabel.backgroundColor = profileColor
+            fallbackLabel.textColor = markerForegroundColor(for: profileColor)
 
-        if let image = UIImage(data: avatarImageData) {
-            avatarImageView.image = image
-            avatarImageView.isHidden = false
-            fallbackLabel.isHidden = true
-        } else {
-            let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            fallbackLabel.text = trimmedName.isEmpty
-                ? "W"
-                : String(trimmedName.prefix(1)).uppercased()
-            avatarImageView.image = nil
-            avatarImageView.isHidden = true
-            fallbackLabel.isHidden = false
+            if let image = UIImage(data: avatarImageData) {
+                avatarImageView.image = image
+                avatarImageView.isHidden = false
+                fallbackLabel.isHidden = true
+            } else {
+                let trimmedName = displayName.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                fallbackLabel.text = trimmedName.isEmpty
+                    ? "W"
+                    : String(trimmedName.prefix(1)).uppercased()
+                avatarImageView.image = nil
+                avatarImageView.isHidden = true
+                fallbackLabel.isHidden = false
+            }
+
+            configuredAvatarImageData = avatarImageData
+            configuredDisplayName = displayName
+            configuredProfileColorHex = profileColorHex
+        }
+
+        if configuredCalloutInfo != calloutInfo {
+            detailCalloutAccessoryView = makeCalloutDetailView(for: calloutInfo)
+            accessibilityLabel = "\(calloutInfo.displayName), \(calloutInfo.relationshipText)"
+            accessibilityHint = "Touchez pour afficher les informations d’exploration"
+            accessibilityTraits = .button
+            configuredCalloutInfo = calloutInfo
         }
     }
 
     private func configureView() {
-        frame = CGRect(x: 0, y: 0, width: 32, height: 32)
+        frame = CGRect(x: 0, y: 0, width: 44, height: 44)
         backgroundColor = .clear
         clipsToBounds = false
-        canShowCallout = false
+        canShowCallout = true
         collisionMode = .none
         displayPriority = .required
+        isAccessibilityElement = true
 
         markerRingView.layer.borderColor = UIColor.white.cgColor
         markerRingView.layer.borderWidth = 1.5
         markerRingView.layer.shadowOpacity = 0.38
         markerRingView.layer.shadowRadius = 8
         markerRingView.layer.shadowOffset = .zero
+        markerRingView.isUserInteractionEnabled = false
         addSubview(markerRingView)
 
         avatarImageView.contentMode = .scaleAspectFill
@@ -112,6 +156,126 @@ final class UserLocationAnnotationView: MKAnnotationView {
 
         setNeedsLayout()
     }
+
+    private func makeCalloutDetailView(
+        for info: MapUserCalloutInfo
+    ) -> UIView {
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.preferredMaxLayoutWidth = 230
+        label.adjustsFontForContentSizeCategory = true
+
+        let content = NSMutableAttributedString()
+        content.append(
+            NSAttributedString(
+                string: info.relationshipText.uppercased(),
+                attributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .caption2),
+                    .foregroundColor: UIColor.secondaryLabel
+                ]
+            )
+        )
+        content.append(NSAttributedString(string: "\n"))
+
+        let progressText: String
+        let progressDetailText: String
+        if !info.isExplorationLoaded {
+            progressText = "Exploration indisponible"
+            progressDetailText = "La progression n’a pas encore été chargée"
+        } else if let progress = info.cityProgress {
+            let percentage = progress.percentage.formatted(
+                .percent.precision(.fractionLength(1))
+            )
+            progressText = "\(percentage) exploré"
+            progressDetailText = [
+                progress.cityName,
+                "\(progress.exploredCells.formatted()) / \(progress.totalCells.formatted()) zones"
+            ].joined(separator: " · ")
+        } else {
+            progressText = Self.exploredZoneText(info.totalExploredCellCount)
+            progressDetailText = "Progression par ville indisponible"
+        }
+
+        content.append(
+            NSAttributedString(
+                string: progressText,
+                attributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .headline),
+                    .foregroundColor: UIColor.label
+                ]
+            )
+        )
+        content.append(NSAttributedString(string: "\n"))
+        content.append(
+            NSAttributedString(
+                string: progressDetailText,
+                attributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .caption1),
+                    .foregroundColor: UIColor.secondaryLabel
+                ]
+            )
+        )
+
+        if let locationText = Self.locationText(sampledAt: info.locationSampledAt) {
+            content.append(NSAttributedString(string: "\n"))
+            content.append(
+                NSAttributedString(
+                    string: locationText,
+                    attributes: [
+                        .font: UIFont.preferredFont(forTextStyle: .caption1),
+                        .foregroundColor: UIColor.tertiaryLabel
+                    ]
+                )
+            )
+        }
+
+        label.attributedText = content
+        label.accessibilityLabel = [
+            info.relationshipText,
+            progressText,
+            progressDetailText,
+            Self.locationText(sampledAt: info.locationSampledAt)
+        ]
+        .compactMap { $0 }
+        .joined(separator: ", ")
+        return label
+    }
+
+    private static func exploredZoneText(_ count: Int) -> String {
+        switch count {
+        case 0:
+            "Aucune zone explorée"
+        case 1:
+            "1 zone explorée"
+        default:
+            "\(count.formatted()) zones explorées"
+        }
+    }
+
+    private static func locationText(sampledAt: Date?) -> String? {
+        guard let sampledAt else { return nil }
+
+        if Calendar.autoupdatingCurrent.isDateInToday(sampledAt) {
+            return "Dernière position à \(positionTimeFormatter.string(from: sampledAt))"
+        }
+
+        return "Dernière position le \(positionDateTimeFormatter.string(from: sampledAt))"
+    }
+
+    private static let positionTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static let positionDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
 
 struct FriendScratchCellPolygon {
@@ -213,11 +377,8 @@ final class FriendScratchOverlayRenderer: MKOverlayRenderer {
         context.setFillColor(color.withAlphaComponent(0.34).cgColor)
         context.setStrokeColor(color.withAlphaComponent(0.75).cgColor)
 
-        for cellID in overlay.cellPolygons.keys.sorted() {
-            guard let polygon = overlay.cellPolygons[cellID],
-                  polygon.mapRect.intersects(mapRect) else {
-                continue
-            }
+        for polygon in overlay.cellPolygons.values
+            where polygon.mapRect.intersects(mapRect) {
 
             context.beginPath()
             for (index, coordinate) in polygon.coordinates.enumerated() {
@@ -324,6 +485,11 @@ struct MapWithFogView: UIViewRepresentable {
     /// All accepted-friend exploration data, including maps not currently visible.
     var allFriendExplorations: [String: FriendExploration] = [:]
 
+    /// Exploration progress for the city containing each visible user marker.
+    var userExplorationProgress: CityProgress?
+    var friendExplorationProgress: [String: CityProgress] = [:]
+    var loadedFriendExplorationUserIDs: Set<String> = []
+
     var userDisplayName = ""
     var userAvatarImageData = Data()
     var userProfileColorHex = ""
@@ -342,6 +508,8 @@ struct MapWithFogView: UIViewRepresentable {
 
     var showsHeatMap = false
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
+    /// Monotonic token that must change whenever heat-map values change.
+    var heatMapRevision: Int = 0
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -375,7 +543,8 @@ struct MapWithFogView: UIViewRepresentable {
         let heatMapVisibilityChanged = context.coordinator.lastShowsHeatMap != showsHeatMap
         let friendExplorationsChanged =
             context.coordinator.lastFriendExplorations != friendExplorations
-        let heatMapDataChanged = context.coordinator.lastHeatMapCellDataCount != heatMapCellData.count
+        let heatMapDataChanged =
+            context.coordinator.lastHeatMapRevision != heatMapRevision
 
         if boundaryChanged || discoveredChanged {
             updateFogOverlay(
@@ -445,10 +614,25 @@ struct MapWithFogView: UIViewRepresentable {
 
     private func updateUserLocationAnnotation(on mapView: MKMapView, context: Context) {
         let coordinator = context.coordinator
+        let trimmedDisplayName = userDisplayName.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let resolvedDisplayName = trimmedDisplayName.isEmpty
+            ? "Explorer"
+            : trimmedDisplayName
+        let calloutInfo = MapUserCalloutInfo(
+            displayName: resolvedDisplayName,
+            relationshipText: "Vous",
+            isExplorationLoaded: true,
+            cityProgress: userExplorationProgress,
+            totalExploredCellCount: discoveredCellIDs.count,
+            locationSampledAt: locationTracker.lastLocation?.timestamp
+        )
         coordinator.updateUserMarkerAppearance(
             avatarImageData: userAvatarImageData,
-            displayName: userDisplayName,
+            displayName: resolvedDisplayName,
             profileColorHex: userProfileColorHex,
+            calloutInfo: calloutInfo,
             on: mapView
         )
 
@@ -468,9 +652,13 @@ struct MapWithFogView: UIViewRepresentable {
         } else {
             annotation = UserLocationAnnotation()
             annotation.coordinate = coordinate
+            annotation.title = resolvedDisplayName
             coordinator.userLocationAnnotation = annotation
             mapView.addAnnotation(annotation)
         }
+
+        annotation.title = resolvedDisplayName
+        annotation.subtitle = nil
 
         mapView.view(for: mapView.userLocation)?.isHidden = true
     }
@@ -493,6 +681,7 @@ struct MapWithFogView: UIViewRepresentable {
                 mapView.removeAnnotation(annotation)
             }
             coordinator.friendProfileColorHexByUserID.removeValue(forKey: userID)
+            coordinator.friendCalloutInfoByUserID.removeValue(forKey: userID)
         }
 
         // Incrementally add or move annotations for fresh accepted-friend locations.
@@ -501,6 +690,18 @@ struct MapWithFogView: UIViewRepresentable {
 
             coordinator.friendProfileColorHexByUserID[friendLocation.userID] =
                 friendLocation.profileColorHex
+            let friendExploration = allFriendExplorations[friendLocation.userID]
+            let calloutInfo = MapUserCalloutInfo(
+                displayName: friendLocation.displayName,
+                relationshipText: "Ami",
+                isExplorationLoaded: loadedFriendExplorationUserIDs.contains(
+                    friendLocation.userID
+                ),
+                cityProgress: friendExplorationProgress[friendLocation.userID],
+                totalExploredCellCount: friendExploration?.cellIDs.count ?? 0,
+                locationSampledAt: friendLocation.sampledAt
+            )
+            coordinator.friendCalloutInfoByUserID[friendLocation.userID] = calloutInfo
 
             if let existing = coordinator.friendAnnotations[friendLocation.userID] {
                 if existing.coordinate.latitude != friendLocation.coordinate.latitude
@@ -511,19 +712,21 @@ struct MapWithFogView: UIViewRepresentable {
                 }
 
                 existing.title = friendLocation.displayName
-                existing.subtitle = friendLocation.userID
+                existing.subtitle = nil
                 if let annotationView = mapView.view(for: existing) {
                     coordinator.configureFriendAnnotationView(
                         annotationView,
                         displayName: friendLocation.displayName,
-                        profileColorHex: friendLocation.profileColorHex
+                        profileColorHex: friendLocation.profileColorHex,
+                        calloutInfo: calloutInfo
                     )
                 }
             } else {
-                let annotation = MKPointAnnotation()
+                let annotation = FriendLocationAnnotation()
+                annotation.userID = friendLocation.userID
                 annotation.coordinate = friendLocation.coordinate
                 annotation.title = friendLocation.displayName
-                annotation.subtitle = friendLocation.userID
+                annotation.subtitle = nil
                 coordinator.friendAnnotations[friendLocation.userID] = annotation
                 mapView.addAnnotation(annotation)
             }
@@ -675,17 +878,16 @@ struct MapWithFogView: UIViewRepresentable {
 
     private func updateHeatMapOverlay(on mapView: MKMapView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.lastHeatMapRevision = heatMapRevision
 
         guard showsHeatMap else {
             coordinator.heatMapOverlay = nil
-            coordinator.lastHeatMapCellDataCount = heatMapCellData.count
             applyManagedOverlayOrder(on: mapView, context: context)
             return
         }
 
         guard !heatMapCellData.isEmpty else {
             coordinator.heatMapOverlay = nil
-            coordinator.lastHeatMapCellDataCount = heatMapCellData.count
             applyManagedOverlayOrder(on: mapView, context: context)
             return
         }
@@ -698,7 +900,6 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.heatMapOverlay =
             overlay.cellPolygons.isEmpty ? nil : overlay
 
-        coordinator.lastHeatMapCellDataCount = heatMapCellData.count
         applyManagedOverlayOrder(on: mapView, context: context)
     }
 
@@ -735,21 +936,59 @@ struct MapWithFogView: UIViewRepresentable {
         context: Context
     ) {
         let coordinator = context.coordinator
+        var desiredManagedOverlays: [MKOverlay] = []
+        if let fogOverlay = coordinator.fogOverlay {
+            desiredManagedOverlays.append(fogOverlay)
+        }
+        if let heatMapOverlay = coordinator.heatMapOverlay {
+            desiredManagedOverlays.append(heatMapOverlay)
+        }
+        desiredManagedOverlays.append(contentsOf: coordinator.friendScratchOverlays)
+
+        let desiredIdentifiers = Set(desiredManagedOverlays.map {
+            ObjectIdentifier($0 as AnyObject)
+        })
         let attachedManagedOverlays = mapView.overlays.filter {
             $0 is FogOfWarOverlay
                 || $0 is HeatMapOverlay
                 || $0 is FriendScratchOverlay
         }
-        mapView.removeOverlays(attachedManagedOverlays)
+        let staleOverlays = attachedManagedOverlays.filter {
+            !desiredIdentifiers.contains(ObjectIdentifier($0 as AnyObject))
+        }
+        if !staleOverlays.isEmpty {
+            mapView.removeOverlays(staleOverlays)
+        }
 
-        if let fogOverlay = coordinator.fogOverlay {
-            mapView.addOverlay(fogOverlay, level: .aboveRoads)
-        }
-        if let heatMapOverlay = coordinator.heatMapOverlay {
-            mapView.addOverlay(heatMapOverlay, level: .aboveRoads)
-        }
-        for friendOverlay in coordinator.friendScratchOverlays {
-            mapView.addOverlay(friendOverlay, level: .aboveRoads)
+        // Keep renderers for unchanged overlays alive. A fog update should not
+        // recreate the heat-map and every friend renderer (and vice versa).
+        var attachedIdentifiers = Set(mapView.overlays.map {
+            ObjectIdentifier($0 as AnyObject)
+        })
+
+        for (index, overlay) in desiredManagedOverlays.enumerated() {
+            let identifier = ObjectIdentifier(overlay as AnyObject)
+            guard !attachedIdentifiers.contains(identifier) else { continue }
+
+            let followingOverlay = desiredManagedOverlays
+                .dropFirst(index + 1)
+                .first {
+                    attachedIdentifiers.contains(ObjectIdentifier($0 as AnyObject))
+                }
+            let precedingOverlay = desiredManagedOverlays[..<index]
+                .reversed()
+                .first {
+                    attachedIdentifiers.contains(ObjectIdentifier($0 as AnyObject))
+                }
+
+            if let followingOverlay {
+                mapView.insertOverlay(overlay, below: followingOverlay)
+            } else if let precedingOverlay {
+                mapView.insertOverlay(overlay, above: precedingOverlay)
+            } else {
+                mapView.addOverlay(overlay, level: .aboveRoads)
+            }
+            attachedIdentifiers.insert(identifier)
         }
     }
 
@@ -764,16 +1003,17 @@ struct MapWithFogView: UIViewRepresentable {
         var lastDiscoveredIDs: Set<String> = []
         var lastBoundaryLength: Int = 0
         var lastShowsHeatMap = false
-        var lastHeatMapCellDataCount: Int = 0
+        var lastHeatMapRevision = 0
         var lastFriendExplorations: [String: FriendExploration] = [:]
         var didSetInitialRegion = false
         var userLocationAnnotation: UserLocationAnnotation?
         private var userAvatarImageData = Data()
         private var userDisplayName = ""
         private var userProfileColorHex = ""
-        var friendAnnotations: [String: MKPointAnnotation] = [:]
+        private var userCalloutInfo: MapUserCalloutInfo?
+        var friendAnnotations: [String: FriendLocationAnnotation] = [:]
         var friendProfileColorHexByUserID: [String: String] = [:]
-
+        var friendCalloutInfoByUserID: [String: MapUserCalloutInfo] = [:]
         init(fogColor: UIColor) {
             self.fogColor = fogColor
         }
@@ -811,45 +1051,53 @@ struct MapWithFogView: UIViewRepresentable {
                 annotationView.configure(
                     avatarImageData: userAvatarImageData,
                     displayName: userDisplayName,
-                    profileColorHex: userProfileColorHex
+                    profileColorHex: userProfileColorHex,
+                    calloutInfo: userCalloutInfo ?? MapUserCalloutInfo(
+                        displayName: userDisplayName,
+                        relationshipText: "Vous",
+                        isExplorationLoaded: true,
+                        cityProgress: nil,
+                        totalExploredCellCount: 0,
+                        locationSampledAt: nil
+                    )
                 )
                 return annotationView
             }
 
             guard !(annotation is MKUserLocation) else { return nil }
-
-            let identifier = "FriendLocationAnnotation"
-            var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
-
-            if annotationView == nil {
-                annotationView = MKAnnotationView(annotation: annotation, reuseIdentifier: identifier)
-                annotationView?.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
-                annotationView?.layer.cornerRadius = 16
-                annotationView?.layer.borderWidth = 2
-                annotationView?.clipsToBounds = true
-            } else {
-                annotationView?.annotation = annotation
+            guard let friendAnnotation = annotation as? FriendLocationAnnotation else {
+                return nil
             }
 
-            // MapKit raises an NSException when a clipped annotation attempts
-            // to present a callout. Friend markers are centered from the list,
-            // so they do not need a callout on the map.
-            annotationView?.canShowCallout = false
-            annotationView?.collisionMode = .none
-            annotationView?.displayPriority = .required
+            let annotationView = mapView.dequeueReusableAnnotationView(
+                withIdentifier: UserLocationAnnotationView.friendReuseIdentifier
+            ) as? UserLocationAnnotationView
+                ?? UserLocationAnnotationView(
+                    annotation: annotation,
+                    reuseIdentifier: UserLocationAnnotationView.friendReuseIdentifier
+                )
+            annotationView.annotation = annotation
 
-            let displayName = annotation.title.flatMap { $0 } ?? "?"
-            let userID = annotation.subtitle.flatMap { $0 } ?? displayName
+            let displayName = annotation.title.flatMap { $0 } ?? "Explorer"
+            let userID = friendAnnotation.userID
             let profileColorHex =
                 friendProfileColorHexByUserID[userID]
                 ?? ProfileColor.generatedHex(seed: userID)
-            if let annotationView {
-                configureFriendAnnotationView(
-                    annotationView,
+            let calloutInfo = friendCalloutInfoByUserID[userID]
+                ?? MapUserCalloutInfo(
                     displayName: displayName,
-                    profileColorHex: profileColorHex
+                    relationshipText: "Ami",
+                    isExplorationLoaded: false,
+                    cityProgress: nil,
+                    totalExploredCellCount: 0,
+                    locationSampledAt: nil
                 )
-            }
+            configureFriendAnnotationView(
+                annotationView,
+                displayName: displayName,
+                profileColorHex: profileColorHex,
+                calloutInfo: calloutInfo
+            )
             return annotationView
         }
 
@@ -863,6 +1111,7 @@ struct MapWithFogView: UIViewRepresentable {
             avatarImageData: Data,
             displayName: String,
             profileColorHex: String,
+            calloutInfo: MapUserCalloutInfo,
             on mapView: MKMapView
         ) {
             let normalizedProfileColorHex =
@@ -871,11 +1120,13 @@ struct MapWithFogView: UIViewRepresentable {
 
             guard userAvatarImageData != avatarImageData ||
                     userDisplayName != displayName ||
-                    userProfileColorHex != normalizedProfileColorHex else { return }
+                    userProfileColorHex != normalizedProfileColorHex ||
+                    userCalloutInfo != calloutInfo else { return }
 
             userAvatarImageData = avatarImageData
             userDisplayName = displayName
             userProfileColorHex = normalizedProfileColorHex
+            userCalloutInfo = calloutInfo
 
             guard let annotation = userLocationAnnotation,
                   let annotationView = mapView.view(for: annotation)
@@ -884,43 +1135,27 @@ struct MapWithFogView: UIViewRepresentable {
             annotationView.configure(
                 avatarImageData: avatarImageData,
                 displayName: displayName,
-                profileColorHex: normalizedProfileColorHex
+                profileColorHex: normalizedProfileColorHex,
+                calloutInfo: calloutInfo
             )
         }
 
         func configureFriendAnnotationView(
             _ annotationView: MKAnnotationView,
             displayName: String,
-            profileColorHex: String
+            profileColorHex: String,
+            calloutInfo: MapUserCalloutInfo
         ) {
-            let profileColor = ProfileColor.uiColor(hex: profileColorHex)
-            annotationView.image = friendImage(
-                displayName: displayName,
-                profileColor: profileColor
-            )
-            annotationView.layer.borderColor = profileColor.cgColor
-        }
-
-        func friendImage(displayName: String, profileColor: UIColor) -> UIImage {
-            let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let initial = trimmedName.isEmpty ? "?" : String(trimmedName.prefix(1)).uppercased()
-
-            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32))
-            return renderer.image { ctx in
-                profileColor.setFill()
-                ctx.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
-
-                let attributes: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: 14, weight: .bold),
-                    .foregroundColor: markerForegroundColor(for: profileColor)
-                ]
-                let size = initial.size(withAttributes: attributes)
-                let point = CGPoint(
-                    x: (32 - size.width) / 2,
-                    y: (32 - size.height) / 2
-                )
-                initial.draw(at: point, withAttributes: attributes)
+            guard let annotationView = annotationView as? UserLocationAnnotationView else {
+                return
             }
+
+            annotationView.configure(
+                avatarImageData: Data(),
+                displayName: displayName,
+                profileColorHex: profileColorHex,
+                calloutInfo: calloutInfo
+            )
         }
     }
 }

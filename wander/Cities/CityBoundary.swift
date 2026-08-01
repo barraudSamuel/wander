@@ -12,7 +12,7 @@ import Combine
 import CoreLocation
 import H3
 
-struct CityProgress {
+struct CityProgress: Equatable {
     let cityName: String
     let totalCells: Int
     let exploredCells: Int
@@ -77,6 +77,42 @@ final class CityBoundary: ObservableObject {
     private struct CityData {
         let cells: Set<String>
         let coordinates: [CLLocationCoordinate2D]
+        let boundingBox: BoundingBox
+    }
+
+    private struct BoundingBox {
+        let minimumLatitude: CLLocationDegrees
+        let maximumLatitude: CLLocationDegrees
+        let minimumLongitude: CLLocationDegrees
+        let maximumLongitude: CLLocationDegrees
+
+        init?(coordinates: [CLLocationCoordinate2D]) {
+            guard let first = coordinates.first else { return nil }
+
+            var minimumLatitude = first.latitude
+            var maximumLatitude = first.latitude
+            var minimumLongitude = first.longitude
+            var maximumLongitude = first.longitude
+
+            for coordinate in coordinates.dropFirst() {
+                minimumLatitude = min(minimumLatitude, coordinate.latitude)
+                maximumLatitude = max(maximumLatitude, coordinate.latitude)
+                minimumLongitude = min(minimumLongitude, coordinate.longitude)
+                maximumLongitude = max(maximumLongitude, coordinate.longitude)
+            }
+
+            self.minimumLatitude = minimumLatitude
+            self.maximumLatitude = maximumLatitude
+            self.minimumLongitude = minimumLongitude
+            self.maximumLongitude = maximumLongitude
+        }
+
+        func contains(_ coordinate: CLLocationCoordinate2D) -> Bool {
+            coordinate.latitude >= minimumLatitude
+                && coordinate.latitude <= maximumLatitude
+                && coordinate.longitude >= minimumLongitude
+                && coordinate.longitude <= maximumLongitude
+        }
     }
 
     private init() {}
@@ -104,10 +140,15 @@ final class CityBoundary: ObservableObject {
 
         // Parse boundary coordinates from GeoJSON.
         guard let (h3Ring, clRing) = parseBoundary(geojson: city.geojson) else { return nil }
+        guard let boundingBox = BoundingBox(coordinates: clRing) else { return nil }
 
         // Use cached H3 cells if available.
         if let cached = loadCachedCells(from: cacheURL) {
-            return CityData(cells: cached, coordinates: clRing)
+            return CityData(
+                cells: cached,
+                coordinates: clRing,
+                boundingBox: boundingBox
+            )
         }
 
         // Compute H3 polyfill (heavy — off the main actor).
@@ -118,26 +159,29 @@ final class CityBoundary: ObservableObject {
         }.value
 
         cacheCells(ids, to: cacheURL)
-        return CityData(cells: ids, coordinates: clRing)
+        return CityData(
+            cells: ids,
+            coordinates: clRing,
+            boundingBox: boundingBox
+        )
     }
 
     // MARK: - City detection
 
     func detectCity(for coordinate: CLLocationCoordinate2D) {
-        for city in allCities {
-            guard let data = cityData[city.id] else { continue }
-            if isPoint(coordinate, inPolygon: data.coordinates) {
-                if currentCity.id != city.id {
-                    selectCity(city)
-                }
-                if localizedCity?.id != city.id {
-                    localizedCity = city
-                }
-                return
+        guard let city = city(containing: coordinate) else {
+            if localizedCity != nil {
+                localizedCity = nil
             }
+            return
         }
 
-        localizedCity = nil
+        if currentCity.id != city.id {
+            selectCity(city)
+        }
+        if localizedCity?.id != city.id {
+            localizedCity = city
+        }
     }
 
     private func selectCity(_ city: WanderCity) {
@@ -151,19 +195,92 @@ final class CityBoundary: ObservableObject {
     // MARK: - Progress
 
     func progress(against discoveredCells: [DiscoveredCell]) -> CityProgress? {
-        guard let localizedCity,
-              let data = cityData[localizedCity.id] else { return nil }
-
         let discoveredIDs = Set(discoveredCells.map { $0.id })
-        let explored = data.cells.intersection(discoveredIDs)
+        return progress(against: discoveredIDs)
+    }
+
+    func progress(against discoveredCellIDs: Set<String>) -> CityProgress? {
+        guard let localizedCity else { return nil }
+        return progress(against: discoveredCellIDs, in: localizedCity)
+    }
+
+    /// Computes progress for any user at the city containing their location.
+    /// This keeps friend percentages tied to the city their marker is in rather
+    /// than dividing their global exploration count by the local city total.
+    func progress(
+        against discoveredCellIDs: Set<String>,
+        at coordinate: CLLocationCoordinate2D
+    ) -> CityProgress? {
+        guard let city = city(containing: coordinate) else {
+            return nil
+        }
+
+        return progress(against: discoveredCellIDs, in: city)
+    }
+
+    private func progress(
+        against discoveredCellIDs: Set<String>,
+        in city: WanderCity
+    ) -> CityProgress? {
+        guard let data = cityData[city.id] else { return nil }
+
+        let exploredCellCount: Int
+        if discoveredCellIDs.count <= data.cells.count {
+            exploredCellCount = discoveredCellIDs.reduce(into: 0) { count, cellID in
+                if data.cells.contains(cellID) {
+                    count += 1
+                }
+            }
+        } else {
+            exploredCellCount = data.cells.reduce(into: 0) { count, cellID in
+                if discoveredCellIDs.contains(cellID) {
+                    count += 1
+                }
+            }
+        }
+
         return CityProgress(
-            cityName: localizedCity.name,
+            cityName: city.name,
             totalCells: data.cells.count,
-            exploredCells: explored.count
+            exploredCells: exploredCellCount
         )
     }
 
     // MARK: - Point-in-polygon (ray casting)
+
+    private func city(
+        containing coordinate: CLLocationCoordinate2D
+    ) -> WanderCity? {
+        let localizedCityID = localizedCity?.id
+
+        if let localizedCity,
+           contains(coordinate, in: localizedCity) {
+            return localizedCity
+        }
+
+        if currentCity.id != localizedCityID,
+           contains(coordinate, in: currentCity) {
+            return currentCity
+        }
+
+        return allCities.first { city in
+            city.id != localizedCityID
+                && city.id != currentCity.id
+                && contains(coordinate, in: city)
+        }
+    }
+
+    private func contains(
+        _ coordinate: CLLocationCoordinate2D,
+        in city: WanderCity
+    ) -> Bool {
+        guard let data = cityData[city.id],
+              data.boundingBox.contains(coordinate) else {
+            return false
+        }
+
+        return isPoint(coordinate, inPolygon: data.coordinates)
+    }
 
     private func isPoint(_ point: CLLocationCoordinate2D,
                          inPolygon polygon: [CLLocationCoordinate2D]) -> Bool {

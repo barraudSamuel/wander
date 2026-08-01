@@ -48,6 +48,8 @@ struct ContentView: View {
     @State private var heatMapEnabled = false
     @State private var selectedFriendExplorationUserIDs: Set<String> = []
     @State private var knownFriendUserIDs: Set<String> = []
+    @State private var cityProgress: CityProgress?
+    @State private var friendExplorationProgress: [String: CityProgress] = [:]
 
     #if DEBUG
     @State private var debugDrawerVisible = false
@@ -55,9 +57,18 @@ struct ContentView: View {
     #endif
 
     var body: some View {
+        let allFriendExplorations = friendSyncService.friendExplorations
+        let summaries = friendSummaries(
+            locations: friendSyncService.friendLocations,
+            explorations: allFriendExplorations
+        )
+
         GeometryReader { geometry in
             TabView(selection: $selectedTab) {
-                exploreTab
+                exploreTab(
+                    allFriendExplorations: allFriendExplorations,
+                    friendSummaries: summaries
+                )
                     .tabItem {
                         Label("Explorer", systemImage: "map")
                     }
@@ -65,7 +76,7 @@ struct ContentView: View {
 
                 FriendsView(
                     service: friendSyncService,
-                    friends: friendSummaries,
+                    friends: summaries,
                     onShowOnMap: showFriendOnMap
                 )
                 .tabItem {
@@ -119,9 +130,10 @@ struct ContentView: View {
             locationTracker.resumeTrackingIfNeeded()
             friendSyncService.updateDisplayName(displayName)
             syncProfileColor(profileColorHex)
-            friendSyncService.syncDiscoveredCells(
-                Set(locationTracker.discoveredCells.map(\.id))
-            )
+            let discoveredCellIDs = locationTracker.discoveredCellIDs
+            friendSyncService.syncDiscoveredCells(discoveredCellIDs)
+            refreshCityProgress(discoveredCellIDs: discoveredCellIDs)
+            refreshFriendExplorationProgress()
 
             Task {
                 await cityBoundary.load()
@@ -152,23 +164,41 @@ struct ContentView: View {
         .onChange(of: profileColorHex) { _, newProfileColorHex in
             syncProfileColor(newProfileColorHex)
         }
-        .onChange(of: locationTracker.discoveredCells.map(\.id)) { _, cellIDs in
-            friendSyncService.syncDiscoveredCells(Set(cellIDs))
+        .onChange(of: locationTracker.newlyDiscoveredCellIDs) { _, cellIDs in
+            guard !cellIDs.isEmpty else { return }
+            friendSyncService.addDiscoveredCells(cellIDs)
+        }
+        .onChange(of: locationTracker.discoveredCellIDs) { _, discoveredCellIDs in
+            refreshCityProgress(discoveredCellIDs: discoveredCellIDs)
         }
         .onChange(of: friendSyncService.isProfileReady) { _, isReady in
             guard isReady else { return }
 
             friendSyncService.updateDisplayName(displayName)
             friendSyncService.updateProfileColor(profileColorHex)
-            friendSyncService.syncDiscoveredCells(
-                Set(locationTracker.discoveredCells.map(\.id))
-            )
+            friendSyncService.syncDiscoveredCells(locationTracker.discoveredCellIDs)
             if !locationTracker.trackingEnabled {
                 friendSyncService.stopSharingLocation()
             }
         }
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
             selectNewFriends(from: userIDs)
+        }
+        .onChange(of: friendSyncService.friendLocations) {
+            refreshFriendExplorationProgress()
+        }
+        .onChange(of: friendSyncService.friendExplorationRevision) {
+            refreshFriendExplorationProgress()
+        }
+        .onChange(of: cityBoundary.cityCellIDs) {
+            refreshCityProgress()
+            refreshFriendExplorationProgress()
+        }
+        .onChange(of: cityBoundary.currentCity.id) {
+            refreshCityProgress()
+        }
+        .onChange(of: cityBoundary.localizedCity?.id) {
+            refreshCityProgress()
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -188,15 +218,26 @@ struct ContentView: View {
 
     // MARK: - Explore
 
-    private var exploreTab: some View {
-        ZStack(alignment: .topTrailing) {
+    private func exploreTab(
+        allFriendExplorations: [String: FriendExploration],
+        friendSummaries: [FriendMapSummary]
+    ) -> some View {
+        let visibleFriendExplorations = allFriendExplorations.filter {
+            selectedFriendExplorationUserIDs.contains($0.key)
+        }
+
+        return ZStack(alignment: .topTrailing) {
             MapWithFogView(
                 locationTracker: locationTracker,
-                discoveredCellIDs: Set(locationTracker.discoveredCells.map(\.id)),
+                discoveredCellIDs: locationTracker.discoveredCellIDs,
                 cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
                 friendLocations: friendSyncService.friendLocations,
-                friendExplorations: selectedFriendExplorations,
-                allFriendExplorations: friendSyncService.friendExplorations,
+                friendExplorations: visibleFriendExplorations,
+                allFriendExplorations: allFriendExplorations,
+                userExplorationProgress: cityProgress,
+                friendExplorationProgress: friendExplorationProgress,
+                loadedFriendExplorationUserIDs:
+                    friendSyncService.loadedFriendExplorationUserIDs,
                 userDisplayName: displayName,
                 userAvatarImageData: avatarImageData,
                 userProfileColorHex: profileColorHex,
@@ -204,7 +245,8 @@ struct ContentView: View {
                 resetMapOrientation: $resetMapOrientation,
                 centerOnFriendUserID: $centerOnFriendUserID,
                 showsHeatMap: heatMapEnabled,
-                heatMapCellData: locationTracker.heatMapCellData
+                heatMapCellData: locationTracker.heatMapCellData,
+                heatMapRevision: locationTracker.heatMapRevision
             )
             .ignoresSafeArea()
 
@@ -263,11 +305,14 @@ struct ContentView: View {
 
     // MARK: - Friends
 
-    private var friendSummaries: [FriendMapSummary] {
+    private func friendSummaries(
+        locations: [String: FriendLocation],
+        explorations: [String: FriendExploration]
+    ) -> [FriendMapSummary] {
         friendSyncService.acceptedFriends
             .map { friend in
-                let location = friendSyncService.friendLocations[friend.userID]
-                let exploration = friendSyncService.friendExplorations[friend.userID]
+                let location = locations[friend.userID]
+                let exploration = explorations[friend.userID]
 
                 return FriendMapSummary(
                     userID: friend.userID,
@@ -299,9 +344,23 @@ struct ContentView: View {
         Set(friendSyncService.acceptedFriends.map(\.userID))
     }
 
-    private var selectedFriendExplorations: [String: FriendExploration] {
-        friendSyncService.friendExplorations.filter {
-            selectedFriendExplorationUserIDs.contains($0.key)
+    private func refreshFriendExplorationProgress() {
+        let explorations = friendSyncService.friendExplorations
+        let loadedUserIDs = friendSyncService.loadedFriendExplorationUserIDs
+
+        friendExplorationProgress = friendSyncService.friendLocations.reduce(into: [:]) {
+            result, entry in
+            let (userID, location) = entry
+            guard loadedUserIDs.contains(userID),
+                  let exploration = explorations[userID],
+                  let progress = cityBoundary.progress(
+                    against: exploration.cellIDs,
+                    at: location.coordinate
+                  ) else {
+                return
+            }
+
+            result[userID] = progress
         }
     }
 
@@ -326,8 +385,14 @@ struct ContentView: View {
 
     // MARK: - City progress
 
-    private var cityProgress: CityProgress? {
-        cityBoundary.progress(against: locationTracker.discoveredCells)
+    private func refreshCityProgress(discoveredCellIDs: Set<String>? = nil) {
+        let cellIDs = discoveredCellIDs
+            ?? locationTracker.discoveredCellIDs
+        let refreshedProgress = cityBoundary.progress(against: cellIDs)
+
+        if cityProgress != refreshedProgress {
+            cityProgress = refreshedProgress
+        }
     }
 
     private var cityProgressUnavailableText: String {

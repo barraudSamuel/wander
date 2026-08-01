@@ -81,6 +81,7 @@ final class FriendSyncService: ObservableObject {
     @Published private(set) var acceptedFriends: [FriendContact] = []
     @Published private var receivedFriendLocations: [String: FriendLocation] = [:]
     @Published private var receivedFriendExplorationCellIDs: [String: Set<String>] = [:]
+    @Published private(set) var friendExplorationRevision = 0
     @Published private(set) var isProfileReady = false
     @Published private(set) var isPreparingProfile = true
     @Published private(set) var isProcessingFriendAction = false
@@ -104,6 +105,13 @@ final class FriendSyncService: ObservableObject {
                 )
             }
         )
+    }
+
+    /// A successful snapshot can legitimately contain zero cells. Keeping the
+    /// loaded state separate prevents the UI from presenting "0%" while the
+    /// first Firestore snapshot is still pending or has failed.
+    var loadedFriendExplorationUserIDs: Set<String> {
+        Set(receivedFriendExplorationCellIDs.keys)
     }
 
     private let db = Firestore.firestore()
@@ -140,6 +148,8 @@ final class FriendSyncService: ObservableObject {
     private var hasLoadedOwnExploration = false
     private var uploadedExplorationCellIDs: Set<String> = []
     private var desiredExplorationCellIDs: Set<String> = []
+    private var pendingExplorationCellIDs: Set<String> = []
+    private var uploadingExplorationCellIDs: Set<String> = []
     private var authenticationGeneration = 0
     private var latestLocationForSharing: (location: CLLocation, displayName: String)?
     private var lastLocationPush: (location: CLLocation, attemptedAt: Date)?
@@ -247,7 +257,26 @@ final class FriendSyncService: ObservableObject {
     /// Existing remote cells are loaded first, so relaunching the app does not
     /// rewrite the full history.
     func syncDiscoveredCells(_ cellIDs: Set<String>) {
-        desiredExplorationCellIDs.formUnion(cellIDs.filter(Self.isValidH3CellID))
+        let validCellIDs = Set(cellIDs.filter(Self.isValidH3CellID))
+        desiredExplorationCellIDs.formUnion(validCellIDs)
+        if hasLoadedOwnExploration {
+            pendingExplorationCellIDs.formUnion(
+                validCellIDs.subtracting(uploadedExplorationCellIDs)
+            )
+        }
+        uploadMissingExplorationCellsIfNeeded()
+    }
+
+    /// Adds only the cells discovered by the latest location update. Keeping this
+    /// path incremental avoids filtering and diffing the complete local history.
+    func addDiscoveredCells(_ cellIDs: Set<String>) {
+        for cellID in cellIDs where Self.isValidH3CellID(cellID) {
+            desiredExplorationCellIDs.insert(cellID)
+            if hasLoadedOwnExploration,
+               !uploadedExplorationCellIDs.contains(cellID) {
+                pendingExplorationCellIDs.insert(cellID)
+            }
+        }
         uploadMissingExplorationCellsIfNeeded()
     }
 
@@ -546,6 +575,8 @@ final class FriendSyncService: ObservableObject {
         isUploadingExploration = false
         hasLoadedOwnExploration = false
         uploadedExplorationCellIDs = []
+        pendingExplorationCellIDs = []
+        uploadingExplorationCellIDs = []
         lastKnownProfileDisplayName = nil
         lastKnownProfileColorHex = nil
         friendshipRecords = [:]
@@ -555,6 +586,7 @@ final class FriendSyncService: ObservableObject {
         acceptedFriends = []
         receivedFriendLocations = [:]
         receivedFriendExplorationCellIDs = [:]
+        friendExplorationRevision &+= 1
         isProcessingFriendAction = false
         lastLocationPush = nil
         if userID != nil {
@@ -923,12 +955,34 @@ final class FriendSyncService: ObservableObject {
                         return
                     }
 
-                    self.uploadedExplorationCellIDs = Set(
-                        snapshot.documents
-                            .map(\.documentID)
-                            .filter(Self.isValidH3CellID)
-                    )
-                    self.hasLoadedOwnExploration = true
+                    if self.hasLoadedOwnExploration {
+                        for change in snapshot.documentChanges {
+                            let cellID = change.document.documentID
+                            guard Self.isValidH3CellID(cellID) else { continue }
+
+                            switch change.type {
+                            case .added, .modified:
+                                self.uploadedExplorationCellIDs.insert(cellID)
+                                if !self.uploadingExplorationCellIDs.contains(cellID) {
+                                    self.pendingExplorationCellIDs.remove(cellID)
+                                }
+                            case .removed:
+                                self.uploadedExplorationCellIDs.remove(cellID)
+                                if self.desiredExplorationCellIDs.contains(cellID) {
+                                    self.pendingExplorationCellIDs.insert(cellID)
+                                }
+                            }
+                        }
+                    } else {
+                        self.uploadedExplorationCellIDs = Self.explorationCellIDs(
+                            in: snapshot
+                        )
+                        self.pendingExplorationCellIDs =
+                            self.desiredExplorationCellIDs.subtracting(
+                                self.uploadedExplorationCellIDs
+                            )
+                        self.hasLoadedOwnExploration = true
+                    }
                     self.uploadMissingExplorationCellsIfNeeded()
                 }
             }
@@ -941,14 +995,11 @@ final class FriendSyncService: ObservableObject {
             return
         }
 
-        let missingCellIDs = desiredExplorationCellIDs
-            .subtracting(uploadedExplorationCellIDs)
-            .sorted()
-        guard !missingCellIDs.isEmpty else { return }
+        guard !pendingExplorationCellIDs.isEmpty else { return }
 
         // Firestore batches support at most 500 writes. Leave some headroom for
         // future metadata writes without changing the batching contract.
-        let batchCellIDs = Array(missingCellIDs.prefix(450))
+        let batchCellIDs = Array(pendingExplorationCellIDs.prefix(450))
         let generation = authenticationGeneration
         let batch = db.batch()
         let collection = explorationCellsCollection(for: currentUserID)
@@ -961,6 +1012,7 @@ final class FriendSyncService: ObservableObject {
         }
 
         isUploadingExploration = true
+        uploadingExplorationCellIDs = Set(batchCellIDs)
         batch.commit { [weak self] error in
             DispatchQueue.main.async {
                 guard let self,
@@ -970,6 +1022,7 @@ final class FriendSyncService: ObservableObject {
                 }
 
                 self.isUploadingExploration = false
+                self.uploadingExplorationCellIDs = []
                 if let error {
                     self.errorMessage = self.friendlyMessage(
                         for: error,
@@ -979,6 +1032,7 @@ final class FriendSyncService: ObservableObject {
                 }
 
                 self.uploadedExplorationCellIDs.formUnion(batchCellIDs)
+                self.pendingExplorationCellIDs.subtract(batchCellIDs)
                 self.uploadMissingExplorationCellsIfNeeded()
             }
         }
@@ -991,7 +1045,9 @@ final class FriendSyncService: ObservableObject {
 
         for userID in removedUserIDs {
             explorationListeners.removeValue(forKey: userID)?.remove()
-            receivedFriendExplorationCellIDs.removeValue(forKey: userID)
+            if receivedFriendExplorationCellIDs.removeValue(forKey: userID) != nil {
+                friendExplorationRevision &+= 1
+            }
         }
 
         for userID in acceptedUserIDs where explorationListeners[userID] == nil {
@@ -1015,14 +1071,58 @@ final class FriendSyncService: ObservableObject {
                         }
 
                         guard let snapshot else { return }
-                        self.receivedFriendExplorationCellIDs[userID] = Set(
-                            snapshot.documents
-                                .map(\.documentID)
-                                .filter(Self.isValidH3CellID)
-                        )
+
+                        if var cellIDs = self.receivedFriendExplorationCellIDs[userID] {
+                            guard Self.applyExplorationChanges(
+                                from: snapshot,
+                                to: &cellIDs
+                            ) else {
+                                return
+                            }
+                            self.receivedFriendExplorationCellIDs[userID] = cellIDs
+                        } else {
+                            self.receivedFriendExplorationCellIDs[userID] =
+                                Self.explorationCellIDs(in: snapshot)
+                        }
+                        self.friendExplorationRevision &+= 1
                     }
                 }
         }
+    }
+
+    private static func explorationCellIDs(
+        in snapshot: QuerySnapshot
+    ) -> Set<String> {
+        Set(
+            snapshot.documents
+                .map(\.documentID)
+                .filter(Self.isValidH3CellID)
+        )
+    }
+
+    @discardableResult
+    private static func applyExplorationChanges(
+        from snapshot: QuerySnapshot,
+        to cellIDs: inout Set<String>
+    ) -> Bool {
+        var didChange = false
+
+        for change in snapshot.documentChanges {
+            let cellID = change.document.documentID
+
+            switch change.type {
+            case .added, .modified:
+                if Self.isValidH3CellID(cellID) {
+                    didChange = cellIDs.insert(cellID).inserted || didChange
+                } else {
+                    didChange = cellIDs.remove(cellID) != nil || didChange
+                }
+            case .removed:
+                didChange = cellIDs.remove(cellID) != nil || didChange
+            }
+        }
+
+        return didChange
     }
 
     private func explorationCellsCollection(for userID: String) -> CollectionReference {

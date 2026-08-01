@@ -42,6 +42,11 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var discoveredCells: [DiscoveredCell] = []
     @Published var currentH3CellID: String?
     @Published var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
+    @Published private(set) var heatMapRevision = 0
+
+    var discoveredCellIDs: Set<String> {
+        cellStore.cellIDs
+    }
 
     /// Newly discovered cell IDs from the most recent local processing pass.
     /// The complete local set is mirrored to Firebase by `FriendSyncService`
@@ -105,6 +110,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             }
         }
         heatMapCellData = data
+        heatMapRevision &+= 1
     }
 
     // MARK: - Debug info
@@ -182,14 +188,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         UserDefaults.standard.set(true, forKey: trackingEnabledKey)
         trackingEnabled = true
 
-        guard CLLocationManager.locationServicesEnabled() else {
-            lastError = "Les services de localisation sont désactivés sur cet appareil."
-            isTracking = false
-            trackingEnabled = false
-            UserDefaults.standard.set(false, forKey: trackingEnabledKey)
-            return
-        }
-
         switch authorizationStatus {
         case .notDetermined:
             shouldStartAfterPermission = true
@@ -250,7 +248,11 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         currentH3CellID = nil
         newlyDiscoveredCellIDs = []
         discoveredCells = []
+        let hadHeatMapData = !heatMapCellData.isEmpty
         heatMapCellData = [:]
+        if hadHeatMapData {
+            heatMapRevision &+= 1
+        }
         locationsReceived = 0
         visitsReceived = 0
         lastSegmentDistance = nil
@@ -270,14 +272,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         let status = locationManager.authorizationStatus
         guard status == .authorizedAlways || status == .authorizedWhenInUse else {
             isTracking = false
-            return
-        }
-
-        guard CLLocationManager.locationServicesEnabled() else {
-            isTracking = false
-            trackingEnabled = false
-            lastError = "Les services de localisation sont désactivés sur cet appareil."
-            UserDefaults.standard.set(false, forKey: trackingEnabledKey)
             return
         }
 
@@ -470,8 +464,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             to: location
         )
 
-        let existingBefore = Set(cellStore.cells.map { $0.id })
-        let newIDs = discoveredIDs.subtracting(existingBefore)
+        let newIDs = discoveredIDs.subtracting(cellStore.cellIDs)
 
         let newCells = cellStore.upsertMany(
             cellIDs: discoveredIDs,
@@ -577,10 +570,19 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        let message = error.localizedDescription
+        let locationError = error as? CLError
+        let message = locationError?.code == .denied
+            ? "La localisation est indisponible ou son accès a été refusé."
+            : error.localizedDescription
 
         Task { @MainActor [weak self] in
-            self?.lastError = message
+            guard let self else { return }
+            if locationError?.code == .denied {
+                self.isTracking = false
+                self.trackingEnabled = false
+                UserDefaults.standard.set(false, forKey: self.trackingEnabledKey)
+            }
+            self.lastError = message
         }
         print("[LocationTracker] error: \(message)")
     }
