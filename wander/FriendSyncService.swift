@@ -434,6 +434,69 @@ final class FriendSyncService: ObservableObject {
         }
     }
 
+    func removeFriend(userID: String) {
+        guard !isProcessingFriendAction else { return }
+        guard let currentUserID,
+              let friendship = friendshipRecords.values.first(where: { record in
+                  record.status == "accepted"
+                      && record.otherUserID(for: currentUserID) == userID
+              }) else {
+            errorMessage = "Cette relation d’amitié n’est plus disponible."
+            return
+        }
+
+        isProcessingFriendAction = true
+        let generation = authenticationGeneration
+        let reference = db.collection("friendships").document(friendship.pairID)
+
+        db.runTransaction({ transaction, errorPointer -> Any? in
+            do {
+                let snapshot = try transaction.getDocument(reference)
+                guard snapshot.exists else {
+                    return "removed"
+                }
+                guard let data = snapshot.data(),
+                      data["status"] as? String == "accepted",
+                      let participants = data["participants"] as? [String],
+                      participants.count == 2,
+                      participants.contains(currentUserID),
+                      participants.contains(userID) else {
+                    return "invalid"
+                }
+
+                transaction.deleteDocument(reference)
+                return "removed"
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+        }) { [weak self] result, error in
+            DispatchQueue.main.async {
+                guard let self,
+                      self.currentUserID == currentUserID,
+                      self.authenticationGeneration == generation else {
+                    return
+                }
+                self.isProcessingFriendAction = false
+
+                if let error {
+                    self.errorMessage = self.friendlyMessage(
+                        for: error,
+                        fallback: "Impossible de supprimer cet ami."
+                    )
+                } else if result as? String == "removed" {
+                    if self.friendshipRecords[friendship.pairID]?.status == "accepted" {
+                        self.friendshipRecords.removeValue(forKey: friendship.pairID)
+                        self.reconcileRelatedListeners()
+                        self.rebuildPublishedRelationships()
+                    }
+                } else {
+                    self.errorMessage = "Cette relation d’amitié n’est plus disponible."
+                }
+            }
+        }
+    }
+
     func updateLocation(_ location: CLLocation, displayName: String) {
         guard location.horizontalAccuracy > 0,
               location.horizontalAccuracy <= 1_000,

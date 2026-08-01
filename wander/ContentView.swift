@@ -366,6 +366,8 @@ private struct FriendsView: View {
 
     @State private var friendCodeInput = ""
     @State private var processingRequestID: String?
+    @State private var processingFriendUserID: String?
+    @State private var friendPendingRemoval: FriendMapSummary?
 
     var body: some View {
         NavigationStack {
@@ -477,21 +479,40 @@ private struct FriendsView: View {
                     } else {
                         ForEach(friends) { friend in
                             HStack {
-                                FriendRow(friend: friend)
-
-                                Spacer()
-
                                 if friend.canShowOnMap {
                                     Button {
                                         onShowOnMap(friend)
                                     } label: {
-                                        Image(systemName: "map")
+                                        FriendRow(friend: friend)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.borderless)
+                                    .buttonStyle(.plain)
                                     .accessibilityLabel(
                                         "Afficher \(friend.displayName) sur la carte"
                                     )
+                                } else {
+                                    FriendRow(friend: friend)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
+
+                                if processingFriendUserID == friend.userID {
+                                    ProgressView()
+                                }
+                            }
+                            .swipeActions(
+                                edge: .trailing,
+                                allowsFullSwipe: false
+                            ) {
+                                Button(role: .destructive) {
+                                    friendPendingRemoval = friend
+                                } label: {
+                                    Label(
+                                        "Retirer",
+                                        systemImage: "person.badge.minus"
+                                    )
+                                }
+                                .disabled(service.isProcessingFriendAction)
                             }
                         }
                     }
@@ -513,6 +534,21 @@ private struct FriendsView: View {
             }
             .navigationTitle("Amis")
             .alert(
+                removalAlertTitle,
+                isPresented: removalAlertIsPresented,
+                presenting: friendPendingRemoval
+            ) { friend in
+                Button("Retirer", role: .destructive) {
+                    remove(friend)
+                }
+                Button("Annuler", role: .cancel) {}
+            } message: { _ in
+                Text(
+                    "Vous disparaîtrez tous les deux de la liste d’amis de l’autre. "
+                        + "Il faudra envoyer une nouvelle demande pour redevenir amis."
+                )
+            }
+            .alert(
                 "Impossible de terminer l’action",
                 isPresented: errorIsPresented
             ) {
@@ -523,6 +559,7 @@ private struct FriendsView: View {
             .onChange(of: service.isProcessingFriendAction) { _, isProcessing in
                 if !isProcessing {
                     processingRequestID = nil
+                    processingFriendUserID = nil
                 }
             }
         }
@@ -539,6 +576,26 @@ private struct FriendsView: View {
                 }
             }
         )
+    }
+
+    private var removalAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: {
+                friendPendingRemoval != nil
+            },
+            set: { isPresented in
+                if !isPresented {
+                    friendPendingRemoval = nil
+                }
+            }
+        )
+    }
+
+    private var removalAlertTitle: String {
+        guard let friendPendingRemoval else {
+            return "Retirer cet ami ?"
+        }
+        return "Retirer \(friendPendingRemoval.displayName) de tes amis ?"
     }
 
     private func shareMessage(for friendCode: String) -> String {
@@ -575,6 +632,15 @@ private struct FriendsView: View {
             processingRequestID = nil
         }
     }
+
+    private func remove(_ friend: FriendMapSummary) {
+        processingFriendUserID = friend.userID
+        service.removeFriend(userID: friend.userID)
+
+        if !service.isProcessingFriendAction {
+            processingFriendUserID = nil
+        }
+    }
 }
 
 private struct FriendRow: View {
@@ -601,30 +667,57 @@ private struct FriendRow: View {
                 Text(friend.displayName)
                     .font(.body.weight(.medium))
 
-                statusLabel
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    statusLabel(relativeTo: context.date)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(.vertical, 2)
     }
 
     @ViewBuilder
-    private var statusLabel: some View {
+    private func statusLabel(relativeTo referenceDate: Date) -> some View {
         if let sampledAt = friend.locationSampledAt {
-            HStack(spacing: 0) {
-                Text("Position ")
-                Text(sampledAt, style: .relative)
-                if let explorationText = explorationStatusText {
-                    Text(" · \(explorationText)")
-                }
-            }
+            Text(
+                [
+                    positionStatusText(sampledAt, relativeTo: referenceDate),
+                    explorationStatusText
+                ]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+            )
         } else if let explorationText = explorationStatusText {
             Text(explorationText)
         } else {
             Text("Position indisponible")
         }
     }
+
+    private func positionStatusText(
+        _ sampledAt: Date,
+        relativeTo referenceDate: Date
+    ) -> String {
+        let age = referenceDate.timeIntervalSince(sampledAt)
+        guard age >= 60 else {
+            return "Dernière position à l’instant"
+        }
+
+        let relativeText = Self.relativePositionFormatter.localizedString(
+            for: sampledAt,
+            relativeTo: referenceDate
+        )
+        return "Dernière position \(relativeText)"
+    }
+
+    private static let relativePositionFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.dateTimeStyle = .numeric
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
 
     private var explorationStatusText: String? {
         switch friend.cellCount {
