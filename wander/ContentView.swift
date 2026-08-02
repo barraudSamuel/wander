@@ -23,6 +23,7 @@ private struct FriendMapSummary: Identifiable, Hashable {
     let displayName: String
     let profileColorHex: String
     let locationSampledAt: Date?
+    let spotEnteredAt: Date?
     let cellCount: Int
 
     var id: String { userID }
@@ -150,7 +151,8 @@ struct ContentView: View {
 
             friendSyncService.updateLocation(
                 location,
-                displayName: displayName.isEmpty ? "Explorer" : displayName
+                displayName: displayName.isEmpty ? "Explorer" : displayName,
+                spotEnteredAt: locationTracker.currentSpotEnteredAt
             )
         }
         .onChange(of: locationTracker.trackingEnabled, initial: true) { _, isEnabled in
@@ -325,6 +327,7 @@ struct ContentView: View {
                             ?? friend.profileColorHex
                     ) ?? ProfileColor.generatedHex(seed: friend.userID),
                     locationSampledAt: location?.sampledAt,
+                    spotEnteredAt: location?.spotEnteredAt,
                     cellCount: exploration?.cellIDs.count ?? 0
                 )
             }
@@ -745,9 +748,11 @@ private struct FriendRow: View {
     @ViewBuilder
     private func statusLabel(relativeTo referenceDate: Date) -> some View {
         if let sampledAt = friend.locationSampledAt {
+            let locationText = presenceStatusText(relativeTo: referenceDate)
+                ?? positionStatusText(sampledAt, relativeTo: referenceDate)
             Text(
                 [
-                    positionStatusText(sampledAt, relativeTo: referenceDate),
+                    locationText,
                     explorationStatusText
                 ]
                 .compactMap { $0 }
@@ -775,6 +780,43 @@ private struct FriendRow: View {
         )
         return "Dernière position \(relativeText)"
     }
+
+    private func presenceStatusText(relativeTo referenceDate: Date) -> String? {
+        guard let sampledAt = friend.locationSampledAt,
+              let enteredAt = friend.spotEnteredAt else {
+            return nil
+        }
+
+        let sampleAge = referenceDate.timeIntervalSince(sampledAt)
+        guard sampleAge >= -Self.maximumFutureTimestampSkew,
+              sampleAge <= Self.maximumPresenceSampleAge,
+              enteredAt <= sampledAt else {
+            return nil
+        }
+
+        let duration = max(0, referenceDate.timeIntervalSince(enteredAt))
+        return "Au même endroit depuis \(Self.durationText(duration))"
+    }
+
+    private static func durationText(_ duration: TimeInterval) -> String {
+        let totalMinutes = max(0, Int(duration / 60))
+        guard totalMinutes > 0 else { return "moins d’1 min" }
+
+        let days = totalMinutes / (24 * 60)
+        let hours = (totalMinutes % (24 * 60)) / 60
+        let minutes = totalMinutes % 60
+
+        if days > 0 {
+            return hours > 0 ? "\(days) j \(hours) h" : "\(days) j"
+        }
+        if hours > 0 {
+            return minutes > 0 ? "\(hours) h \(minutes) min" : "\(hours) h"
+        }
+        return "\(minutes) min"
+    }
+
+    private static let maximumPresenceSampleAge: TimeInterval = 5 * 60
+    private static let maximumFutureTimestampSkew: TimeInterval = 60
 
     private static let relativePositionFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()

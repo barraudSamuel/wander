@@ -214,8 +214,37 @@ service cloud.firestore {
           'displayName',
           'horizontalAccuracy',
           'sampledAt',
-          'updatedAt'
+          'updatedAt',
+          'spotEnteredAt',
+          'h3CellId',
+          'h3EnteredAt'
         ]);
+    }
+
+    function isValidH3CellId(cellId) {
+      return cellId is string
+        && cellId.matches('^[0-9a-f]{15}$');
+    }
+
+    function hasValidLocationPresence(data) {
+      let hasSpotEnteredAt = data.keys().hasAny(['spotEnteredAt']);
+      let hasLegacyPresence =
+        data.keys().hasAny(['h3CellId', 'h3EnteredAt']);
+
+      return (!hasSpotEnteredAt && !hasLegacyPresence)
+        || (
+          hasSpotEnteredAt
+          && !hasLegacyPresence
+          && data.spotEnteredAt is timestamp
+          && data.spotEnteredAt <= data.sampledAt
+        )
+        || (
+          !hasSpotEnteredAt
+          && data.keys().hasAll(['h3CellId', 'h3EnteredAt'])
+          && isValidH3CellId(data.h3CellId)
+          && data.h3EnteredAt is timestamp
+          && data.h3EnteredAt <= data.sampledAt
+        );
     }
 
     function isValidLocation(data) {
@@ -233,12 +262,8 @@ service cloud.firestore {
         && data.sampledAt > request.time - duration.value(5, 'm')
         && data.sampledAt <= request.time + duration.value(1, 'm')
         && data.updatedAt is timestamp
-        && data.updatedAt == request.time;
-    }
-
-    function isValidH3CellId(cellId) {
-      return cellId is string
-        && cellId.matches('^[0-9a-f]{15}$');
+        && data.updatedAt == request.time
+        && hasValidLocationPresence(data);
     }
 
     function isValidExplorationCell(data, cellId) {

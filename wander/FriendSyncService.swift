@@ -34,6 +34,7 @@ struct FriendLocation: Equatable {
     let sampledAt: Date
     let updatedAt: Date
     let receivedAt: Date
+    let spotEnteredAt: Date?
 
     static func == (lhs: FriendLocation, rhs: FriendLocation) -> Bool {
         lhs.userID == rhs.userID
@@ -45,6 +46,7 @@ struct FriendLocation: Equatable {
             && lhs.sampledAt == rhs.sampledAt
             && lhs.updatedAt == rhs.updatedAt
             && lhs.receivedAt == rhs.receivedAt
+            && lhs.spotEnteredAt == rhs.spotEnteredAt
     }
 }
 
@@ -151,8 +153,16 @@ final class FriendSyncService: ObservableObject {
     private var pendingExplorationCellIDs: Set<String> = []
     private var uploadingExplorationCellIDs: Set<String> = []
     private var authenticationGeneration = 0
-    private var latestLocationForSharing: (location: CLLocation, displayName: String)?
-    private var lastLocationPush: (location: CLLocation, attemptedAt: Date)?
+    private var latestLocationForSharing: (
+        location: CLLocation,
+        displayName: String,
+        spotEnteredAt: Date?
+    )?
+    private var lastLocationPush: (
+        location: CLLocation,
+        attemptedAt: Date,
+        spotEnteredAt: Date?
+    )?
     private var shouldDeleteLocationWhenAuthenticated = false
 
     private init() {
@@ -526,7 +536,11 @@ final class FriendSyncService: ObservableObject {
         }
     }
 
-    func updateLocation(_ location: CLLocation, displayName: String) {
+    func updateLocation(
+        _ location: CLLocation,
+        displayName: String,
+        spotEnteredAt: Date?
+    ) {
         guard location.horizontalAccuracy > 0,
               location.horizontalAccuracy <= 1_000,
               CLLocationCoordinate2DIsValid(location.coordinate),
@@ -535,13 +549,22 @@ final class FriendSyncService: ObservableObject {
         }
 
         let normalizedName = Self.normalizedDisplayName(displayName)
-        latestLocationForSharing = (location, normalizedName)
+        let validSpotEnteredAt = Self.validSpotEnteredAt(
+            spotEnteredAt,
+            sampledAt: location.timestamp
+        )
+        latestLocationForSharing = (
+            location,
+            normalizedName,
+            validSpotEnteredAt
+        )
         shouldDeleteLocationWhenAuthenticated = false
 
         guard let currentUserID else { return }
         writeLocation(
             location,
             displayName: normalizedName,
+            spotEnteredAt: validSpotEnteredAt,
             for: currentUserID,
             bypassThrottle: false
         )
@@ -675,6 +698,7 @@ final class FriendSyncService: ObservableObject {
             writeLocation(
                 latestLocationForSharing.location,
                 displayName: latestLocationForSharing.displayName,
+                spotEnteredAt: latestLocationForSharing.spotEnteredAt,
                 for: userID,
                 bypassThrottle: true
             )
@@ -1256,7 +1280,8 @@ final class FriendSyncService: ObservableObject {
                                 horizontalAccuracy: currentLocation.horizontalAccuracy,
                                 sampledAt: currentLocation.sampledAt,
                                 updatedAt: currentLocation.updatedAt,
-                                receivedAt: currentLocation.receivedAt
+                                receivedAt: currentLocation.receivedAt,
+                                spotEnteredAt: currentLocation.spotEnteredAt
                             )
                         }
 
@@ -1472,6 +1497,19 @@ final class FriendSyncService: ObservableObject {
                         let receivedAt = Date()
                         let sampledAt = sampledTimestamp.dateValue()
                         let updatedAt = timestamp.dateValue()
+                        let spotEnteredAt: Date?
+                        if data.keys.contains("spotEnteredAt") {
+                            spotEnteredAt = Self.validSpotEnteredAt(
+                                (data["spotEnteredAt"] as? Timestamp)?.dateValue(),
+                                sampledAt: sampledAt
+                            )
+                        } else {
+                            spotEnteredAt = Self.validLegacySpotEnteredAt(
+                                cellID: data["h3CellId"] as? String,
+                                enteredAt: (data["h3EnteredAt"] as? Timestamp)?.dateValue(),
+                                sampledAt: sampledAt
+                            )
+                        }
 
                         let profile = self.profilesByUserID[userID]
                         let displayName = profile?.displayName
@@ -1494,7 +1532,8 @@ final class FriendSyncService: ObservableObject {
                             horizontalAccuracy: accuracy.doubleValue,
                             sampledAt: sampledAt,
                             updatedAt: updatedAt,
-                            receivedAt: receivedAt
+                            receivedAt: receivedAt,
+                            spotEnteredAt: spotEnteredAt
                         )
                         self.receivedFriendLocations[userID] = friendLocation
                     }
@@ -1519,6 +1558,7 @@ final class FriendSyncService: ObservableObject {
     private func writeLocation(
         _ location: CLLocation,
         displayName: String,
+        spotEnteredAt: Date?,
         for userID: String,
         bypassThrottle: Bool
     ) {
@@ -1528,35 +1568,42 @@ final class FriendSyncService: ObservableObject {
         }
 
         let now = Date()
+        let validSpotEnteredAt = Self.validSpotEnteredAt(
+            spotEnteredAt,
+            sampledAt: location.timestamp
+        )
         if !bypassThrottle, let lastLocationPush {
             let distance = location.distance(from: lastLocationPush.location)
             let elapsed = now.timeIntervalSince(lastLocationPush.attemptedAt)
-            if distance < minimumLocationPushDistance
+            if validSpotEnteredAt == lastLocationPush.spotEnteredAt
+                && distance < minimumLocationPushDistance
                 && elapsed < minimumLocationPushInterval {
                 return
             }
         }
 
-        lastLocationPush = (location, now)
-        let attemptedLocationTimestamp = location.timestamp
-        db.collection("locations").document(userID).setData(
-            [
-                "location": GeoPoint(
-                    latitude: location.coordinate.latitude,
-                    longitude: location.coordinate.longitude
-                ),
-                "displayName": displayName,
-                "horizontalAccuracy": location.horizontalAccuracy,
-                "sampledAt": Timestamp(date: location.timestamp),
-                "updatedAt": FieldValue.serverTimestamp()
-            ]
-        ) { [weak self] error in
+        lastLocationPush = (location, now, validSpotEnteredAt)
+        let attemptedAt = now
+        var data: [String: Any] = [
+            "location": GeoPoint(
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude
+            ),
+            "displayName": displayName,
+            "horizontalAccuracy": location.horizontalAccuracy,
+            "sampledAt": Timestamp(date: location.timestamp),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        if let validSpotEnteredAt {
+            data["spotEnteredAt"] = Timestamp(date: validSpotEnteredAt)
+        }
+
+        db.collection("locations").document(userID).setData(data) { [weak self] error in
             DispatchQueue.main.async {
                 guard let self, self.currentUserID == userID else { return }
 
                 if let error {
-                    if self.lastLocationPush?.location.timestamp
-                        == attemptedLocationTimestamp {
+                    if self.lastLocationPush?.attemptedAt == attemptedAt {
                         self.lastLocationPush = nil
                     }
                     self.errorMessage = self.friendlyMessage(
@@ -1683,5 +1730,33 @@ final class FriendSyncService: ObservableObject {
         guard cellID.count == 15 else { return false }
         let allowedCharacters = Set("0123456789abcdef")
         return cellID.allSatisfy { allowedCharacters.contains($0) }
+    }
+
+    nonisolated private static func validSpotEnteredAt(
+        _ enteredAt: Date?,
+        sampledAt: Date
+    ) -> Date? {
+        guard let enteredAt,
+              enteredAt.timeIntervalSinceReferenceDate.isFinite,
+              enteredAt <= sampledAt else {
+            return nil
+        }
+        return enteredAt
+    }
+
+    nonisolated private static func validLegacySpotEnteredAt(
+        cellID: String?,
+        enteredAt: Date?,
+        sampledAt: Date
+    ) -> Date? {
+        guard let cellID,
+              isValidH3CellID(cellID),
+              let enteredAt = validSpotEnteredAt(
+                  enteredAt,
+                  sampledAt: sampledAt
+              ) else {
+            return nil
+        }
+        return enteredAt
     }
 }

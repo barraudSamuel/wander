@@ -23,6 +23,8 @@ struct MapUserCalloutInfo: Equatable {
     let cityProgress: CityProgress?
     let totalExploredCellCount: Int
     let locationSampledAt: Date?
+    let spotEnteredAt: Date?
+    let keepsSpotDurationVisible: Bool
 }
 
 final class UserLocationAnnotation: MKPointAnnotation {}
@@ -31,17 +33,170 @@ final class FriendLocationAnnotation: MKPointAnnotation {
     var userID = ""
 }
 
+private final class CircularDurationView: UIView {
+    private static let rotationAnimationKey = "wander.circularDuration.rotation"
+    private var isRotationRequested = false
+
+    var text: String? {
+        didSet {
+            guard text != oldValue else { return }
+            setNeedsDisplay()
+        }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureView()
+    }
+
+    private func configureView() {
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = false
+        accessibilityElementsHidden = true
+        contentMode = .redraw
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(reduceMotionStatusDidChange),
+            name: UIAccessibility.reduceMotionStatusDidChangeNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateRotationAnimation()
+    }
+
+    func setRotationEnabled(_ isEnabled: Bool) {
+        guard isRotationRequested != isEnabled else { return }
+        isRotationRequested = isEnabled
+        updateRotationAnimation()
+    }
+
+    @objc private func reduceMotionStatusDidChange() {
+        updateRotationAnimation()
+    }
+
+    private func updateRotationAnimation() {
+        let shouldRotate = isRotationRequested
+            && window != nil
+            && !UIAccessibility.isReduceMotionEnabled
+
+        guard shouldRotate else {
+            layer.removeAnimation(forKey: Self.rotationAnimationKey)
+            return
+        }
+        guard layer.animation(forKey: Self.rotationAnimationKey) == nil else {
+            return
+        }
+
+        let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
+        rotation.fromValue = 0
+        rotation.toValue = 2 * CGFloat.pi
+        rotation.duration = 24
+        rotation.repeatCount = .infinity
+        rotation.timingFunction = CAMediaTimingFunction(name: .linear)
+        layer.add(rotation, forKey: Self.rotationAnimationKey)
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let text, !text.isEmpty else { return }
+
+        let baseFont = UIFont.systemFont(ofSize: 11, weight: .black)
+        let font = baseFont.fontDescriptor.withDesign(.rounded).map {
+            UIFont(descriptor: $0, size: 11)
+        } ?? baseFont
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: UIColor(
+                red: 0.08,
+                green: 0.08,
+                blue: 0.12,
+                alpha: 1
+            ),
+            .strokeColor: UIColor.white.withAlphaComponent(0.94),
+            .strokeWidth: -4.5,
+            .kern: 0.25
+        ]
+        let unit = "\(text)  •  "
+        let unitWidth = max(
+            1,
+            (unit as NSString).size(withAttributes: attributes).width
+        )
+        let radius = min(bounds.width, bounds.height) / 2
+            - font.lineHeight * 0.56
+            - 3
+        guard radius > 0 else { return }
+
+        let circumference = 2 * CGFloat.pi * radius
+        let repeatCount = max(2, Int((circumference / unitWidth).rounded()))
+        let circularText = String(repeating: unit, count: repeatCount)
+        let glyphs = circularText.map(String.init)
+        let glyphWidths = glyphs.map {
+            max(1, ($0 as NSString).size(withAttributes: attributes).width)
+        }
+        let totalWidth = glyphWidths.reduce(0, +)
+        guard totalWidth > 0 else { return }
+
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let radiansPerPoint = 2 * CGFloat.pi / totalWidth
+        var angle = -CGFloat.pi / 2
+
+        for (glyph, glyphWidth) in zip(glyphs, glyphWidths) {
+            let advance = glyphWidth * radiansPerPoint
+            angle += advance / 2
+
+            let glyphCenter = CGPoint(
+                x: center.x + cos(angle) * radius,
+                y: center.y + sin(angle) * radius
+            )
+            let drawingPoint = CGPoint(
+                x: -glyphWidth / 2,
+                y: -font.lineHeight / 2
+            )
+
+            guard let context = UIGraphicsGetCurrentContext() else { return }
+            context.saveGState()
+            context.translateBy(x: glyphCenter.x, y: glyphCenter.y)
+            context.rotate(by: angle + CGFloat.pi / 2)
+            context.setShadow(
+                offset: CGSize(width: 0, height: 1),
+                blur: 1.5,
+                color: UIColor.black.withAlphaComponent(0.22).cgColor
+            )
+            (glyph as NSString).draw(at: drawingPoint, withAttributes: attributes)
+            context.restoreGState()
+
+            angle += advance / 2
+        }
+    }
+}
+
 final class UserLocationAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "UserLocationAnnotation"
     static let friendReuseIdentifier = "FriendLocationAnnotation"
 
     private let markerRingView = UIView()
+    private let presenceHaloView = UIView()
+    private let circularDurationView = CircularDurationView()
     private let avatarImageView = UIImageView()
     private let fallbackLabel = UILabel()
     private var configuredAvatarImageData: Data?
     private var configuredDisplayName: String?
     private var configuredProfileColorHex: String?
     private var configuredCalloutInfo: MapUserCalloutInfo?
+    private var presenceRefreshTimer: Timer?
+    private var showsPresenceDuration = false
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -56,7 +211,21 @@ final class UserLocationAnnotationView: MKAnnotationView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        let markerSize: CGFloat = 32
+        circularDurationView.frame = bounds
+
+        let markerSize: CGFloat = showsPresenceDuration ? 48 : 32
+        let haloSize: CGFloat = showsPresenceDuration ? 66 : markerSize
+        presenceHaloView.frame = CGRect(
+            x: (bounds.width - haloSize) / 2,
+            y: (bounds.height - haloSize) / 2,
+            width: haloSize,
+            height: haloSize
+        )
+        presenceHaloView.layer.cornerRadius = haloSize / 2
+        presenceHaloView.layer.shadowPath = UIBezierPath(
+            ovalIn: presenceHaloView.bounds
+        ).cgPath
+
         markerRingView.frame = CGRect(
             x: (bounds.width - markerSize) / 2,
             y: (bounds.height - markerSize) / 2,
@@ -76,6 +245,32 @@ final class UserLocationAnnotationView: MKAnnotationView {
         avatarImageView.layer.cornerRadius = avatarImageView.bounds.width / 2
         fallbackLabel.frame = avatarImageView.frame
         fallbackLabel.layer.cornerRadius = fallbackLabel.bounds.width / 2
+        fallbackLabel.font = .systemFont(
+            ofSize: showsPresenceDuration ? 22 : 18,
+            weight: .black
+        )
+    }
+
+    override var isSelected: Bool {
+        didSet {
+            guard isSelected != oldValue else { return }
+
+            if isSelected {
+                refreshPresencePresentation()
+                refreshCallout()
+            }
+        }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        stopPresenceRefreshTimer()
+        configuredCalloutInfo = nil
+        setCircularDurationText(nil)
+    }
+
+    deinit {
+        presenceRefreshTimer?.invalidate()
     }
 
     func configure(
@@ -90,6 +285,9 @@ final class UserLocationAnnotationView: MKAnnotationView {
             let profileColor = ProfileColor.uiColor(hex: profileColorHex)
             markerRingView.backgroundColor = profileColor
             markerRingView.layer.shadowColor = profileColor.cgColor
+            presenceHaloView.backgroundColor = profileColor.withAlphaComponent(0.16)
+            presenceHaloView.layer.borderColor = profileColor.withAlphaComponent(0.62).cgColor
+            presenceHaloView.layer.shadowColor = profileColor.cgColor
             fallbackLabel.backgroundColor = profileColor
             fallbackLabel.textColor = markerForegroundColor(for: profileColor)
 
@@ -115,12 +313,83 @@ final class UserLocationAnnotationView: MKAnnotationView {
         }
 
         if configuredCalloutInfo != calloutInfo {
-            detailCalloutAccessoryView = makeCalloutDetailView(for: calloutInfo)
+            configuredCalloutInfo = calloutInfo
+            refreshPresencePresentation()
+            refreshCallout()
             accessibilityLabel = "\(calloutInfo.displayName), \(calloutInfo.relationshipText)"
             accessibilityHint = "Touchez pour afficher les informations d’exploration"
             accessibilityTraits = .button
-            configuredCalloutInfo = calloutInfo
         }
+    }
+
+    private func ensurePresenceRefreshTimer() {
+        guard presenceRefreshTimer == nil else { return }
+
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            self?.refreshPresencePresentation()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        presenceRefreshTimer = timer
+    }
+
+    private func stopPresenceRefreshTimer() {
+        presenceRefreshTimer?.invalidate()
+        presenceRefreshTimer = nil
+    }
+
+    private func refreshPresencePresentation() {
+        guard let configuredCalloutInfo else {
+            setCircularDurationText(nil)
+            stopPresenceRefreshTimer()
+            return
+        }
+
+        let referenceDate = Date()
+        let circularText = Self.circularDurationText(
+            enteredAt: configuredCalloutInfo.spotEnteredAt,
+            sampledAt: configuredCalloutInfo.locationSampledAt,
+            relativeTo: referenceDate,
+            keepsSpotDurationVisible: configuredCalloutInfo.keepsSpotDurationVisible
+        )
+        let didChange = circularDurationView.text != circularText
+        setCircularDurationText(circularText)
+        accessibilityValue = Self.presenceText(
+            enteredAt: configuredCalloutInfo.spotEnteredAt,
+            sampledAt: configuredCalloutInfo.locationSampledAt,
+            relativeTo: referenceDate,
+            keepsSpotDurationVisible: configuredCalloutInfo.keepsSpotDurationVisible
+        )
+
+        if circularText == nil {
+            stopPresenceRefreshTimer()
+        } else {
+            ensurePresenceRefreshTimer()
+        }
+
+        if isSelected, didChange {
+            refreshCallout()
+        }
+    }
+
+    private func setCircularDurationText(_ text: String?) {
+        let shouldShow = text != nil
+        circularDurationView.text = text
+        circularDurationView.isHidden = !shouldShow
+        circularDurationView.setRotationEnabled(shouldShow)
+        presenceHaloView.isHidden = !shouldShow
+
+        guard showsPresenceDuration != shouldShow else { return }
+        showsPresenceDuration = shouldShow
+        let viewSize: CGFloat = shouldShow ? 112 : 44
+        bounds = CGRect(x: 0, y: 0, width: viewSize, height: viewSize)
+        setNeedsLayout()
+    }
+
+    private func refreshCallout() {
+        guard let configuredCalloutInfo else { return }
+        detailCalloutAccessoryView = makeCalloutDetailView(
+            for: configuredCalloutInfo
+        )
     }
 
     private func configureView() {
@@ -131,6 +400,17 @@ final class UserLocationAnnotationView: MKAnnotationView {
         collisionMode = .none
         displayPriority = .required
         isAccessibilityElement = true
+
+        circularDurationView.isHidden = true
+        addSubview(circularDurationView)
+
+        presenceHaloView.isHidden = true
+        presenceHaloView.isUserInteractionEnabled = false
+        presenceHaloView.layer.borderWidth = 2
+        presenceHaloView.layer.shadowOpacity = 0.34
+        presenceHaloView.layer.shadowRadius = 10
+        presenceHaloView.layer.shadowOffset = .zero
+        addSubview(presenceHaloView)
 
         markerRingView.layer.borderColor = UIColor.white.cgColor
         markerRingView.layer.borderWidth = 1.5
@@ -216,6 +496,25 @@ final class UserLocationAnnotationView: MKAnnotationView {
             )
         )
 
+        let presenceText = Self.presenceText(
+            enteredAt: info.spotEnteredAt,
+            sampledAt: info.locationSampledAt,
+            relativeTo: Date(),
+            keepsSpotDurationVisible: info.keepsSpotDurationVisible
+        )
+        if let presenceText {
+            content.append(NSAttributedString(string: "\n"))
+            content.append(
+                NSAttributedString(
+                    string: presenceText,
+                    attributes: [
+                        .font: UIFont.preferredFont(forTextStyle: .caption1),
+                        .foregroundColor: UIColor.secondaryLabel
+                    ]
+                )
+            )
+        }
+
         if let locationText = Self.locationText(sampledAt: info.locationSampledAt) {
             content.append(NSAttributedString(string: "\n"))
             content.append(
@@ -234,6 +533,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
             info.relationshipText,
             progressText,
             progressDetailText,
+            presenceText,
             Self.locationText(sampledAt: info.locationSampledAt)
         ]
         .compactMap { $0 }
@@ -261,6 +561,89 @@ final class UserLocationAnnotationView: MKAnnotationView {
 
         return "Dernière position le \(positionDateTimeFormatter.string(from: sampledAt))"
     }
+
+    private static func presenceText(
+        enteredAt: Date?,
+        sampledAt: Date?,
+        relativeTo referenceDate: Date,
+        keepsSpotDurationVisible: Bool
+    ) -> String? {
+        guard let duration = presenceDuration(
+            enteredAt: enteredAt,
+            sampledAt: sampledAt,
+            relativeTo: referenceDate,
+            keepsSpotDurationVisible: keepsSpotDurationVisible
+        ) else { return nil }
+        return "Au même endroit depuis \(durationText(duration))"
+    }
+
+    private static func circularDurationText(
+        enteredAt: Date?,
+        sampledAt: Date?,
+        relativeTo referenceDate: Date,
+        keepsSpotDurationVisible: Bool
+    ) -> String? {
+        guard let duration = presenceDuration(
+            enteredAt: enteredAt,
+            sampledAt: sampledAt,
+            relativeTo: referenceDate,
+            keepsSpotDurationVisible: keepsSpotDurationVisible
+        ) else { return nil }
+
+        let totalMinutes = max(0, Int(duration / 60))
+        guard totalMinutes > 0 else { return "<1 MIN" }
+
+        let days = totalMinutes / (24 * 60)
+        let hours = (totalMinutes % (24 * 60)) / 60
+        let minutes = totalMinutes % 60
+
+        if days > 0 {
+            return hours > 0 ? "\(days) J \(hours) H" : "\(days) J"
+        }
+        if hours > 0 {
+            return minutes > 0
+                ? "\(hours) H \(minutes) MIN"
+                : "\(hours) H"
+        }
+        return "\(minutes) MIN"
+    }
+
+    private static func presenceDuration(
+        enteredAt: Date?,
+        sampledAt: Date?,
+        relativeTo referenceDate: Date,
+        keepsSpotDurationVisible: Bool
+    ) -> TimeInterval? {
+        guard let enteredAt, let sampledAt else { return nil }
+
+        let sampleAge = referenceDate.timeIntervalSince(sampledAt)
+        guard sampleAge >= -maximumFutureTimestampSkew,
+              (keepsSpotDurationVisible || sampleAge < maximumPresenceSampleAge),
+              enteredAt <= sampledAt else {
+            return nil
+        }
+        return max(0, referenceDate.timeIntervalSince(enteredAt))
+    }
+
+    private static func durationText(_ duration: TimeInterval) -> String {
+        let totalMinutes = max(0, Int(duration / 60))
+        guard totalMinutes > 0 else { return "moins d’1 min" }
+
+        let days = totalMinutes / (24 * 60)
+        let hours = (totalMinutes % (24 * 60)) / 60
+        let minutes = totalMinutes % 60
+
+        if days > 0 {
+            return hours > 0 ? "\(days) j \(hours) h" : "\(days) j"
+        }
+        if hours > 0 {
+            return minutes > 0 ? "\(hours) h \(minutes) min" : "\(hours) h"
+        }
+        return "\(minutes) min"
+    }
+
+    private static let maximumPresenceSampleAge: TimeInterval = 5 * 60
+    private static let maximumFutureTimestampSkew: TimeInterval = 60
 
     private static let positionTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -626,7 +1009,10 @@ struct MapWithFogView: UIViewRepresentable {
             isExplorationLoaded: true,
             cityProgress: userExplorationProgress,
             totalExploredCellCount: discoveredCellIDs.count,
-            locationSampledAt: locationTracker.lastLocation?.timestamp
+            locationSampledAt: locationTracker.lastLocation?.timestamp,
+            spotEnteredAt: locationTracker.currentSpotEnteredAt,
+            keepsSpotDurationVisible:
+                locationTracker.trackingEnabled && locationTracker.isTracking
         )
         coordinator.updateUserMarkerAppearance(
             avatarImageData: userAvatarImageData,
@@ -699,7 +1085,9 @@ struct MapWithFogView: UIViewRepresentable {
                 ),
                 cityProgress: friendExplorationProgress[friendLocation.userID],
                 totalExploredCellCount: friendExploration?.cellIDs.count ?? 0,
-                locationSampledAt: friendLocation.sampledAt
+                locationSampledAt: friendLocation.sampledAt,
+                spotEnteredAt: friendLocation.spotEnteredAt,
+                keepsSpotDurationVisible: false
             )
             coordinator.friendCalloutInfoByUserID[friendLocation.userID] = calloutInfo
 
@@ -1058,7 +1446,9 @@ struct MapWithFogView: UIViewRepresentable {
                         isExplorationLoaded: true,
                         cityProgress: nil,
                         totalExploredCellCount: 0,
-                        locationSampledAt: nil
+                        locationSampledAt: nil,
+                        spotEnteredAt: nil,
+                        keepsSpotDurationVisible: false
                     )
                 )
                 return annotationView
@@ -1090,7 +1480,9 @@ struct MapWithFogView: UIViewRepresentable {
                     isExplorationLoaded: false,
                     cityProgress: nil,
                     totalExploredCellCount: 0,
-                    locationSampledAt: nil
+                    locationSampledAt: nil,
+                    spotEnteredAt: nil,
+                    keepsSpotDurationVisible: false
                 )
             configureFriendAnnotationView(
                 annotationView,

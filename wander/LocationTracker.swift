@@ -17,6 +17,47 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         case lowPower
     }
 
+    /// A normalized location fix used by the spot-presence state machine.
+    private struct SpotSample {
+        let coordinate: CLLocationCoordinate2D
+        let horizontalAccuracy: CLLocationAccuracy
+        let timestamp: Date
+
+        init?(_ location: CLLocation) {
+            guard CLLocationCoordinate2DIsValid(location.coordinate),
+                  location.horizontalAccuracy.isFinite,
+                  location.horizontalAccuracy > 0,
+                  location.timestamp.timeIntervalSinceReferenceDate.isFinite else {
+                return nil
+            }
+
+            coordinate = location.coordinate
+            horizontalAccuracy = location.horizontalAccuracy
+            timestamp = location.timestamp
+        }
+
+        func distance(to other: SpotSample) -> CLLocationDistance {
+            CLLocation(
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude
+            ).distance(
+                from: CLLocation(
+                    latitude: other.coordinate.latitude,
+                    longitude: other.coordinate.longitude
+                )
+            )
+        }
+    }
+
+    private enum SpotTransitionDecision {
+        /// The fix belongs to the current spot (or is too uncertain to leave it).
+        case remain
+        /// One confidently-outside fix is not enough; wait for a matching one.
+        case awaitConfirmation(SpotSample)
+        /// Two consecutive outside fixes agree on the same prospective spot.
+        case confirm(firstSample: SpotSample)
+    }
+
     private let locationManager = CLLocationManager()
     private let explorationEngine = ExplorationEngine()
     private let cellStore = DiscoveredCellStore()
@@ -29,6 +70,28 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     // Persistence key for the user's tracking intention.
     private let trackingEnabledKey = "trackingEnabled"
     private let backgroundTrackingEnabledKey = "backgroundTrackingEnabled"
+    private let currentSpotAnchorLatitudeKey = "currentSpotAnchorLatitude"
+    private let currentSpotAnchorLongitudeKey = "currentSpotAnchorLongitude"
+    private let currentSpotAnchorAccuracyKey = "currentSpotAnchorAccuracy"
+    private let currentSpotEnteredAtKey = "currentSpotEnteredAt"
+    private let latestProcessedSpotSampleAtKey = "latestProcessedSpotSampleAt"
+
+    /// These keys belonged to the former H3-cell presence implementation. H3 is
+    /// still exposed for discovery/debugging, but it is no longer presence state.
+    private let obsoleteH3PresenceKeys = [
+        "currentH3CellID",
+        "currentH3CellEnteredAt",
+        "currentH3CellLatestSampledAt"
+    ]
+
+    private let spotRadius: CLLocationDistance = 40
+    private let maximumSpotAccuracyAllowance: CLLocationAccuracy = 30
+    private let maximumSpotSampleAge: TimeInterval = 5 * 60
+    private let maximumSpotSampleFutureSkew: TimeInterval = 60
+
+    private var currentSpotAnchor: SpotSample?
+    private var pendingSpotCandidate: SpotSample?
+    private var latestProcessedSpotSampleAt: Date?
 
     @Published var authorizationStatus: CLAuthorizationStatus
     @Published var lastLocation: CLLocation?
@@ -40,7 +103,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var visitsReceived: Int = 0
     @Published var lastError: String?
     @Published var discoveredCells: [DiscoveredCell] = []
-    @Published var currentH3CellID: String?
+    @Published private(set) var currentH3CellID: String?
+    @Published private(set) var currentSpotEnteredAt: Date?
     @Published var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
     @Published private(set) var heatMapRevision = 0
 
@@ -76,6 +140,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         locationManager.pausesLocationUpdatesAutomatically = false
         locationManager.allowsBackgroundLocationUpdates = backgroundTrackingEnabled
         locationManager.showsBackgroundLocationIndicator = true
+        restoreCurrentSpotPresence()
     }
 
     func configure(with context: ModelContext) {
@@ -197,6 +262,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             lastError = "L’accès à la localisation est refusé ou restreint."
             trackingEnabled = false
             UserDefaults.standard.set(false, forKey: trackingEnabledKey)
+            clearCurrentPresence()
             return
         case .authorizedAlways, .authorizedWhenInUse:
             break
@@ -204,6 +270,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             lastError = "L’état de l’autorisation de localisation est inconnu."
             trackingEnabled = false
             UserDefaults.standard.set(false, forKey: trackingEnabledKey)
+            clearCurrentPresence()
             return
         }
 
@@ -219,6 +286,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         UserDefaults.standard.set(false, forKey: trackingEnabledKey)
         trackingEnabled = false
         isTracking = false
+        clearCurrentPresence()
         heatMapFlushTimer?.invalidate()
         flushHeatMapUpdates()
         locationManager.stopUpdatingLocation()
@@ -245,7 +313,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         lastLocation = nil
         previousAcceptedLocation = nil
         previousAcceptedCellID = nil
-        currentH3CellID = nil
         newlyDiscoveredCellIDs = []
         discoveredCells = []
         let hadHeatMapData = !heatMapCellData.isEmpty
@@ -264,6 +331,239 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     // MARK: - Tracking resume & modes
 
+    private func restoreCurrentSpotPresence() {
+        let defaults = UserDefaults.standard
+        removeObsoleteH3PresencePersistence(from: defaults)
+
+        let hasLocationPermission = authorizationStatus == .authorizedWhenInUse
+            || authorizationStatus == .authorizedAlways
+        guard trackingEnabled,
+              hasLocationPermission,
+              let latitude = persistedDouble(
+                  forKey: currentSpotAnchorLatitudeKey,
+                  from: defaults
+              ),
+              let longitude = persistedDouble(
+                  forKey: currentSpotAnchorLongitudeKey,
+                  from: defaults
+              ),
+              let accuracy = persistedDouble(
+                  forKey: currentSpotAnchorAccuracyKey,
+                  from: defaults
+              ),
+              let enteredAt = defaults.object(forKey: currentSpotEnteredAtKey) as? Date,
+              let latestSampleAt = defaults.object(
+                  forKey: latestProcessedSpotSampleAtKey
+              ) as? Date,
+              latitude.isFinite,
+              longitude.isFinite,
+              accuracy.isFinite,
+              accuracy > 0,
+              accuracy <= explorationEngine.maxAccuracy,
+              enteredAt.timeIntervalSinceReferenceDate.isFinite,
+              latestSampleAt.timeIntervalSinceReferenceDate.isFinite,
+              enteredAt <= latestSampleAt else {
+            clearCurrentSpotPresence()
+            return
+        }
+
+        let coordinate = CLLocationCoordinate2D(
+            latitude: latitude,
+            longitude: longitude
+        )
+        let restoredLocation = CLLocation(
+            coordinate: coordinate,
+            altitude: 0,
+            horizontalAccuracy: accuracy,
+            verticalAccuracy: -1,
+            timestamp: enteredAt
+        )
+        guard let restoredAnchor = SpotSample(restoredLocation) else {
+            clearCurrentSpotPresence()
+            return
+        }
+
+        currentSpotAnchor = restoredAnchor
+        pendingSpotCandidate = nil
+        latestProcessedSpotSampleAt = latestSampleAt
+        currentSpotEnteredAt = enteredAt
+    }
+
+    /// Advances the live spot state without deciding whether exploration should
+    /// accept the same fix. Exploration deliberately continues for every accepted
+    /// Core Location sample, including samples too old/future for presence.
+    private func updateCurrentSpotPresence(
+        with location: CLLocation,
+        receivedAt: Date
+    ) {
+        guard let sample = SpotSample(location) else { return }
+
+        // A replayed or out-of-order fix cannot roll the live spot backwards.
+        if let latestProcessedSpotSampleAt,
+           sample.timestamp <= latestProcessedSpotSampleAt {
+            return
+        }
+
+        let sampleAge = receivedAt.timeIntervalSince(sample.timestamp)
+        guard sampleAge.isFinite,
+              sampleAge <= maximumSpotSampleAge,
+              sampleAge >= -maximumSpotSampleFutureSkew else {
+            return
+        }
+
+        latestProcessedSpotSampleAt = sample.timestamp
+
+        guard let currentSpotAnchor, currentSpotEnteredAt != nil else {
+            establishCurrentSpot(at: sample, enteredAt: sample.timestamp)
+            return
+        }
+
+        let decision = spotTransitionDecision(
+            for: sample,
+            relativeTo: currentSpotAnchor,
+            pendingCandidate: pendingSpotCandidate
+        )
+
+        switch decision {
+        case .remain:
+            pendingSpotCandidate = nil
+        case .awaitConfirmation(let firstSample):
+            pendingSpotCandidate = firstSample
+        case .confirm(let firstSample):
+            // The first of the two agreeing B samples is the moment B began.
+            establishCurrentSpot(at: firstSample, enteredAt: firstSample.timestamp)
+            return
+        }
+
+        persistCurrentSpotPresence()
+    }
+
+    /// Deterministic transition scenarios:
+    /// - Repeated A samples preserve A and its original `enteredAt`, regardless of
+    ///   the time gap between fixes.
+    /// - A single stray B sample only becomes a candidate; a following A sample
+    ///   cancels it.
+    /// - Two consecutive, mutually consistent B samples confirm B, timestamped at
+    ///   the first B sample.
+    private func spotTransitionDecision(
+        for sample: SpotSample,
+        relativeTo anchor: SpotSample,
+        pendingCandidate: SpotSample?
+    ) -> SpotTransitionDecision {
+        guard isConfidentlyOutside(sample, relativeTo: anchor) else {
+            return .remain
+        }
+
+        guard let pendingCandidate else {
+            return .awaitConfirmation(sample)
+        }
+
+        guard areMutuallyConsistent(pendingCandidate, sample) else {
+            // This outside fix starts a fresh consecutive pair.
+            return .awaitConfirmation(sample)
+        }
+
+        return .confirm(firstSample: pendingCandidate)
+    }
+
+    private func isConfidentlyOutside(
+        _ sample: SpotSample,
+        relativeTo anchor: SpotSample
+    ) -> Bool {
+        let uncertainty = spotAccuracyAllowance(between: anchor, and: sample)
+        return sample.distance(to: anchor) > spotRadius + uncertainty
+    }
+
+    private func areMutuallyConsistent(
+        _ first: SpotSample,
+        _ second: SpotSample
+    ) -> Bool {
+        let uncertainty = spotAccuracyAllowance(between: first, and: second)
+        return first.distance(to: second) <= spotRadius + uncertainty
+    }
+
+    private func spotAccuracyAllowance(
+        between first: SpotSample,
+        and second: SpotSample
+    ) -> CLLocationAccuracy {
+        min(
+            max(first.horizontalAccuracy, second.horizontalAccuracy),
+            maximumSpotAccuracyAllowance
+        )
+    }
+
+    private func establishCurrentSpot(at anchor: SpotSample, enteredAt: Date) {
+        currentSpotAnchor = anchor
+        pendingSpotCandidate = nil
+        currentSpotEnteredAt = enteredAt
+        persistCurrentSpotPresence()
+    }
+
+    private func persistCurrentSpotPresence() {
+        guard let currentSpotAnchor,
+              let currentSpotEnteredAt,
+              let latestProcessedSpotSampleAt else {
+            removeCurrentSpotPresencePersistence(from: .standard)
+            return
+        }
+
+        let defaults = UserDefaults.standard
+        defaults.set(
+            currentSpotAnchor.coordinate.latitude,
+            forKey: currentSpotAnchorLatitudeKey
+        )
+        defaults.set(
+            currentSpotAnchor.coordinate.longitude,
+            forKey: currentSpotAnchorLongitudeKey
+        )
+        defaults.set(
+            currentSpotAnchor.horizontalAccuracy,
+            forKey: currentSpotAnchorAccuracyKey
+        )
+        defaults.set(currentSpotEnteredAt, forKey: currentSpotEnteredAtKey)
+        defaults.set(
+            latestProcessedSpotSampleAt,
+            forKey: latestProcessedSpotSampleAtKey
+        )
+    }
+
+    private func clearCurrentSpotPresence() {
+        currentSpotAnchor = nil
+        pendingSpotCandidate = nil
+        latestProcessedSpotSampleAt = nil
+        currentSpotEnteredAt = nil
+
+        let defaults = UserDefaults.standard
+        removeCurrentSpotPresencePersistence(from: defaults)
+        removeObsoleteH3PresencePersistence(from: defaults)
+    }
+
+    private func clearCurrentPresence() {
+        clearCurrentSpotPresence()
+        currentH3CellID = nil
+    }
+
+    private func removeCurrentSpotPresencePersistence(from defaults: UserDefaults) {
+        defaults.removeObject(forKey: currentSpotAnchorLatitudeKey)
+        defaults.removeObject(forKey: currentSpotAnchorLongitudeKey)
+        defaults.removeObject(forKey: currentSpotAnchorAccuracyKey)
+        defaults.removeObject(forKey: currentSpotEnteredAtKey)
+        defaults.removeObject(forKey: latestProcessedSpotSampleAtKey)
+    }
+
+    private func removeObsoleteH3PresencePersistence(from defaults: UserDefaults) {
+        for key in obsoleteH3PresenceKeys {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    private func persistedDouble(
+        forKey key: String,
+        from defaults: UserDefaults
+    ) -> Double? {
+        (defaults.object(forKey: key) as? NSNumber)?.doubleValue
+    }
+
     /// Resumes location services if the user previously opted in and permission is valid.
     /// Call this from app launch and when the authorization status changes.
     func resumeTrackingIfNeeded() {
@@ -272,6 +572,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         let status = locationManager.authorizationStatus
         guard status == .authorizedAlways || status == .authorizedWhenInUse else {
             isTracking = false
+            clearCurrentPresence()
             return
         }
 
@@ -340,6 +641,11 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
         Task { @MainActor in
             self.authorizationStatus = newStatus
+
+            if newStatus != .authorizedWhenInUse
+                && newStatus != .authorizedAlways {
+                self.clearCurrentPresence()
+            }
 
             if newStatus == .denied || newStatus == .restricted {
                 self.shouldStartAfterPermission = false
@@ -454,9 +760,20 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     #endif
 
     private func processAcceptedLocation(_ location: CLLocation, receivedAt: Date) {
+        // Core Location may deliver a callback that was already queued when the
+        // user stopped tracking or revoked permission.
+        guard trackingEnabled else { return }
+
         locationsReceived += 1
-        lastLocation = location
         lastError = nil
+
+        let cellID = explorationEngine.cellID(for: location)
+        updateCurrentSpotPresence(with: location, receivedAt: receivedAt)
+        currentH3CellID = cellID
+
+        // ContentView observes `lastLocation` and reads `currentSpotEnteredAt` in
+        // that callback, so the spot state must be fully updated first.
+        lastLocation = location
 
         let previous = previousAcceptedLocation
         let discoveredIDs = explorationEngine.discoveredCellIDs(
@@ -473,9 +790,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         )
 
         newlyDiscoveredCellIDs = newIDs
-
-        let cellID = explorationEngine.cellID(for: location)
-        currentH3CellID = cellID
 
         if let previous = previous, let cellID = cellID {
             let timeDelta = location.timestamp.timeIntervalSince(previous.timestamp)
@@ -581,6 +895,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 self.isTracking = false
                 self.trackingEnabled = false
                 UserDefaults.standard.set(false, forKey: self.trackingEnabledKey)
+                self.clearCurrentPresence()
             }
             self.lastError = message
         }
