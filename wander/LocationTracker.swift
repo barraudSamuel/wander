@@ -88,10 +88,17 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private let maximumSpotAccuracyAllowance: CLLocationAccuracy = 30
     private let maximumSpotSampleAge: TimeInterval = 5 * 60
     private let maximumSpotSampleFutureSkew: TimeInterval = 60
+    private let spotConfirmationRequestDelay: TimeInterval = 1.5
+    private let spotConfirmationRequestTimeout: TimeInterval = 12
+    private let maximumSpotConfirmationRequests = 2
 
     private var currentSpotAnchor: SpotSample?
     private var pendingSpotCandidate: SpotSample?
     private var latestProcessedSpotSampleAt: Date?
+    private var spotConfirmationManager: CLLocationManager?
+    private var spotConfirmationRequestWorkItem: DispatchWorkItem?
+    private var spotConfirmationTimeoutWorkItem: DispatchWorkItem?
+    private var spotConfirmationRequestCount = 0
 
     @Published var authorizationStatus: CLAuthorizationStatus
     @Published var lastLocation: CLLocation?
@@ -391,31 +398,35 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     /// Advances the live spot state without deciding whether exploration should
     /// accept the same fix. Exploration deliberately continues for every accepted
-    /// Core Location sample, including samples too old/future for presence.
+    /// Core Location sample, including samples too old/future for presence. The
+    /// return value is true only when the coordinate and duration can be published
+    /// together as one confirmed state.
     private func updateCurrentSpotPresence(
         with location: CLLocation,
         receivedAt: Date
-    ) {
-        guard let sample = SpotSample(location) else { return }
+    ) -> Bool {
+        guard let sample = SpotSample(location) else { return false }
 
         // A replayed or out-of-order fix cannot roll the live spot backwards.
         if let latestProcessedSpotSampleAt,
            sample.timestamp <= latestProcessedSpotSampleAt {
-            return
+            scheduleSpotConfirmationRequestIfNeeded()
+            return false
         }
 
         let sampleAge = receivedAt.timeIntervalSince(sample.timestamp)
         guard sampleAge.isFinite,
               sampleAge <= maximumSpotSampleAge,
               sampleAge >= -maximumSpotSampleFutureSkew else {
-            return
+            scheduleSpotConfirmationRequestIfNeeded()
+            return false
         }
 
         latestProcessedSpotSampleAt = sample.timestamp
 
         guard let currentSpotAnchor, currentSpotEnteredAt != nil else {
             establishCurrentSpot(at: sample, enteredAt: sample.timestamp)
-            return
+            return true
         }
 
         let decision = spotTransitionDecision(
@@ -427,15 +438,18 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         switch decision {
         case .remain:
             pendingSpotCandidate = nil
+            finishSpotConfirmation()
+            persistCurrentSpotPresence()
+            return true
         case .awaitConfirmation(let firstSample):
             pendingSpotCandidate = firstSample
+            scheduleSpotConfirmationRequestIfNeeded()
+            return false
         case .confirm(let firstSample):
             // The first of the two agreeing B samples is the moment B began.
             establishCurrentSpot(at: firstSample, enteredAt: firstSample.timestamp)
-            return
+            return true
         }
-
-        persistCurrentSpotPresence()
     }
 
     /// Deterministic transition scenarios:
@@ -496,7 +510,77 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         currentSpotAnchor = anchor
         pendingSpotCandidate = nil
         currentSpotEnteredAt = enteredAt
+        finishSpotConfirmation()
         persistCurrentSpotPresence()
+    }
+
+    private func scheduleSpotConfirmationRequestIfNeeded() {
+        guard pendingSpotCandidate != nil,
+              spotConfirmationRequestWorkItem == nil,
+              spotConfirmationManager == nil,
+              spotConfirmationRequestCount < maximumSpotConfirmationRequests else {
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.spotConfirmationRequestWorkItem = nil
+
+            let status = self.locationManager.authorizationStatus
+            guard self.trackingEnabled,
+                  self.pendingSpotCandidate != nil,
+                  self.trackingMode != .background || self.backgroundTrackingEnabled,
+                  status == .authorizedAlways || status == .authorizedWhenInUse else {
+                return
+            }
+
+            let manager = CLLocationManager()
+            manager.delegate = self
+            manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+            manager.distanceFilter = kCLDistanceFilterNone
+            manager.pausesLocationUpdatesAutomatically = false
+            self.spotConfirmationManager = manager
+            self.spotConfirmationRequestCount += 1
+
+            let timeoutWorkItem = DispatchWorkItem { [weak self, weak manager] in
+                guard let self, let manager,
+                      self.spotConfirmationManager === manager else {
+                    return
+                }
+                self.retrySpotConfirmationIfNeeded()
+            }
+            self.spotConfirmationTimeoutWorkItem = timeoutWorkItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + self.spotConfirmationRequestTimeout,
+                execute: timeoutWorkItem
+            )
+            manager.requestLocation()
+        }
+        spotConfirmationRequestWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + spotConfirmationRequestDelay,
+            execute: workItem
+        )
+    }
+
+    private func finishSpotConfirmation() {
+        stopSpotConfirmationRequest()
+        spotConfirmationRequestCount = 0
+    }
+
+    private func retrySpotConfirmationIfNeeded() {
+        stopSpotConfirmationRequest()
+        scheduleSpotConfirmationRequestIfNeeded()
+    }
+
+    private func stopSpotConfirmationRequest() {
+        spotConfirmationRequestWorkItem?.cancel()
+        spotConfirmationRequestWorkItem = nil
+        spotConfirmationTimeoutWorkItem?.cancel()
+        spotConfirmationTimeoutWorkItem = nil
+        spotConfirmationManager?.stopUpdatingLocation()
+        spotConfirmationManager?.delegate = nil
+        spotConfirmationManager = nil
     }
 
     private func persistCurrentSpotPresence() {
@@ -528,6 +612,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func clearCurrentSpotPresence() {
+        finishSpotConfirmation()
         currentSpotAnchor = nil
         pendingSpotCandidate = nil
         latestProcessedSpotSampleAt = nil
@@ -578,6 +663,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
         isTracking = true
         applyTrackingMode(.foreground)
+        scheduleSpotConfirmationRequestIfNeeded()
     }
 
     /// Applies accuracy/distance settings and starts or stops the appropriate location services.
@@ -586,6 +672,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         trackingMode = mode
 
         if mode == .background, !backgroundTrackingEnabled {
+            finishSpotConfirmation()
             locationManager.stopUpdatingLocation()
             locationManager.stopMonitoringSignificantLocationChanges()
             locationManager.stopMonitoringVisits()
@@ -637,6 +724,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     // MARK: - CLLocationManagerDelegate
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard manager === locationManager else { return }
         let newStatus = manager.authorizationStatus
 
         Task { @MainActor in
@@ -665,6 +753,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        let isSpotConfirmationUpdate = manager === spotConfirmationManager
         let now = Date()
         let filtered = locations
             .filter { $0.horizontalAccuracy > 0 && $0.horizontalAccuracy <= 150 }
@@ -675,6 +764,10 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
             for location in filtered {
                 self.processAcceptedLocation(location, receivedAt: now)
+            }
+
+            if isSpotConfirmationUpdate {
+                self.retrySpotConfirmationIfNeeded()
             }
         }
     }
@@ -768,12 +861,17 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         lastError = nil
 
         let cellID = explorationEngine.cellID(for: location)
-        updateCurrentSpotPresence(with: location, receivedAt: receivedAt)
+        let shouldPublishLocation = updateCurrentSpotPresence(
+            with: location,
+            receivedAt: receivedAt
+        )
         currentH3CellID = cellID
 
         // ContentView observes `lastLocation` and reads `currentSpotEnteredAt` in
         // that callback, so the spot state must be fully updated first.
-        lastLocation = location
+        if shouldPublishLocation {
+            lastLocation = location
+        }
 
         let previous = previousAcceptedLocation
         let discoveredIDs = explorationEngine.discoveredCellIDs(
@@ -884,6 +982,13 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        if manager === spotConfirmationManager {
+            Task { @MainActor [weak self] in
+                self?.retrySpotConfirmationIfNeeded()
+            }
+            return
+        }
+
         let locationError = error as? CLError
         let message = locationError?.code == .denied
             ? "La localisation est indisponible ou son accès a été refusé."

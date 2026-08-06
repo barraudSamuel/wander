@@ -22,9 +22,34 @@ struct MapUserCalloutInfo: Equatable {
     let isExplorationLoaded: Bool
     let cityProgress: CityProgress?
     let totalExploredCellCount: Int
+    let coordinate: MapUserCoordinate?
     let locationSampledAt: Date?
     let spotEnteredAt: Date?
     let keepsSpotDurationVisible: Bool
+}
+
+struct MapUserCoordinate: Equatable {
+    let latitude: CLLocationDegrees
+    let longitude: CLLocationDegrees
+
+    init(_ coordinate: CLLocationCoordinate2D) {
+        latitude = coordinate.latitude
+        longitude = coordinate.longitude
+    }
+
+    var location: CLLocation {
+        CLLocation(latitude: latitude, longitude: longitude)
+    }
+
+    func distance(to other: MapUserCoordinate) -> CLLocationDistance {
+        location.distance(from: other.location)
+    }
+
+    var cacheKey: NSString {
+        let roundedLatitude = Int((latitude * 10_000).rounded())
+        let roundedLongitude = Int((longitude * 10_000).rounded())
+        return "\(roundedLatitude):\(roundedLongitude)" as NSString
+    }
 }
 
 final class UserLocationAnnotation: MKPointAnnotation {}
@@ -197,6 +222,32 @@ final class UserLocationAnnotationView: MKAnnotationView {
     private var configuredCalloutInfo: MapUserCalloutInfo?
     private var presenceRefreshTimer: Timer?
     private var showsPresenceDuration = false
+    private var addressRequest: MKReverseGeocodingRequest?
+    private var addressCoordinate: MapUserCoordinate?
+    private var addressResolutionState = AddressResolutionState.idle
+    private var copyConfirmationResetWorkItem: DispatchWorkItem?
+    private lazy var copyAddressButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
+        button.setImage(UIImage(systemName: "doc.on.doc"), for: .normal)
+        button.accessibilityLabel = "Copier l’adresse"
+        button.accessibilityHint = "Copie la dernière adresse connue"
+        return button
+    }()
+
+    private static let addressCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 200
+        return cache
+    }()
+    private static let addressRefreshDistance: CLLocationDistance = 20
+
+    private enum AddressResolutionState {
+        case idle
+        case loading
+        case resolved(String)
+        case unavailable
+    }
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -251,26 +302,31 @@ final class UserLocationAnnotationView: MKAnnotationView {
         )
     }
 
-    override var isSelected: Bool {
-        didSet {
-            guard isSelected != oldValue else { return }
+    override func setSelected(_ selected: Bool, animated: Bool) {
+        let wasSelected = isSelected
+        super.setSelected(selected, animated: animated)
+        guard selected != wasSelected else { return }
 
-            if isSelected {
-                refreshPresencePresentation()
-                refreshCallout()
-            }
+        if selected {
+            refreshPresencePresentation()
+            refreshCallout()
+        } else {
+            pauseAddressResolution()
         }
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
         stopPresenceRefreshTimer()
+        resetAddressResolution()
         configuredCalloutInfo = nil
         setCircularDurationText(nil)
     }
 
     deinit {
         presenceRefreshTimer?.invalidate()
+        addressRequest?.cancel()
+        copyConfirmationResetWorkItem?.cancel()
     }
 
     func configure(
@@ -313,13 +369,25 @@ final class UserLocationAnnotationView: MKAnnotationView {
         }
 
         if configuredCalloutInfo != calloutInfo {
+            if shouldResetAddress(for: calloutInfo.coordinate) {
+                resetAddressResolution()
+            }
             configuredCalloutInfo = calloutInfo
             refreshPresencePresentation()
             refreshCallout()
             accessibilityLabel = "\(calloutInfo.displayName), \(calloutInfo.relationshipText)"
-            accessibilityHint = "Touchez pour afficher les informations d’exploration"
+            accessibilityHint = "Touchez pour afficher l’adresse et les informations d’exploration"
             accessibilityTraits = .button
         }
+    }
+
+    private func shouldResetAddress(
+        for coordinate: MapUserCoordinate?
+    ) -> Bool {
+        guard let addressCoordinate else { return false }
+        guard let coordinate else { return true }
+        return addressCoordinate.distance(to: coordinate)
+            >= Self.addressRefreshDistance
     }
 
     private func ensurePresenceRefreshTimer() {
@@ -388,8 +456,172 @@ final class UserLocationAnnotationView: MKAnnotationView {
     private func refreshCallout() {
         guard let configuredCalloutInfo else { return }
         detailCalloutAccessoryView = makeCalloutDetailView(
-            for: configuredCalloutInfo
+            for: configuredCalloutInfo,
+            addressText: addressText
         )
+        updateCopyAddressAccessory()
+        resolveAddressIfNeeded(for: configuredCalloutInfo)
+    }
+
+    func copyResolvedAddressToPasteboard() {
+        guard case .resolved(let address) = addressResolutionState else {
+            return
+        }
+
+        UIPasteboard.general.string = address
+        copyConfirmationResetWorkItem?.cancel()
+        copyAddressButton.setImage(
+            UIImage(systemName: "checkmark"),
+            for: .normal
+        )
+        copyAddressButton.accessibilityLabel = "Adresse copiée"
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "Adresse copiée"
+        )
+
+        let resetWorkItem = DispatchWorkItem { [weak self] in
+            self?.resetCopyAddressButtonAppearance()
+        }
+        copyConfirmationResetWorkItem = resetWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + 1.5,
+            execute: resetWorkItem
+        )
+    }
+
+    private func updateCopyAddressAccessory() {
+        guard case .resolved = addressResolutionState else {
+            copyConfirmationResetWorkItem?.cancel()
+            copyConfirmationResetWorkItem = nil
+            resetCopyAddressButtonAppearance()
+            rightCalloutAccessoryView = nil
+            return
+        }
+
+        if rightCalloutAccessoryView !== copyAddressButton {
+            resetCopyAddressButtonAppearance()
+            rightCalloutAccessoryView = copyAddressButton
+        }
+    }
+
+    private func resetCopyAddressButtonAppearance() {
+        copyAddressButton.setImage(
+            UIImage(systemName: "doc.on.doc"),
+            for: .normal
+        )
+        copyAddressButton.accessibilityLabel = "Copier l’adresse"
+    }
+
+    private var addressText: String? {
+        switch addressResolutionState {
+        case .idle:
+            nil
+        case .loading:
+            "Recherche de la dernière adresse…"
+        case .resolved(let address):
+            "Dernière adresse connue : \(address)"
+        case .unavailable:
+            "Adresse de la dernière position indisponible"
+        }
+    }
+
+    private func resolveAddressIfNeeded(for info: MapUserCalloutInfo) {
+        guard isSelected,
+              case .idle = addressResolutionState,
+              let coordinate = info.coordinate else {
+            return
+        }
+
+        if let cachedAddress = Self.addressCache.object(
+            forKey: coordinate.cacheKey
+        ) {
+            addressCoordinate = coordinate
+            addressResolutionState = .resolved(cachedAddress as String)
+            refreshCallout()
+            return
+        }
+
+        guard let request = MKReverseGeocodingRequest(
+            location: coordinate.location
+        ) else {
+            addressResolutionState = .unavailable
+            refreshCallout()
+            return
+        }
+
+        addressCoordinate = coordinate
+        addressResolutionState = .loading
+        addressRequest = request
+        refreshCallout()
+
+        request.getMapItems { [weak self] mapItems, _ in
+            guard let self,
+                  self.addressRequest === request,
+                  self.addressCoordinate == coordinate else {
+                return
+            }
+
+            self.addressRequest = nil
+            if let address = Self.formattedAddress(from: mapItems) {
+                Self.addressCache.setObject(
+                    address as NSString,
+                    forKey: coordinate.cacheKey
+                )
+                self.addressResolutionState = .resolved(address)
+            } else {
+                self.addressResolutionState = .unavailable
+            }
+
+            if self.isSelected {
+                self.refreshCallout()
+            }
+        }
+    }
+
+    private func pauseAddressResolution() {
+        if case .loading = addressResolutionState {
+            addressRequest?.cancel()
+            addressRequest = nil
+            addressResolutionState = .idle
+        } else if case .unavailable = addressResolutionState {
+            addressResolutionState = .idle
+        }
+    }
+
+    private func resetAddressResolution() {
+        addressRequest?.cancel()
+        addressRequest = nil
+        addressCoordinate = nil
+        addressResolutionState = .idle
+        copyConfirmationResetWorkItem?.cancel()
+        copyConfirmationResetWorkItem = nil
+        resetCopyAddressButtonAppearance()
+        rightCalloutAccessoryView = nil
+    }
+
+    private static func formattedAddress(
+        from mapItems: [MKMapItem]?
+    ) -> String? {
+        for mapItem in mapItems ?? [] {
+            let rawAddress = mapItem.addressRepresentations?.fullAddress(
+                includingRegion: true,
+                singleLine: true
+            ) ?? mapItem.address?.fullAddress
+
+            let address = rawAddress?
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: ", ")
+
+            if let address, !address.isEmpty {
+                return address
+            }
+        }
+
+        return nil
     }
 
     private func configureView() {
@@ -438,7 +670,8 @@ final class UserLocationAnnotationView: MKAnnotationView {
     }
 
     private func makeCalloutDetailView(
-        for info: MapUserCalloutInfo
+        for info: MapUserCalloutInfo,
+        addressText: String?
     ) -> UIView {
         let label = UILabel()
         label.numberOfLines = 0
@@ -496,6 +729,19 @@ final class UserLocationAnnotationView: MKAnnotationView {
             )
         )
 
+        if let addressText {
+            content.append(NSAttributedString(string: "\n"))
+            content.append(
+                NSAttributedString(
+                    string: addressText,
+                    attributes: [
+                        .font: UIFont.preferredFont(forTextStyle: .caption1),
+                        .foregroundColor: UIColor.label
+                    ]
+                )
+            )
+        }
+
         let presenceText = Self.presenceText(
             enteredAt: info.spotEnteredAt,
             sampledAt: info.locationSampledAt,
@@ -533,6 +779,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
             info.relationshipText,
             progressText,
             progressDetailText,
+            addressText,
             presenceText,
             Self.locationText(sampledAt: info.locationSampledAt)
         ]
@@ -1009,6 +1256,9 @@ struct MapWithFogView: UIViewRepresentable {
             isExplorationLoaded: true,
             cityProgress: userExplorationProgress,
             totalExploredCellCount: discoveredCellIDs.count,
+            coordinate: locationTracker.lastLocation.map {
+                MapUserCoordinate($0.coordinate)
+            },
             locationSampledAt: locationTracker.lastLocation?.timestamp,
             spotEnteredAt: locationTracker.currentSpotEnteredAt,
             keepsSpotDurationVisible:
@@ -1085,6 +1335,7 @@ struct MapWithFogView: UIViewRepresentable {
                 ),
                 cityProgress: friendExplorationProgress[friendLocation.userID],
                 totalExploredCellCount: friendExploration?.cellIDs.count ?? 0,
+                coordinate: MapUserCoordinate(friendLocation.coordinate),
                 locationSampledAt: friendLocation.sampledAt,
                 spotEnteredAt: friendLocation.spotEnteredAt,
                 keepsSpotDurationVisible: false
@@ -1199,6 +1450,9 @@ struct MapWithFogView: UIViewRepresentable {
 
         if let coordinate = friendLocations[userID]?.coordinate {
             setFocusedRegion(on: mapView, center: coordinate, animated: true)
+            if let annotation = context.coordinator.friendAnnotations[userID] {
+                mapView.selectAnnotation(annotation, animated: true)
+            }
             return
         }
 
@@ -1446,6 +1700,7 @@ struct MapWithFogView: UIViewRepresentable {
                         isExplorationLoaded: true,
                         cityProgress: nil,
                         totalExploredCellCount: 0,
+                        coordinate: nil,
                         locationSampledAt: nil,
                         spotEnteredAt: nil,
                         keepsSpotDurationVisible: false
@@ -1480,6 +1735,7 @@ struct MapWithFogView: UIViewRepresentable {
                     isExplorationLoaded: false,
                     cityProgress: nil,
                     totalExploredCellCount: 0,
+                    coordinate: nil,
                     locationSampledAt: nil,
                     spotEnteredAt: nil,
                     keepsSpotDurationVisible: false
@@ -1497,6 +1753,18 @@ struct MapWithFogView: UIViewRepresentable {
             for view in views where view.annotation is MKUserLocation {
                 view.isHidden = userLocationAnnotation != nil
             }
+        }
+
+        func mapView(
+            _ mapView: MKMapView,
+            annotationView view: MKAnnotationView,
+            calloutAccessoryControlTapped control: UIControl
+        ) {
+            guard control === view.rightCalloutAccessoryView,
+                  let annotationView = view as? UserLocationAnnotationView else {
+                return
+            }
+            annotationView.copyResolvedAddressToPasteboard()
         }
 
         func updateUserMarkerAppearance(
