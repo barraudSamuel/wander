@@ -30,7 +30,21 @@ private struct FriendMapSummary: Identifiable, Hashable {
     var canShowOnMap: Bool { locationSampledAt != nil || cellCount > 0 }
 }
 
+private struct FriendSelection: Identifiable, Equatable {
+    let userID: String
+
+    var id: String { userID }
+}
+
 struct ContentView: View {
+    private static let navigationDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     @StateObject private var locationTracker = LocationTracker()
     @StateObject private var friendSyncService = FriendSyncService.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -51,6 +65,9 @@ struct ContentView: View {
     @State private var knownFriendUserIDs: Set<String> = []
     @State private var cityProgress: CityProgress?
     @State private var friendExplorationProgress: [String: CityProgress] = [:]
+    @State private var friendNavigationSelection: FriendSelection?
+    @State private var selectedFriendProfile: FriendSelection?
+    @State private var cityBoundaryResolutionState: CityBoundaryResolutionState = .loading
 
     #if DEBUG
     @State private var debugDrawerVisible = false
@@ -138,6 +155,9 @@ struct ContentView: View {
 
             Task {
                 await cityBoundary.load()
+                cityBoundaryResolutionState = cityBoundary.cityCellIDs.isEmpty
+                    ? .unavailable
+                    : .ready
                 if let location = locationTracker.lastLocation {
                     cityBoundary.detectCity(for: location.coordinate)
                 }
@@ -185,9 +205,13 @@ struct ContentView: View {
         }
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
             selectNewFriends(from: userIDs)
+            reconcileFriendPresentations(acceptedUserIDs: userIDs)
         }
         .onChange(of: friendSyncService.friendLocations) {
             refreshFriendExplorationProgress()
+            reconcileFriendPresentations(
+                acceptedUserIDs: acceptedFriendUserIDs
+            )
         }
         .onChange(of: friendSyncService.friendExplorationRevision) {
             refreshFriendExplorationProgress()
@@ -248,7 +272,9 @@ struct ContentView: View {
                 centerOnFriendUserID: $centerOnFriendUserID,
                 showsHeatMap: heatMapEnabled,
                 heatMapCellData: locationTracker.heatMapCellData,
-                heatMapRevision: locationTracker.heatMapRevision
+                heatMapRevision: locationTracker.heatMapRevision,
+                onJoinFriend: presentNavigationOptions,
+                onViewFriendProfile: presentFriendProfile
             )
             .ignoresSafeArea()
 
@@ -302,6 +328,200 @@ struct ContentView: View {
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .alert(
+            "Rejoindre \(selectedNavigationFriendName)",
+            isPresented: navigationAlertIsPresented
+        ) {
+            Button("Google Maps") {
+                openGoogleMaps()
+            }
+
+            if canOpenNaverMapForSelectedFriend {
+                Button("Naver Map · À pied") {
+                    openNaverMap()
+                }
+            }
+
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text(selectedNavigationMessage)
+        }
+        .sheet(item: $selectedFriendProfile) { selection in
+            FriendProfileSheet(
+                userID: selection.userID,
+                service: friendSyncService,
+                cityBoundary: cityBoundary,
+                cityBoundaryResolutionState: $cityBoundaryResolutionState
+            )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private func presentNavigationOptions(_ userID: String) {
+        guard currentNavigationDestination(for: userID) != nil else { return }
+        friendNavigationSelection = FriendSelection(userID: userID)
+    }
+
+    private func presentFriendProfile(_ userID: String) {
+        guard acceptedFriendUserIDs.contains(userID) else { return }
+        selectedFriendProfile = FriendSelection(userID: userID)
+    }
+
+    private var navigationAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { friendNavigationSelection != nil },
+            set: { isPresented in
+                if !isPresented {
+                    friendNavigationSelection = nil
+                }
+            }
+        )
+    }
+
+    private func openGoogleMaps() {
+        guard let destination = selectedNavigationDestination else {
+            friendNavigationSelection = nil
+            return
+        }
+
+        var components = URLComponents(
+            string: "https://www.google.com/maps/dir/"
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "api", value: "1"),
+            URLQueryItem(
+                name: "destination",
+                value: coordinateQueryValue(destination.coordinate)
+            )
+        ]
+
+        guard let url = components?.url else { return }
+        UIApplication.shared.open(url)
+    }
+
+    private func openNaverMap() {
+        guard let destination = selectedNavigationDestination else {
+            friendNavigationSelection = nil
+            return
+        }
+
+        guard let url = naverMapURL(for: destination),
+              UIApplication.shared.canOpenURL(url) else {
+            return
+        }
+        UIApplication.shared.open(url)
+    }
+
+    private func canOpenNaverMap(for destination: FriendNavigationDestination) -> Bool {
+        guard isInsideNaverMapCoverage(destination.coordinate),
+              let url = naverMapURL(for: destination) else {
+            return false
+        }
+        return UIApplication.shared.canOpenURL(url)
+    }
+
+    private func naverMapURL(
+        for destination: FriendNavigationDestination
+    ) -> URL? {
+        var components = URLComponents()
+        components.scheme = "nmap"
+        components.host = "route"
+        components.path = "/walk"
+        components.queryItems = [
+            URLQueryItem(
+                name: "dlat",
+                value: destination.coordinate.latitude.description
+            ),
+            URLQueryItem(
+                name: "dlng",
+                value: destination.coordinate.longitude.description
+            ),
+            URLQueryItem(name: "dname", value: destination.displayName),
+            URLQueryItem(
+                name: "appname",
+                value: Bundle.main.bundleIdentifier ?? "com.iterar.wander.wander"
+            )
+        ]
+        return components.url
+    }
+
+    private func isInsideNaverMapCoverage(
+        _ coordinate: MapUserCoordinate
+    ) -> Bool {
+        (31.43...44.35).contains(coordinate.latitude)
+            && (122.37...132.00).contains(coordinate.longitude)
+    }
+
+    private func coordinateQueryValue(_ coordinate: MapUserCoordinate) -> String {
+        "\(coordinate.latitude),\(coordinate.longitude)"
+    }
+
+    private func navigationMessage(
+        for destination: FriendNavigationDestination
+    ) -> String {
+        let sampledAt = Self.navigationDateTimeFormatter.string(
+            from: destination.sampledAt
+        )
+        return "L’itinéraire utilisera la dernière position connue de \(destination.displayName), enregistrée \(sampledAt)."
+    }
+
+    private var selectedNavigationDestination: FriendNavigationDestination? {
+        guard let userID = friendNavigationSelection?.userID else { return nil }
+        return currentNavigationDestination(for: userID)
+    }
+
+    private var selectedNavigationFriendName: String {
+        selectedNavigationDestination?.displayName ?? "cet ami"
+    }
+
+    private var selectedNavigationMessage: String {
+        guard let destination = selectedNavigationDestination else {
+            return "La position de cet ami n’est plus disponible."
+        }
+        return navigationMessage(for: destination)
+    }
+
+    private var canOpenNaverMapForSelectedFriend: Bool {
+        guard let destination = selectedNavigationDestination else { return false }
+        return canOpenNaverMap(for: destination)
+    }
+
+    private func currentNavigationDestination(
+        for userID: String,
+        at referenceDate: Date = Date()
+    ) -> FriendNavigationDestination? {
+        guard acceptedFriendUserIDs.contains(userID),
+              let location = friendSyncService.friendLocations[userID],
+              location.userID == userID,
+              location.isFresh(at: referenceDate),
+              CLLocationCoordinate2DIsValid(location.coordinate),
+              location.coordinate.latitude.isFinite,
+              location.coordinate.longitude.isFinite else {
+            return nil
+        }
+
+        return FriendNavigationDestination(
+            userID: userID,
+            displayName: location.displayName,
+            coordinate: MapUserCoordinate(location.coordinate),
+            sampledAt: location.sampledAt
+        )
+    }
+
+    private func reconcileFriendPresentations(
+        acceptedUserIDs: Set<String>
+    ) {
+        if let userID = friendNavigationSelection?.userID,
+           (!acceptedUserIDs.contains(userID)
+            || currentNavigationDestination(for: userID) == nil) {
+            friendNavigationSelection = nil
+        }
+
+        if let userID = selectedFriendProfile?.userID,
+           !acceptedUserIDs.contains(userID) {
+            selectedFriendProfile = nil
         }
     }
 
@@ -716,19 +936,10 @@ private struct FriendRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(ProfileColor.color(hex: friend.profileColorHex))
-
-                Image(systemName: "person.fill")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(
-                        ProfileColor.foregroundColor(
-                            hex: friend.profileColorHex
-                        )
-                    )
-            }
-            .frame(width: 30, height: 30)
+            FriendAvatarBadge(
+                profileColorHex: friend.profileColorHex,
+                size: 30
+            )
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {

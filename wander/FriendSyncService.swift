@@ -26,6 +26,9 @@ struct FriendRequest: Identifiable, Equatable {
 }
 
 struct FriendLocation: Equatable {
+    static let maximumAge: TimeInterval = 5 * 60
+    static let maximumFutureTimestampSkew: TimeInterval = 60
+
     let userID: String
     let displayName: String
     let profileColorHex: String
@@ -47,6 +50,16 @@ struct FriendLocation: Equatable {
             && lhs.updatedAt == rhs.updatedAt
             && lhs.receivedAt == rhs.receivedAt
             && lhs.spotEnteredAt == rhs.spotEnteredAt
+    }
+
+    func isFresh(at referenceDate: Date = Date()) -> Bool {
+        Self.isFresh(sampledAt: sampledAt, at: referenceDate)
+    }
+
+    static func isFresh(sampledAt: Date, at referenceDate: Date) -> Bool {
+        let age = referenceDate.timeIntervalSince(sampledAt)
+        return age >= -maximumFutureTimestampSkew
+            && age < maximumAge
     }
 }
 
@@ -120,8 +133,6 @@ final class FriendSyncService: ObservableObject {
     private let friendCodeAlphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
     private let friendCodeLength = 11
     private let maximumProfileCreationAttempts = 8
-    private let maximumLocationAge: TimeInterval = 5 * 60
-    private let maximumFutureTimestampSkew: TimeInterval = 60
     private let minimumLocationPushDistance: CLLocationDistance = 15
     private let minimumLocationPushInterval: TimeInterval = 10
 
@@ -139,6 +150,7 @@ final class FriendSyncService: ObservableObject {
     private var friendshipsListener: ListenerRegistration?
     private var profileListeners: [String: ListenerRegistration] = [:]
     private var locationListeners: [String: ListenerRegistration] = [:]
+    private var locationExpirationTimers: [String: Timer] = [:]
     private var explorationListeners: [String: ListenerRegistration] = [:]
     private var profileUpdateTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
@@ -544,7 +556,10 @@ final class FriendSyncService: ObservableObject {
         guard location.horizontalAccuracy > 0,
               location.horizontalAccuracy <= 1_000,
               CLLocationCoordinate2DIsValid(location.coordinate),
-              isFresh(location.timestamp, at: Date()) else {
+              FriendLocation.isFresh(
+                sampledAt: location.timestamp,
+                at: Date()
+              ) else {
             return
         }
 
@@ -1462,7 +1477,7 @@ final class FriendSyncService: ObservableObject {
 
         for userID in removedUserIDs {
             locationListeners.removeValue(forKey: userID)?.remove()
-            receivedFriendLocations.removeValue(forKey: userID)
+            removeFriendLocation(for: userID)
         }
 
         for userID in acceptedUserIDs where locationListeners[userID] == nil {
@@ -1497,6 +1512,19 @@ final class FriendSyncService: ObservableObject {
                         let receivedAt = Date()
                         let sampledAt = sampledTimestamp.dateValue()
                         let updatedAt = timestamp.dateValue()
+                        let coordinate = CLLocationCoordinate2D(
+                            latitude: geoPoint.latitude,
+                            longitude: geoPoint.longitude
+                        )
+                        guard FriendLocation.isFresh(
+                            sampledAt: sampledAt,
+                            at: receivedAt
+                        ), CLLocationCoordinate2DIsValid(coordinate),
+                           coordinate.latitude.isFinite,
+                           coordinate.longitude.isFinite else {
+                            self.removeFriendLocation(for: userID)
+                            return
+                        }
                         let spotEnteredAt: Date?
                         if data.keys.contains("spotEnteredAt") {
                             spotEnteredAt = Self.validSpotEnteredAt(
@@ -1525,10 +1553,7 @@ final class FriendSyncService: ObservableObject {
                             userID: userID,
                             displayName: displayName,
                             profileColorHex: profileColorHex,
-                            coordinate: CLLocationCoordinate2D(
-                                latitude: geoPoint.latitude,
-                                longitude: geoPoint.longitude
-                            ),
+                            coordinate: coordinate,
                             horizontalAccuracy: accuracy.doubleValue,
                             sampledAt: sampledAt,
                             updatedAt: updatedAt,
@@ -1536,6 +1561,10 @@ final class FriendSyncService: ObservableObject {
                             spotEnteredAt: spotEnteredAt
                         )
                         self.receivedFriendLocations[userID] = friendLocation
+                        self.scheduleExpiration(
+                            for: friendLocation,
+                            authenticationGeneration: generation
+                        )
                     }
                 }
         }
@@ -1550,7 +1579,49 @@ final class FriendSyncService: ObservableObject {
     }
 
     private func removeFriendLocation(for userID: String) {
+        locationExpirationTimers.removeValue(forKey: userID)?.invalidate()
         receivedFriendLocations.removeValue(forKey: userID)
+    }
+
+    private func scheduleExpiration(
+        for location: FriendLocation,
+        authenticationGeneration generation: Int
+    ) {
+        locationExpirationTimers.removeValue(forKey: location.userID)?.invalidate()
+
+        let delay = location.sampledAt
+            .addingTimeInterval(FriendLocation.maximumAge)
+            .timeIntervalSinceNow
+        guard delay > 0 else {
+            removeFriendLocation(for: location.userID)
+            return
+        }
+
+        let userID = location.userID
+        let sampledAt = location.sampledAt
+        let timer = Timer(
+            timeInterval: delay,
+            repeats: false
+        ) { [weak self] _ in
+            guard let self,
+                  self.authenticationGeneration == generation,
+                  let currentLocation = self.receivedFriendLocations[userID],
+                  currentLocation.sampledAt == sampledAt else {
+                return
+            }
+
+            if currentLocation.isFresh() {
+                self.scheduleExpiration(
+                    for: currentLocation,
+                    authenticationGeneration: generation
+                )
+            } else {
+                self.removeFriendLocation(for: userID)
+            }
+        }
+        timer.tolerance = min(1, delay * 0.1)
+        RunLoop.main.add(timer, forMode: .common)
+        locationExpirationTimers[userID] = timer
     }
 
     // MARK: - Location writes
@@ -1563,7 +1634,10 @@ final class FriendSyncService: ObservableObject {
         bypassThrottle: Bool
     ) {
         guard currentUserID == userID,
-              isFresh(location.timestamp, at: Date()) else {
+              FriendLocation.isFresh(
+                sampledAt: location.timestamp,
+                at: Date()
+              ) else {
             return
         }
 
@@ -1653,6 +1727,11 @@ final class FriendSyncService: ObservableObject {
         }
         locationListeners.removeAll()
 
+        for timer in locationExpirationTimers.values {
+            timer.invalidate()
+        }
+        locationExpirationTimers.removeAll()
+
         for listener in explorationListeners.values {
             listener.remove()
         }
@@ -1689,12 +1768,6 @@ final class FriendSyncService: ObservableObject {
         }
 
         return fallback
-    }
-
-    private func isFresh(_ timestamp: Date, at date: Date) -> Bool {
-        let age = date.timeIntervalSince(timestamp)
-        return age >= -maximumFutureTimestampSkew
-            && age < maximumLocationAge
     }
 
     private func generateFriendCode() -> String {

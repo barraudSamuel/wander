@@ -4,6 +4,10 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>Wander</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>nmap</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Wander utilise votre position pour révéler votre carte et mettre à jour les fonctions entre amis lorsque l’exploration est active.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

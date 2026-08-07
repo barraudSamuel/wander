@@ -28,6 +28,30 @@ struct MapUserCalloutInfo: Equatable {
     let keepsSpotDurationVisible: Bool
 }
 
+private struct FriendCalloutActions {
+    let join: () -> Void
+    let viewProfile: () -> Void
+}
+
+private enum UserLocationCalloutContent {
+    case information
+    case friendActions(FriendCalloutActions)
+
+    var showsFriendActions: Bool {
+        if case .friendActions = self {
+            return true
+        }
+        return false
+    }
+}
+
+struct FriendNavigationDestination: Equatable {
+    let userID: String
+    let displayName: String
+    let coordinate: MapUserCoordinate
+    let sampledAt: Date
+}
+
 struct MapUserCoordinate: Equatable {
     let latitude: CLLocationDegrees
     let longitude: CLLocationDegrees
@@ -39,6 +63,10 @@ struct MapUserCoordinate: Equatable {
 
     var location: CLLocation {
         CLLocation(latitude: latitude, longitude: longitude)
+    }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 
     func distance(to other: MapUserCoordinate) -> CLLocationDistance {
@@ -220,6 +248,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
     private var configuredDisplayName: String?
     private var configuredProfileColorHex: String?
     private var configuredCalloutInfo: MapUserCalloutInfo?
+    private var calloutContent = UserLocationCalloutContent.information
     private var presenceRefreshTimer: Timer?
     private var showsPresenceDuration = false
     private var addressRequest: MKReverseGeocodingRequest?
@@ -320,6 +349,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
         stopPresenceRefreshTimer()
         resetAddressResolution()
         configuredCalloutInfo = nil
+        calloutContent = .information
         setCircularDurationText(nil)
     }
 
@@ -329,12 +359,17 @@ final class UserLocationAnnotationView: MKAnnotationView {
         copyConfirmationResetWorkItem?.cancel()
     }
 
-    func configure(
+    fileprivate func configure(
         avatarImageData: Data,
         displayName: String,
         profileColorHex: String,
-        calloutInfo: MapUserCalloutInfo
+        calloutInfo: MapUserCalloutInfo,
+        calloutContent: UserLocationCalloutContent = .information
     ) {
+        let calloutModeChanged = self.calloutContent.showsFriendActions
+            != calloutContent.showsFriendActions
+        self.calloutContent = calloutContent
+
         if configuredAvatarImageData != avatarImageData
             || configuredDisplayName != displayName
             || configuredProfileColorHex != profileColorHex {
@@ -368,7 +403,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
             configuredProfileColorHex = profileColorHex
         }
 
-        if configuredCalloutInfo != calloutInfo {
+        if configuredCalloutInfo != calloutInfo || calloutModeChanged {
             if shouldResetAddress(for: calloutInfo.coordinate) {
                 resetAddressResolution()
             }
@@ -376,7 +411,9 @@ final class UserLocationAnnotationView: MKAnnotationView {
             refreshPresencePresentation()
             refreshCallout()
             accessibilityLabel = "\(calloutInfo.displayName), \(calloutInfo.relationshipText)"
-            accessibilityHint = "Touchez pour afficher l’adresse et les informations d’exploration"
+            accessibilityHint = calloutContent.showsFriendActions
+                ? "Touchez pour afficher les actions de cet ami"
+                : "Touchez pour afficher l’adresse et les informations d’exploration"
             accessibilityTraits = .button
         }
     }
@@ -459,6 +496,12 @@ final class UserLocationAnnotationView: MKAnnotationView {
             for: configuredCalloutInfo,
             addressText: addressText
         )
+
+        if calloutContent.showsFriendActions {
+            rightCalloutAccessoryView = nil
+            return
+        }
+
         updateCopyAddressAccessory()
         resolveAddressIfNeeded(for: configuredCalloutInfo)
     }
@@ -673,6 +716,10 @@ final class UserLocationAnnotationView: MKAnnotationView {
         for info: MapUserCalloutInfo,
         addressText: String?
     ) -> UIView {
+        if calloutContent.showsFriendActions {
+            return makeFriendActionView(for: info)
+        }
+
         let label = UILabel()
         label.numberOfLines = 0
         label.preferredMaxLayoutWidth = 230
@@ -785,7 +832,84 @@ final class UserLocationAnnotationView: MKAnnotationView {
         ]
         .compactMap { $0 }
         .joined(separator: ", ")
+
         return label
+    }
+
+    private func makeFriendActionView(for info: MapUserCalloutInfo) -> UIView {
+        let joinButton = UIButton(type: .system)
+        var joinConfiguration = UIButton.Configuration.plain()
+        joinConfiguration.image = UIImage(systemName: "figure.walk")
+        joinConfiguration.baseForegroundColor = .label
+        joinConfiguration.preferredSymbolConfigurationForImage =
+            UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
+        joinConfiguration.contentInsets = .zero
+        joinButton.configuration = joinConfiguration
+        joinButton.isEnabled = info.coordinate != nil
+        joinButton.accessibilityLabel = "Rejoindre \(info.displayName)"
+        joinButton.accessibilityHint = "Choisir une application pour afficher l’itinéraire"
+        joinButton.addTarget(
+            self,
+            action: #selector(joinButtonTapped),
+            for: .touchUpInside
+        )
+
+        let profileButton = UIButton(type: .system)
+        var profileConfiguration = UIButton.Configuration.plain()
+        profileConfiguration.image = UIImage(systemName: "person.crop.circle")
+        profileConfiguration.baseForegroundColor = .label
+        profileConfiguration.preferredSymbolConfigurationForImage =
+            UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
+        profileConfiguration.contentInsets = .zero
+        profileButton.configuration = profileConfiguration
+        profileButton.accessibilityLabel = "Voir le profil de \(info.displayName)"
+        profileButton.accessibilityHint = "Afficher les informations de cet ami"
+        profileButton.addTarget(
+            self,
+            action: #selector(profileButtonTapped),
+            for: .touchUpInside
+        )
+
+        let separator = UIView()
+        separator.backgroundColor = .separator
+        separator.widthAnchor.constraint(equalToConstant: 0.5).isActive = true
+        separator.heightAnchor.constraint(equalToConstant: 24).isActive = true
+
+        let stack = UIStackView(
+            arrangedSubviews: [joinButton, separator, profileButton]
+        )
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.spacing = 0
+        stack.isLayoutMarginsRelativeArrangement = true
+        stack.directionalLayoutMargins = NSDirectionalEdgeInsets(
+            top: 4,
+            leading: 2,
+            bottom: 4,
+            trailing: 2
+        )
+
+        for button in [joinButton, profileButton] {
+            button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        }
+
+        return stack
+    }
+
+    @objc private func joinButtonTapped() {
+        guard let configuredCalloutInfo,
+              configuredCalloutInfo.coordinate != nil else {
+            return
+        }
+        guard case .friendActions(let actions) = calloutContent else { return }
+        actions.join()
+    }
+
+    @objc private func profileButtonTapped() {
+        guard configuredCalloutInfo != nil else { return }
+        guard case .friendActions(let actions) = calloutContent else { return }
+        actions.viewProfile()
     }
 
     private static func exploredZoneText(_ count: Int) -> String {
@@ -1141,6 +1265,12 @@ struct MapWithFogView: UIViewRepresentable {
     /// Monotonic token that must change whenever heat-map values change.
     var heatMapRevision: Int = 0
 
+    /// Presents external navigation choices for the selected friend.
+    var onJoinFriend: (String) -> Void = { _ in }
+
+    /// Presents the native profile sheet for the selected friend.
+    var onViewFriendProfile: (String) -> Void = { _ in }
+
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
@@ -1167,6 +1297,9 @@ struct MapWithFogView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
+        context.coordinator.onJoinFriend = onJoinFriend
+        context.coordinator.onViewFriendProfile = onViewFriendProfile
+
         let visibleCellIDs = visibleDiscoveredCellIDs
         let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
         let discoveredChanged = context.coordinator.lastDiscoveredIDs != visibleCellIDs
@@ -1231,7 +1364,11 @@ struct MapWithFogView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(fogColor: fogColor)
+        Coordinator(
+            fogColor: fogColor,
+            onJoinFriend: onJoinFriend,
+            onViewFriendProfile: onViewFriendProfile
+        )
     }
 
     private var visibleDiscoveredCellIDs: Set<String> {
@@ -1656,8 +1793,17 @@ struct MapWithFogView: UIViewRepresentable {
         var friendAnnotations: [String: FriendLocationAnnotation] = [:]
         var friendProfileColorHexByUserID: [String: String] = [:]
         var friendCalloutInfoByUserID: [String: MapUserCalloutInfo] = [:]
-        init(fogColor: UIColor) {
+        var onJoinFriend: (String) -> Void
+        var onViewFriendProfile: (String) -> Void
+
+        init(
+            fogColor: UIColor,
+            onJoinFriend: @escaping (String) -> Void,
+            onViewFriendProfile: @escaping (String) -> Void
+        ) {
             self.fogColor = fogColor
+            self.onJoinFriend = onJoinFriend
+            self.onViewFriendProfile = onViewFriendProfile
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -1806,15 +1952,28 @@ struct MapWithFogView: UIViewRepresentable {
             profileColorHex: String,
             calloutInfo: MapUserCalloutInfo
         ) {
-            guard let annotationView = annotationView as? UserLocationAnnotationView else {
+            guard let annotationView = annotationView as? UserLocationAnnotationView,
+                  let friendAnnotation = annotationView.annotation
+                    as? FriendLocationAnnotation else {
                 return
             }
+            let userID = friendAnnotation.userID
 
             annotationView.configure(
                 avatarImageData: Data(),
                 displayName: displayName,
                 profileColorHex: profileColorHex,
-                calloutInfo: calloutInfo
+                calloutInfo: calloutInfo,
+                calloutContent: .friendActions(
+                    FriendCalloutActions(
+                        join: { [weak self] in
+                            self?.onJoinFriend(userID)
+                        },
+                        viewProfile: { [weak self] in
+                            self?.onViewFriendProfile(userID)
+                        }
+                    )
+                )
             )
         }
     }
