@@ -5,6 +5,7 @@
 //  Map-first experience with native Apple navigation and controls.
 //
 
+import AuthenticationServices
 import CoreLocation
 import MapKit
 import PhotosUI
@@ -114,8 +115,7 @@ struct ContentView: View {
                             selectedColorHex,
                             userInitiated: true
                         )
-                    },
-                    onStopSharingLocation: friendSyncService.stopSharingLocation
+                    }
                 )
                 .tabItem {
                     Label("Profil", systemImage: "person.crop.circle")
@@ -1132,16 +1132,19 @@ private struct ProfileView: View {
     @Binding var avatarImageData: Data
     @Binding var profileColorHex: String
     @ObservedObject var locationTracker: LocationTracker
+    @ObservedObject private var authenticationService = FirebaseService.shared
+    @ObservedObject private var friendSyncService = FriendSyncService.shared
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     let cityProgress: CityProgress?
     let cityProgressUnavailableText: String
     let onProfileColorSelected: (String) -> Void
-    let onStopSharingLocation: () -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
-    @State private var resetConfirmationPresented = false
-    @State private var resetFailed = false
+    @State private var signOutConfirmationPresented = false
+    @State private var deleteConfirmationPresented = false
+    @State private var deletionAuthorizationPresented = false
+    @State private var accountActionErrorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -1247,43 +1250,131 @@ private struct ProfileView: View {
                     }
                 }
 
-                Section {
-                    Button(role: .destructive) {
-                        resetConfirmationPresented = true
-                    } label: {
-                        Label("Effacer mes données locales", systemImage: "trash")
-                    }
-                } footer: {
-                    Text(
-                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Les zones déjà partagées, le compte Firebase et les relations d’amitié ne sont pas effacés et pourront être restaurés depuis ton compte."
-                    )
-                }
+                accountSection
             }
             .navigationTitle("Profil")
         }
         .onChange(of: selectedPhoto) { _, newPhoto in
             loadAvatar(from: newPhoto)
         }
+        .onAppear {
+            if friendSyncService.isAccountDeletionPending {
+                deletionAuthorizationPresented = true
+            }
+        }
+        .onChange(of: friendSyncService.isAccountDeletionPending) {
+            if friendSyncService.isAccountDeletionPending {
+                deletionAuthorizationPresented = true
+            }
+        }
         .confirmationDialog(
-            "Effacer les données locales ?",
-            isPresented: $resetConfirmationPresented,
+            "Se déconnecter ?",
+            isPresented: $signOutConfirmationPresented,
             titleVisibility: .visible
         ) {
-            Button("Effacer et recommencer", role: .destructive) {
-                resetLocalData()
+            Button("Se déconnecter") {
+                if !authenticationService.signOut() {
+                    accountActionErrorMessage =
+                        authenticationService.authErrorMessage
+                }
             }
 
             Button("Annuler", role: .cancel) {}
         } message: {
             Text(
-                "Cette action est irréversible sur cet appareil. Tu seras redirigé vers l’onboarding."
+                "Tes données restent enregistrées et seront retrouvées à ta prochaine connexion."
             )
         }
-        .alert("Impossible d’effacer les données", isPresented: $resetFailed) {
+        .confirmationDialog(
+            "Supprimer définitivement ton compte ?",
+            isPresented: $deleteConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Continuer", role: .destructive) {
+                deletionAuthorizationPresented = true
+            }
+
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text(
+                "Ton profil, ta progression, tes relations et tes données locales seront définitivement supprimés. Cette action est irréversible."
+            )
+        }
+        .sheet(isPresented: $deletionAuthorizationPresented) {
+            deletionAuthorizationSheet
+        }
+        .alert(
+            "Impossible de terminer l’action",
+            isPresented: accountActionErrorPresented
+        ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Réessaie dans quelques instants.")
+            Text(accountActionErrorMessage ?? "Réessaie dans quelques instants.")
         }
+    }
+
+    private var accountSection: some View {
+        Section {
+            Button {
+                signOutConfirmationPresented = true
+            } label: {
+                Label(
+                    "Se déconnecter",
+                    systemImage: "rectangle.portrait.and.arrow.right"
+                )
+            }
+
+            Button(role: .destructive) {
+                deleteConfirmationPresented = true
+            } label: {
+                Label(
+                    accountDeletionButtonTitle,
+                    systemImage: "person.crop.circle.badge.minus"
+                )
+            }
+        } header: {
+            Text("Compte")
+        } footer: {
+            Text(
+                "La déconnexion conserve tes données. La suppression du compte efface définitivement ton profil Wander, ta progression, tes relations et les données de cet appareil."
+            )
+        }
+    }
+
+    private var accountDeletionButtonTitle: String {
+        friendSyncService.isAccountDeletionPending
+            ? "Terminer la suppression"
+            : "Supprimer mon compte"
+    }
+
+    private var deletionAuthorizationSheet: some View {
+        AccountDeletionAuthorizationView(
+            authenticationService: authenticationService,
+            deletionIsPending: friendSyncService.isAccountDeletionPending,
+            errorMessage: accountActionErrorMessage,
+            onCompletion: handleAccountDeletionAuthorization,
+            onCancel: cancelAccountDeletionAuthorization
+        )
+        .interactiveDismissDisabled(
+            authenticationService.isDeletingAccount
+                || friendSyncService.isAccountDeletionPending
+        )
+    }
+
+    private var accountActionErrorPresented: Binding<Bool> {
+        Binding(
+            get: { accountActionErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    accountActionErrorMessage = nil
+                }
+            }
+        )
+    }
+
+    private func cancelAccountDeletionAuthorization() {
+        authenticationService.cancelAccountDeletion()
+        deletionAuthorizationPresented = false
     }
 
     private var trackingBinding: Binding<Bool> {
@@ -1337,21 +1428,84 @@ private struct ProfileView: View {
         }
     }
 
-    private func resetLocalData() {
-        do {
-            onStopSharingLocation()
-            try locationTracker.resetLocalData()
-            selectedPhoto = nil
-            displayName = ""
-            avatarImageData = Data()
+    private func handleAccountDeletionAuthorization(
+        _ result: Result<ASAuthorization, Error>
+    ) {
+        let authenticationService = authenticationService
+        let friendSyncService = friendSyncService
+        let locationTracker = locationTracker
 
-            withAnimation(.easeInOut(duration: 0.25)) {
-                onboardingCompleted = false
+        Task {
+            do {
+                guard let authorizationCode = try await authenticationService
+                    .reauthenticateForAccountDeletion(result) else {
+                    if friendSyncService.isAccountDeletionPending {
+                        accountActionErrorMessage =
+                            "La vérification Apple est nécessaire pour terminer la suppression."
+                    } else {
+                        deletionAuthorizationPresented = false
+                    }
+                    return
+                }
+
+                try await friendSyncService.deleteCurrentAccountData()
+                try await authenticationService.finishAccountDeletion(
+                    authorizationCode: authorizationCode
+                )
+
+                var localCleanupError: Error?
+                do {
+                    try locationTracker.resetLocalData()
+                } catch {
+                    localCleanupError = error
+                }
+
+                clearLocalProfileData()
+
+                do {
+                    try await friendSyncService.clearLocalFirestoreCache()
+                } catch {
+                    localCleanupError = localCleanupError ?? error
+                }
+
+                if let localCleanupError {
+                    print(
+                        "[Profile] account deleted but local cleanup failed: "
+                            + localCleanupError.localizedDescription
+                    )
+                }
+            } catch {
+                authenticationService.cancelAccountDeletion()
+                if let authenticationError =
+                    error as? FirebaseService.AccountDeletionError {
+                    accountActionErrorMessage =
+                        authenticationError.errorDescription
+                } else {
+                    accountActionErrorMessage =
+                        friendSyncService.accountDeletionMessage(for: error)
+                }
             }
-        } catch {
-            resetFailed = true
-            print("[Profile] failed to reset local data: \(error.localizedDescription)")
         }
+    }
+
+    private func clearLocalProfileData() {
+        selectedPhoto = nil
+        displayName = ""
+        avatarImageData = Data()
+        profileColorHex = ""
+
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: ProfileColor.storageKey)
+        defaults.removeObject(forKey: ProfileColor.ownerStorageKey)
+        defaults.removeObject(forKey: ProfileColor.pendingOwnerStorageKey)
+        defaults.removeObject(
+            forKey: ProfileColor.pendingUserSelectionStorageKey
+        )
+        onboardingCompleted = false
+
+        defaults.removeObject(forKey: "profile.displayName")
+        defaults.removeObject(forKey: "profile.avatarImageData")
+        defaults.removeObject(forKey: "profile.onboardingCompleted")
     }
 
     private func openSettings() {
@@ -1370,6 +1524,87 @@ private struct ProfileView: View {
                 onProfileColorSelected(selectedColorHex)
             }
         )
+    }
+}
+
+private struct AccountDeletionAuthorizationView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject var authenticationService: FirebaseService
+
+    let deletionIsPending: Bool
+    let errorMessage: String?
+    let onCompletion: (Result<ASAuthorization, Error>) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    Image(systemName: "person.crop.circle.badge.minus")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.red)
+                        .accessibilityHidden(true)
+
+                    VStack(spacing: 8) {
+                        Text(
+                            deletionIsPending
+                                ? "Terminer la suppression"
+                                : "Confirmer avec Apple"
+                        )
+                        .font(.title2.bold())
+
+                        Text(
+                            deletionIsPending
+                                ? "La suppression a déjà commencé. Identifie-toi de nouveau pour effacer les données restantes."
+                                : "Wander doit vérifier ton identité avant de supprimer définitivement ton compte."
+                        )
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    }
+
+                    if authenticationService.isDeletingAccount {
+                        ProgressView("Suppression du compte…")
+                    } else {
+                        SignInWithAppleButton(
+                            .continue,
+                            onRequest: authenticationService
+                                .prepareAccountDeletionAuthorizationRequest,
+                            onCompletion: onCompletion
+                        )
+                        .signInWithAppleButtonStyle(
+                            colorScheme == .dark ? .white : .black
+                        )
+                        .frame(height: 50)
+                        .accessibilityLabel(
+                            "Confirmer la suppression avec Apple"
+                        )
+                    }
+
+                    if let errorMessage {
+                        Label(
+                            errorMessage,
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+            }
+            .navigationTitle("Suppression du compte")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if !deletionIsPending
+                    && !authenticationService.isDeletingAccount {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Annuler", action: onCancel)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 

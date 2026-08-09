@@ -18,6 +18,7 @@ final class FirebaseService: ObservableObject {
     @Published private(set) var authErrorMessage: String?
     @Published private(set) var isAuthenticationResolved = false
     @Published private(set) var isSigningIn = false
+    @Published private(set) var isDeletingAccount = false
     @Published private(set) var hasLegacyAnonymousAccount = false
     @Published private(set) var requiresExistingAccountConfirmation = false
 
@@ -25,6 +26,7 @@ final class FirebaseService: ObservableObject {
     private var authStateGeneration = 0
     private var credentialRevocationObserver: NSObjectProtocol?
     private var currentNonce: String?
+    private var accountDeletionNonce: String?
     private var pendingExistingAccountCredential: AuthCredential?
 
     private init() {}
@@ -88,6 +90,137 @@ final class FirebaseService: ObservableObject {
 
     func clearError() {
         authErrorMessage = nil
+    }
+
+    @discardableResult
+    func signOut() -> Bool {
+        guard !isDeletingAccount else { return false }
+
+        currentNonce = nil
+        pendingExistingAccountCredential = nil
+        requiresExistingAccountConfirmation = false
+        authErrorMessage = nil
+
+        do {
+            try Auth.auth().signOut()
+            return true
+        } catch {
+            authErrorMessage =
+                "Impossible de te déconnecter pour le moment. Réessaie."
+            return false
+        }
+    }
+
+    func prepareAccountDeletionAuthorizationRequest(
+        _ request: ASAuthorizationAppleIDRequest
+    ) {
+        configure()
+
+        guard currentUserId != nil, !isDeletingAccount else { return }
+
+        authErrorMessage = nil
+        do {
+            let nonce = try Self.randomNonceString()
+            accountDeletionNonce = nonce
+            isDeletingAccount = true
+            request.nonce = Self.sha256(nonce)
+        } catch {
+            accountDeletionNonce = nil
+            isDeletingAccount = false
+            authErrorMessage =
+                "La vérification sécurisée n’a pas pu démarrer. Réessaie."
+        }
+    }
+
+    /// Returns the fresh Apple authorization code after proving that the
+    /// currently authenticated Firebase user owns the Apple credential.
+    /// A cancelled Apple sheet is represented by `nil` and changes no data.
+    func reauthenticateForAccountDeletion(
+        _ result: Result<ASAuthorization, Error>
+    ) async throws -> String? {
+        switch result {
+        case .failure(let error):
+            accountDeletionNonce = nil
+            isDeletingAccount = false
+
+            if let authorizationError = error as? ASAuthorizationError,
+               authorizationError.code == .canceled {
+                return nil
+            }
+            throw AccountDeletionError.appleAuthorizationFailed
+
+        case .success(let authorization):
+            guard let appleCredential =
+                    authorization.credential as? ASAuthorizationAppleIDCredential,
+                  let nonce = accountDeletionNonce,
+                  let identityToken = appleCredential.identityToken,
+                  let identityTokenString = String(
+                    data: identityToken,
+                    encoding: .utf8
+                  ),
+                  let authorizationCode = appleCredential.authorizationCode,
+                  let authorizationCodeString = String(
+                    data: authorizationCode,
+                    encoding: .utf8
+                  ),
+                  let currentUser = Auth.auth().currentUser,
+                  currentUser.uid == currentUserId
+            else {
+                accountDeletionNonce = nil
+                isDeletingAccount = false
+                throw AccountDeletionError.incompleteAppleResponse
+            }
+
+            accountDeletionNonce = nil
+            let credential = OAuthProvider.appleCredential(
+                withIDToken: identityTokenString,
+                rawNonce: nonce,
+                fullName: appleCredential.fullName
+            )
+
+            do {
+                let result = try await currentUser.reauthenticate(
+                    with: credential
+                )
+                guard result.user.uid == currentUser.uid else {
+                    isDeletingAccount = false
+                    throw AccountDeletionError.wrongAccount
+                }
+                return authorizationCodeString
+            } catch let error as AccountDeletionError {
+                throw error
+            } catch {
+                isDeletingAccount = false
+                throw AccountDeletionError.reauthenticationFailed(error)
+            }
+        }
+    }
+
+    /// Revokes the Sign in with Apple grant before deleting the Firebase Auth
+    /// record, following Firebase's required Apple account-deletion sequence.
+    func finishAccountDeletion(authorizationCode: String) async throws {
+        guard let user = Auth.auth().currentUser,
+              user.uid == currentUserId else {
+            isDeletingAccount = false
+            throw AccountDeletionError.noAuthenticatedUser
+        }
+
+        do {
+            try await Auth.auth().revokeToken(
+                withAuthorizationCode: authorizationCode
+            )
+            try await user.delete()
+            isDeletingAccount = false
+            authErrorMessage = nil
+        } catch {
+            isDeletingAccount = false
+            throw AccountDeletionError.finalizationFailed(error)
+        }
+    }
+
+    func cancelAccountDeletion() {
+        accountDeletionNonce = nil
+        isDeletingAccount = false
     }
 
     func continueWithExistingAppleAccount() {
@@ -318,11 +451,13 @@ final class FirebaseService: ObservableObject {
     private func invalidateAppleSession() {
         authStateGeneration &+= 1
         currentNonce = nil
+        accountDeletionNonce = nil
         pendingExistingAccountCredential = nil
         requiresExistingAccountConfirmation = false
         currentUserId = nil
         hasLegacyAnonymousAccount = false
         isSigningIn = false
+        isDeletingAccount = false
         isAuthenticationResolved = true
 
         do {
@@ -381,6 +516,36 @@ final class FirebaseService: ObservableObject {
 
     private enum NonceGenerationError: Error {
         case randomBytesUnavailable
+    }
+
+    enum AccountDeletionError: LocalizedError {
+        case appleAuthorizationFailed
+        case incompleteAppleResponse
+        case wrongAccount
+        case noAuthenticatedUser
+        case reauthenticationFailed(Error)
+        case finalizationFailed(Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .appleAuthorizationFailed:
+                return "La vérification Apple a échoué. Réessaie."
+            case .incompleteAppleResponse:
+                return "La réponse d’Apple est incomplète. Réessaie."
+            case .wrongAccount:
+                return "Utilise le même compte Apple que celui connecté à Wander."
+            case .noAuthenticatedUser:
+                return "Ta session a expiré. Reconnecte-toi avant de réessayer."
+            case .reauthenticationFailed(let error),
+                 .finalizationFailed(let error):
+                let nsError = error as NSError
+                if nsError.domain == NSURLErrorDomain
+                    || nsError.code == AuthErrorCode.networkError.rawValue {
+                    return "Connexion impossible. Vérifie ta connexion internet."
+                }
+                return "La suppression du compte n’a pas pu aboutir. Réessaie."
+            }
+        }
     }
 
     deinit {

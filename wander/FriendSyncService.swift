@@ -120,6 +120,7 @@ final class FriendSyncService: ObservableObject {
     @Published private(set) var ownExplorationErrorMessage: String?
     @Published private(set) var accountBootstrapErrorMessage: String?
     @Published private(set) var isProcessingFriendAction = false
+    @Published private(set) var isAccountDeletionPending = false
     @Published var errorMessage: String?
 
     var isAccountBootstrapResolved: Bool {
@@ -154,7 +155,7 @@ final class FriendSyncService: ObservableObject {
         Set(receivedFriendExplorationCellIDs.keys)
     }
 
-    private let db = Firestore.firestore()
+    private var db = Firestore.firestore()
     private let friendCodeAlphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
     private let friendCodeLength = 11
     private let maximumProfileCreationAttempts = 8
@@ -280,6 +281,8 @@ final class FriendSyncService: ObservableObject {
     }
 
     func updateDisplayName(_ displayName: String) {
+        guard !isAccountDeletionPending else { return }
+
         let normalizedDisplayName = Self.normalizedDisplayName(displayName)
         guard normalizedDisplayName != desiredDisplayName else { return }
 
@@ -296,6 +299,8 @@ final class FriendSyncService: ObservableObject {
         _ profileColorHex: String,
         userInitiated: Bool = false
     ) {
+        guard !isAccountDeletionPending else { return }
+
         let normalizedProfileColorHex =
             ProfileColor.normalizedHex(profileColorHex)
         desiredProfileColorHex =
@@ -341,6 +346,8 @@ final class FriendSyncService: ObservableObject {
     /// Existing remote cells are loaded first, so relaunching the app does not
     /// rewrite the full history.
     func syncDiscoveredCells(_ cellIDs: Set<String>) {
+        guard !isAccountDeletionPending else { return }
+
         let validCellIDs = Set(cellIDs.filter(Self.isValidH3CellID))
         desiredExplorationCellIDs.formUnion(validCellIDs)
         if hasLoadedOwnExploration {
@@ -354,6 +361,8 @@ final class FriendSyncService: ObservableObject {
     /// Adds only the cells discovered by the latest location update. Keeping this
     /// path incremental avoids filtering and diffing the complete local history.
     func addDiscoveredCells(_ cellIDs: Set<String>) {
+        guard !isAccountDeletionPending else { return }
+
         for cellID in cellIDs where Self.isValidH3CellID(cellID) {
             desiredExplorationCellIDs.insert(cellID)
             if hasLoadedOwnExploration,
@@ -368,6 +377,11 @@ final class FriendSyncService: ObservableObject {
         code rawCode: String,
         completion: @escaping (Bool) -> Void
     ) {
+        guard !isAccountDeletionPending else {
+            completion(false)
+            return
+        }
+
         guard !isProcessingFriendAction else {
             completion(false)
             return
@@ -436,6 +450,7 @@ final class FriendSyncService: ObservableObject {
     }
 
     func accept(_ request: FriendRequest) {
+        guard !isAccountDeletionPending else { return }
         guard !isProcessingFriendAction else { return }
         guard let currentUserID,
               request.requestedBy != currentUserID,
@@ -495,6 +510,7 @@ final class FriendSyncService: ObservableObject {
     }
 
     func decline(_ request: FriendRequest) {
+        guard !isAccountDeletionPending else { return }
         guard !isProcessingFriendAction else { return }
         guard let currentUserID,
               request.requestedBy != currentUserID,
@@ -548,6 +564,7 @@ final class FriendSyncService: ObservableObject {
     }
 
     func removeFriend(userID: String) {
+        guard !isAccountDeletionPending else { return }
         guard !isProcessingFriendAction else { return }
         guard let currentUserID,
               let friendship = friendshipRecords.values.first(where: { record in
@@ -615,6 +632,8 @@ final class FriendSyncService: ObservableObject {
         displayName: String,
         spotEnteredAt: Date?
     ) {
+        guard !isAccountDeletionPending else { return }
+
         guard location.horizontalAccuracy > 0,
               location.horizontalAccuracy <= 1_000,
               CLLocationCoordinate2DIsValid(location.coordinate),
@@ -654,6 +673,79 @@ final class FriendSyncService: ObservableObject {
 
         guard let currentUserID else { return }
         deleteOwnLocation(for: currentUserID)
+    }
+
+    /// Deletes every Firestore document owned by or linking the current user.
+    /// The operation is idempotent: after the remote deletion marker is set,
+    /// synchronization stays suspended and a later Apple authorization can
+    /// safely retry any remaining batches.
+    func deleteCurrentAccountData() async throws {
+        guard let userID = currentUserID else {
+            throw AccountDataDeletionError.noAuthenticatedUser
+        }
+
+        let userReference = db.collection("users").document(userID)
+        let profileSnapshot = try await userReference.getDocument(source: .server)
+        let friendCode = profileSnapshot.data()?["friendCode"] as? String
+
+        if profileSnapshot.exists,
+           profileSnapshot.data()?["deletionRequestedAt"] == nil {
+            try await userReference.updateData(
+                [
+                    "deletionRequestedAt": FieldValue.serverTimestamp(),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ]
+            )
+        }
+
+        suspendSynchronizationForAccountDeletion()
+
+        try await deleteDocumentsInBatches(
+            from: explorationCellsCollection(for: userID)
+        )
+        try await deleteDocumentsInBatches(
+            from: db.collection("friendships")
+                .whereField("participants", arrayContains: userID)
+        )
+        try await db.collection("locations").document(userID).delete()
+
+        guard profileSnapshot.exists else { return }
+        guard let friendCode, Self.isValidFriendCode(friendCode) else {
+            throw AccountDataDeletionError.invalidProfile
+        }
+
+        let finalBatch = db.batch()
+        finalBatch.deleteDocument(
+            db.collection("friendCodes").document(friendCode)
+        )
+        finalBatch.deleteDocument(userReference)
+        try await finalBatch.commit()
+    }
+
+    /// Removes Firestore's on-disk cache after all remote writes are confirmed.
+    /// The next `Firestore.firestore()` call creates a usable fresh instance.
+    func clearLocalFirestoreCache() async throws {
+        authenticationGeneration &+= 1
+        removeAllListeners()
+        profileUpdateTask?.cancel()
+        profileUpdateTask = nil
+
+        let currentDatabase = db
+        try await currentDatabase.terminate()
+        defer { db = Firestore.firestore() }
+        try await currentDatabase.clearPersistence()
+    }
+
+    func accountDeletionMessage(for error: Error) -> String {
+        if let deletionError = error as? AccountDataDeletionError {
+            return deletionError.errorDescription
+                ?? "La suppression du compte n’a pas pu aboutir. Réessaie."
+        }
+
+        return friendlyMessage(
+            for: error,
+            fallback: "La suppression du compte n’a pas pu aboutir. Réessaie."
+        )
     }
 
     // MARK: - Authentication and profile
@@ -700,6 +792,7 @@ final class FriendSyncService: ObservableObject {
         receivedFriendExplorationCellIDs = [:]
         friendExplorationRevision &+= 1
         isProcessingFriendAction = false
+        isAccountDeletionPending = false
         lastLocationPush = nil
         if userID != nil {
             errorMessage = nil
@@ -799,6 +892,7 @@ final class FriendSyncService: ObservableObject {
     }
 
     private func ensureProfile(for userID: String) {
+        guard !isAccountDeletionPending else { return }
         guard !isCreatingProfile else { return }
         isCreatingProfile = true
         attemptProfileCreation(for: userID, attempt: 0)
@@ -945,6 +1039,8 @@ final class FriendSyncService: ObservableObject {
                     self.friendCode = code
                     self.isProfileReady = true
                     self.isPreparingProfile = false
+                    let deletionIsPending =
+                        data["deletionRequestedAt"] is Timestamp
                     let remoteDisplayName = Self.normalizedDisplayName(
                         data["displayName"] as? String ?? ""
                     )
@@ -958,6 +1054,14 @@ final class FriendSyncService: ObservableObject {
                     guard !snapshot.metadata.isFromCache else {
                         // A cached profile is useful for rendering, but it must
                         // not unlock outbound writes on a fresh installation.
+                        return
+                    }
+
+                    if deletionIsPending {
+                        self.hasLoadedOwnProfileFromServer = true
+                        self.accountProfileOrigin = .existing
+                        self.accountBootstrapErrorMessage = nil
+                        self.suspendSynchronizationForAccountDeletion()
                         return
                     }
 
@@ -1016,7 +1120,11 @@ final class FriendSyncService: ObservableObject {
     private func scheduleProfileUpdate() {
         profileUpdateTask?.cancel()
 
-        guard currentUserID != nil, hasLoadedOwnProfileFromServer else { return }
+        guard !isAccountDeletionPending,
+              currentUserID != nil,
+              hasLoadedOwnProfileFromServer else {
+            return
+        }
         profileUpdateTask = Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: 450_000_000)
@@ -1030,7 +1138,8 @@ final class FriendSyncService: ObservableObject {
     }
 
     private func performProfileUpdate() {
-        guard !isUpdatingProfile,
+        guard !isAccountDeletionPending,
+              !isUpdatingProfile,
               !shouldAdoptRemoteProfileColor,
               hasLoadedOwnProfileFromServer,
               let currentUserID,
@@ -1190,7 +1299,8 @@ final class FriendSyncService: ObservableObject {
     }
 
     private func uploadMissingExplorationCellsIfNeeded() {
-        guard let currentUserID,
+        guard !isAccountDeletionPending,
+              let currentUserID,
               hasLoadedOwnExploration,
               !isUploadingExploration else {
             return
@@ -1807,7 +1917,8 @@ final class FriendSyncService: ObservableObject {
         for userID: String,
         bypassThrottle: Bool
     ) {
-        guard currentUserID == userID,
+        guard !isAccountDeletionPending,
+              currentUserID == userID,
               FriendLocation.isFresh(
                 sampledAt: location.timestamp,
                 at: Date()
@@ -1882,6 +1993,38 @@ final class FriendSyncService: ObservableObject {
     }
 
     // MARK: - Cleanup and helpers
+
+    private func suspendSynchronizationForAccountDeletion() {
+        guard !isAccountDeletionPending else { return }
+
+        isAccountDeletionPending = true
+        authenticationGeneration &+= 1
+        removeAllListeners()
+        profileUpdateTask?.cancel()
+        profileUpdateTask = nil
+        isCreatingProfile = false
+        isUpdatingProfile = false
+        isUploadingExploration = false
+        isProcessingFriendAction = false
+        uploadingExplorationCellIDs = []
+        latestLocationForSharing = nil
+        lastLocationPush = nil
+    }
+
+    private func deleteDocumentsInBatches(from query: Query) async throws {
+        while true {
+            let snapshot = try await query
+                .limit(to: 400)
+                .getDocuments(source: .server)
+            guard !snapshot.documents.isEmpty else { return }
+
+            let batch = db.batch()
+            for document in snapshot.documents {
+                batch.deleteDocument(document.reference)
+            }
+            try await batch.commit()
+        }
+    }
 
     private func removeAllListeners() {
         ownProfileListener?.remove()
@@ -1971,6 +2114,20 @@ final class FriendSyncService: ObservableObject {
         guard (10...12).contains(code.count) else { return false }
         let allowedCharacters = Set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
         return code.allSatisfy { allowedCharacters.contains($0) }
+    }
+
+    private enum AccountDataDeletionError: LocalizedError {
+        case noAuthenticatedUser
+        case invalidProfile
+
+        var errorDescription: String? {
+            switch self {
+            case .noAuthenticatedUser:
+                return "Ta session a expiré. Reconnecte-toi avant de réessayer."
+            case .invalidProfile:
+                return "Le profil distant est incomplet. Réessaie dans quelques instants."
+            }
+        }
     }
 
     nonisolated private static func isValidH3CellID(_ cellID: String) -> Bool {
