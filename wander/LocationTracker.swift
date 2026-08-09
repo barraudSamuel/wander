@@ -123,6 +123,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     /// The complete local set is mirrored to Firebase by `FriendSyncService`
     /// and remains readable only by accepted friends.
     @Published var newlyDiscoveredCellIDs: Set<String> = []
+    @Published private(set) var explorationRestoreError: String?
 
     // Last accepted segment statistics for the debug panel.
     @Published var lastSegmentDistance: CLLocationDistance?
@@ -154,6 +155,26 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         cellStore.configure(with: context)
         discoveredCells = cellStore.cells
         rebuildHeatMapData()
+    }
+
+    /// Restores the owner's Firestore exploration into the SwiftData cache.
+    /// Existing local cells keep their richer heat-map metadata.
+    @discardableResult
+    func restoreDiscoveredCells(_ remoteCells: [RemoteDiscoveredCell]) -> Bool {
+        do {
+            try cellStore.mergeRemoteCells(
+                remoteCells,
+                resolution: explorationEngine.resolution
+            )
+            discoveredCells = cellStore.cells
+            rebuildHeatMapData()
+            explorationRestoreError = nil
+            return true
+        } catch {
+            explorationRestoreError =
+                "Impossible de restaurer ta carte sur cet appareil. Réessaie."
+            return false
+        }
     }
 
     // MARK: - Heat map persistence

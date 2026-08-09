@@ -12,6 +12,8 @@ import SwiftUI
 import UIKit
 
 struct OnboardingView: View {
+    let isRestoringExistingProfile: Bool
+
     @AppStorage("profile.displayName") private var storedDisplayName = ""
     @AppStorage("profile.avatarImageData") private var avatarImageData = Data()
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
@@ -108,7 +110,12 @@ struct OnboardingView: View {
             Button {
                 path.append(.profile)
             } label: {
-                Label("Créer mon profil", systemImage: "arrow.right")
+                Label(
+                    isRestoringExistingProfile
+                        ? "Continuer"
+                        : "Créer mon profil",
+                    systemImage: "arrow.right"
+                )
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -128,11 +135,19 @@ struct OnboardingView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Fais connaissance")
+                        Text(
+                            isRestoringExistingProfile
+                                ? "Retrouve ton profil"
+                                : "Fais connaissance"
+                        )
                             .font(.largeTitle.bold())
                             .accessibilityAddTraits(.isHeader)
 
-                        Text("Ton pseudo et ta photo permettent à tes amis de te reconnaître sur la carte.")
+                        Text(
+                            isRestoringExistingProfile
+                                ? "Ton pseudo a été récupéré depuis ton compte. Tu peux le vérifier avant de configurer ce téléphone."
+                                : "Ton pseudo et ta photo permettent à tes amis de te reconnaître sur la carte."
+                        )
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

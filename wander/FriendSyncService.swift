@@ -70,6 +70,19 @@ struct FriendExploration: Equatable {
     let cellIDs: Set<String>
 }
 
+enum OwnExplorationSyncState: Equatable {
+    case idle
+    case loading
+    case ready
+    case failed
+}
+
+enum AccountProfileOrigin: Equatable {
+    case unresolved
+    case created
+    case existing
+}
+
 private struct RemoteProfile {
     let displayName: String
     let profileColorHex: String
@@ -99,8 +112,20 @@ final class FriendSyncService: ObservableObject {
     @Published private(set) var friendExplorationRevision = 0
     @Published private(set) var isProfileReady = false
     @Published private(set) var isPreparingProfile = true
+    @Published private(set) var hasLoadedOwnProfileFromServer = false
+    @Published private(set) var accountProfileOrigin: AccountProfileOrigin = .unresolved
+    @Published private(set) var ownExplorationCells: [RemoteDiscoveredCell] = []
+    @Published private(set) var ownExplorationRevision = 0
+    @Published private(set) var ownExplorationSyncState: OwnExplorationSyncState = .idle
+    @Published private(set) var ownExplorationErrorMessage: String?
+    @Published private(set) var accountBootstrapErrorMessage: String?
     @Published private(set) var isProcessingFriendAction = false
     @Published var errorMessage: String?
+
+    var isAccountBootstrapResolved: Bool {
+        hasLoadedOwnProfileFromServer
+            && accountProfileOrigin != .unresolved
+    }
 
     var friendLocations: [String: FriendLocation] {
         receivedFriendLocations
@@ -158,8 +183,13 @@ final class FriendSyncService: ObservableObject {
     private var isCreatingProfile = false
     private var isUpdatingProfile = false
     private var isUploadingExploration = false
+    private var hasPendingDisplayNameEditBeforeProfileHydration = false
+    private var hasPendingProfileColorEditBeforeProfileHydration = false
+    private var hasPendingDisplayNameChange = false
+    private var hasPendingProfileColorChange = false
     private var hasPendingUserSelectedProfileColor = false
     private var hasLoadedOwnExploration = false
+    private var ownExplorationCellsByID: [String: RemoteDiscoveredCell] = [:]
     private var uploadedExplorationCellIDs: Set<String> = []
     private var desiredExplorationCellIDs: Set<String> = []
     private var pendingExplorationCellIDs: Set<String> = []
@@ -230,11 +260,35 @@ final class FriendSyncService: ObservableObject {
     }
 
     func retryProfileSetup() {
-        clearError()
+        errorMessage = nil
+        accountBootstrapErrorMessage = nil
+        FirebaseService.shared.clearError()
+        guard let currentUserID else { return }
+
+        isPreparingProfile = true
+        listenToOwnProfile(for: currentUserID)
+        if accountProfileOrigin == .unresolved || !isProfileReady {
+            ensureProfile(for: currentUserID)
+        }
+    }
+
+    func retryOwnExplorationSync() {
+        guard let currentUserID else { return }
+        errorMessage = nil
+        ownExplorationErrorMessage = nil
+        listenToOwnExploration(for: currentUserID)
     }
 
     func updateDisplayName(_ displayName: String) {
-        desiredDisplayName = Self.normalizedDisplayName(displayName)
+        let normalizedDisplayName = Self.normalizedDisplayName(displayName)
+        guard normalizedDisplayName != desiredDisplayName else { return }
+
+        desiredDisplayName = normalizedDisplayName
+        if hasLoadedOwnProfileFromServer {
+            hasPendingDisplayNameChange = true
+        } else {
+            hasPendingDisplayNameEditBeforeProfileHydration = true
+        }
         scheduleProfileUpdate()
     }
 
@@ -246,6 +300,14 @@ final class FriendSyncService: ObservableObject {
             ProfileColor.normalizedHex(profileColorHex)
         desiredProfileColorHex =
             normalizedProfileColorHex ?? ProfileColor.storedOrGeneratedHex()
+
+        if userInitiated {
+            if hasLoadedOwnProfileFromServer {
+                hasPendingProfileColorChange = true
+            } else {
+                hasPendingProfileColorEditBeforeProfileHydration = true
+            }
+        }
 
         if userInitiated {
             shouldAdoptRemoteProfileColor = false
@@ -611,10 +673,22 @@ final class FriendSyncService: ObservableObject {
         isCreatingProfile = false
         isUpdatingProfile = false
         isUploadingExploration = false
+        hasLoadedOwnProfileFromServer = false
+        accountProfileOrigin = .unresolved
+        accountBootstrapErrorMessage = nil
+        hasPendingDisplayNameEditBeforeProfileHydration = false
+        hasPendingProfileColorEditBeforeProfileHydration = false
+        hasPendingDisplayNameChange = false
+        hasPendingProfileColorChange = false
         hasLoadedOwnExploration = false
+        ownExplorationCellsByID = [:]
         uploadedExplorationCellIDs = []
         pendingExplorationCellIDs = []
         uploadingExplorationCellIDs = []
+        ownExplorationCells = []
+        ownExplorationRevision &+= 1
+        ownExplorationSyncState = userID == nil ? .idle : .loading
+        ownExplorationErrorMessage = nil
         lastKnownProfileDisplayName = nil
         lastKnownProfileColorHex = nil
         friendshipRecords = [:]
@@ -629,6 +703,9 @@ final class FriendSyncService: ObservableObject {
         lastLocationPush = nil
         if userID != nil {
             errorMessage = nil
+        } else {
+            latestLocationForSharing = nil
+            desiredExplorationCellIDs = []
         }
 
         guard let userID else { return }
@@ -648,6 +725,7 @@ final class FriendSyncService: ObservableObject {
 
         if hasPendingUserSelectedProfileColor {
             hasPendingUserSelectedProfileColor = false
+            hasPendingProfileColorEditBeforeProfileHydration = true
             shouldAdoptRemoteProfileColor = false
             UserDefaults.standard.removeObject(
                 forKey: ProfileColor.pendingOwnerStorageKey
@@ -744,14 +822,17 @@ final class FriendSyncService: ObservableObject {
                 if userSnapshot.exists {
                     guard let existingCode = userSnapshot.data()?["friendCode"] as? String,
                           Self.isValidFriendCode(existingCode) else {
-                        return "invalid-profile"
+                        return ["status": "invalid-profile"]
                     }
-                    return existingCode
+                    return [
+                        "status": "existing",
+                        "friendCode": existingCode
+                    ]
                 }
 
                 let codeSnapshot = try transaction.getDocument(codeReference)
                 if codeSnapshot.exists {
-                    return "collision"
+                    return ["status": "collision"]
                 }
 
                 transaction.setData(
@@ -772,7 +853,10 @@ final class FriendSyncService: ObservableObject {
                     ],
                     forDocument: codeReference
                 )
-                return proposedCode
+                return [
+                    "status": "created",
+                    "friendCode": proposedCode
+                ]
             } catch {
                 errorPointer?.pointee = error as NSError
                 return nil
@@ -784,14 +868,19 @@ final class FriendSyncService: ObservableObject {
                 if let error {
                     self.isCreatingProfile = false
                     self.isPreparingProfile = false
-                    self.errorMessage = self.friendlyMessage(
+                    let message = self.friendlyMessage(
                         for: error,
                         fallback: "Impossible de créer ton profil Wander."
                     )
+                    self.accountBootstrapErrorMessage = message
+                    self.errorMessage = message
                     return
                 }
 
-                if result as? String == "collision",
+                let transactionResult = result as? [String: String]
+                let status = transactionResult?["status"]
+
+                if status == "collision",
                    attempt + 1 < self.maximumProfileCreationAttempts {
                     self.attemptProfileCreation(for: userID, attempt: attempt + 1)
                     return
@@ -799,14 +888,25 @@ final class FriendSyncService: ObservableObject {
 
                 self.isCreatingProfile = false
 
-                if result as? String == "collision"
-                    || result as? String == "invalid-profile" {
+                if status == "collision" || status == "invalid-profile" {
                     self.isPreparingProfile = false
-                    self.errorMessage = "Impossible de créer ton profil Wander."
+                    let message = "Impossible de créer ton profil Wander."
+                    self.accountBootstrapErrorMessage = message
+                    self.errorMessage = message
                     return
                 }
 
-                self.scheduleProfileUpdate()
+                switch status {
+                case "existing":
+                    self.accountProfileOrigin = .existing
+                case "created":
+                    self.accountProfileOrigin = .created
+                default:
+                    self.isPreparingProfile = false
+                    let message = "Impossible de préparer ton profil Wander."
+                    self.accountBootstrapErrorMessage = message
+                    self.errorMessage = message
+                }
             }
         }
     }
@@ -825,10 +925,12 @@ final class FriendSyncService: ObservableObject {
 
                     if let error {
                         self.isPreparingProfile = false
-                        self.errorMessage = self.friendlyMessage(
+                        let message = self.friendlyMessage(
                             for: error,
                             fallback: "Impossible de charger ton profil Wander."
                         )
+                        self.accountBootstrapErrorMessage = message
+                        self.errorMessage = message
                         return
                     }
 
@@ -843,45 +945,65 @@ final class FriendSyncService: ObservableObject {
                     self.friendCode = code
                     self.isProfileReady = true
                     self.isPreparingProfile = false
-                    self.lastKnownProfileDisplayName =
-                        data["displayName"] as? String
-                    self.lastKnownProfileColorHex =
+                    let remoteDisplayName = Self.normalizedDisplayName(
+                        data["displayName"] as? String ?? ""
+                    )
+                    let remoteProfileColorHex =
                         (data["profileColorHex"] as? String).flatMap(
                             ProfileColor.normalizedHex
                         )
+                    self.lastKnownProfileDisplayName = remoteDisplayName
+                    self.lastKnownProfileColorHex = remoteProfileColorHex
 
-                    if self.shouldAdoptRemoteProfileColor {
-                        guard !snapshot.metadata.isFromCache else {
-                            // Metadata changes are included, so an identical
-                            // server snapshot will still arrive after this
-                            // potentially stale cached value.
-                            return
-                        }
+                    guard !snapshot.metadata.isFromCache else {
+                        // A cached profile is useful for rendering, but it must
+                        // not unlock outbound writes on a fresh installation.
+                        return
+                    }
 
-                        self.shouldAdoptRemoteProfileColor = false
+                    if self.hasPendingDisplayNameEditBeforeProfileHydration {
+                        self.hasPendingDisplayNameChange = true
+                    } else if !self.hasPendingDisplayNameChange {
+                        self.desiredDisplayName = remoteDisplayName
+                        UserDefaults.standard.set(
+                            remoteDisplayName,
+                            forKey: "profile.displayName"
+                        )
+                    }
+
+                    if self.hasPendingProfileColorEditBeforeProfileHydration {
+                        self.hasPendingProfileColorChange = true
+                    } else if !self.hasPendingProfileColorChange {
                         let resolvedProfileColorHex =
-                            self.lastKnownProfileColorHex
-                            ?? self.desiredProfileColorHex
+                            remoteProfileColorHex ?? self.desiredProfileColorHex
                         self.desiredProfileColorHex = resolvedProfileColorHex
                         UserDefaults.standard.set(
                             resolvedProfileColorHex,
                             forKey: ProfileColor.storageKey
                         )
+                        if remoteProfileColorHex == nil {
+                            self.hasPendingProfileColorChange = true
+                        }
                     }
 
-                    if !snapshot.metadata.isFromCache {
-                        UserDefaults.standard.set(
-                            userID,
-                            forKey: ProfileColor.ownerStorageKey
-                        )
-                        UserDefaults.standard.removeObject(
-                            forKey: ProfileColor.pendingOwnerStorageKey
-                        )
-                        UserDefaults.standard.set(
-                            false,
-                            forKey: ProfileColor.pendingUserSelectionStorageKey
-                        )
-                    }
+                    self.shouldAdoptRemoteProfileColor = false
+                    self.hasLoadedOwnProfileFromServer = true
+                    self.accountBootstrapErrorMessage = nil
+                    self.hasPendingDisplayNameEditBeforeProfileHydration = false
+                    self.hasPendingProfileColorEditBeforeProfileHydration = false
+                    self.isPreparingProfile = false
+
+                    UserDefaults.standard.set(
+                        userID,
+                        forKey: ProfileColor.ownerStorageKey
+                    )
+                    UserDefaults.standard.removeObject(
+                        forKey: ProfileColor.pendingOwnerStorageKey
+                    )
+                    UserDefaults.standard.set(
+                        false,
+                        forKey: ProfileColor.pendingUserSelectionStorageKey
+                    )
 
                     if self.lastKnownProfileDisplayName != self.desiredDisplayName
                         || self.lastKnownProfileColorHex != self.desiredProfileColorHex {
@@ -894,7 +1016,7 @@ final class FriendSyncService: ObservableObject {
     private func scheduleProfileUpdate() {
         profileUpdateTask?.cancel()
 
-        guard currentUserID != nil else { return }
+        guard currentUserID != nil, hasLoadedOwnProfileFromServer else { return }
         profileUpdateTask = Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: 450_000_000)
@@ -910,6 +1032,7 @@ final class FriendSyncService: ObservableObject {
     private func performProfileUpdate() {
         guard !isUpdatingProfile,
               !shouldAdoptRemoteProfileColor,
+              hasLoadedOwnProfileFromServer,
               let currentUserID,
               let friendCode,
               isProfileReady,
@@ -954,6 +1077,12 @@ final class FriendSyncService: ObservableObject {
 
                 self.lastKnownProfileDisplayName = newDisplayName
                 self.lastKnownProfileColorHex = newProfileColorHex
+                if self.desiredDisplayName == newDisplayName {
+                    self.hasPendingDisplayNameChange = false
+                }
+                if self.desiredProfileColorHex == newProfileColorHex {
+                    self.hasPendingProfileColorChange = false
+                }
                 if self.desiredDisplayName != newDisplayName
                     || self.desiredProfileColorHex != newProfileColorHex {
                     self.scheduleProfileUpdate()
@@ -966,6 +1095,7 @@ final class FriendSyncService: ObservableObject {
 
     private func listenToOwnExploration(for userID: String) {
         let generation = authenticationGeneration
+        ownExplorationSyncState = .loading
         ownExplorationListener?.remove()
         ownExplorationListener = explorationCellsCollection(for: userID)
             .addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
@@ -978,10 +1108,13 @@ final class FriendSyncService: ObservableObject {
 
                     if let error {
                         self.hasLoadedOwnExploration = false
-                        self.errorMessage = self.friendlyMessage(
+                        self.ownExplorationSyncState = .failed
+                        let message = self.friendlyMessage(
                             for: error,
                             fallback: "Impossible de synchroniser ta carte découverte."
                         )
+                        self.ownExplorationErrorMessage = message
+                        self.errorMessage = message
                         return
                     }
 
@@ -1002,11 +1135,18 @@ final class FriendSyncService: ObservableObject {
                             switch change.type {
                             case .added, .modified:
                                 self.uploadedExplorationCellIDs.insert(cellID)
+                                self.ownExplorationCellsByID[cellID] =
+                                    Self.remoteDiscoveredCell(
+                                        from: change.document
+                                    )
                                 if !self.uploadingExplorationCellIDs.contains(cellID) {
                                     self.pendingExplorationCellIDs.remove(cellID)
                                 }
                             case .removed:
                                 self.uploadedExplorationCellIDs.remove(cellID)
+                                self.ownExplorationCellsByID.removeValue(
+                                    forKey: cellID
+                                )
                                 if self.desiredExplorationCellIDs.contains(cellID) {
                                     self.pendingExplorationCellIDs.insert(cellID)
                                 }
@@ -1016,12 +1156,34 @@ final class FriendSyncService: ObservableObject {
                         self.uploadedExplorationCellIDs = Self.explorationCellIDs(
                             in: snapshot
                         )
+                        self.ownExplorationCellsByID = Dictionary(
+                            uniqueKeysWithValues: snapshot.documents.compactMap {
+                                document in
+                                guard let remoteCell = Self.remoteDiscoveredCell(
+                                    from: document
+                                ) else {
+                                    return nil
+                                }
+                                return (remoteCell.id, remoteCell)
+                            }
+                        )
                         self.pendingExplorationCellIDs =
                             self.desiredExplorationCellIDs.subtracting(
                                 self.uploadedExplorationCellIDs
                             )
                         self.hasLoadedOwnExploration = true
                     }
+                    let resolvedRemoteCells =
+                        self.ownExplorationCellsByID.values.sorted {
+                            $0.id < $1.id
+                        }
+                    if self.ownExplorationCells != resolvedRemoteCells
+                        || self.ownExplorationSyncState != .ready {
+                        self.ownExplorationCells = resolvedRemoteCells
+                        self.ownExplorationRevision &+= 1
+                    }
+                    self.ownExplorationSyncState = .ready
+                    self.ownExplorationErrorMessage = nil
                     self.uploadMissingExplorationCellsIfNeeded()
                 }
             }
@@ -1136,6 +1298,18 @@ final class FriendSyncService: ObservableObject {
             snapshot.documents
                 .map(\.documentID)
                 .filter(Self.isValidH3CellID)
+        )
+    }
+
+    private static func remoteDiscoveredCell(
+        from document: QueryDocumentSnapshot
+    ) -> RemoteDiscoveredCell? {
+        let cellID = document.documentID
+        guard isValidH3CellID(cellID) else { return nil }
+
+        return RemoteDiscoveredCell(
+            id: cellID,
+            sharedAt: (document.data()["sharedAt"] as? Timestamp)?.dateValue()
         )
     }
 

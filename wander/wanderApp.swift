@@ -12,6 +12,8 @@ import SwiftData
 struct wanderApp: App {
     let container: ModelContainer
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
+    @StateObject private var authenticationService = FirebaseService.shared
+    @StateObject private var friendSyncService = FriendSyncService.shared
 
     init() {
         do {
@@ -22,18 +24,60 @@ struct wanderApp: App {
         LegacyMigration.migrateJSONToSwiftData(container: container)
 
         FirebaseService.shared.configure()
-        _ = FriendSyncService.shared
-        FirebaseService.shared.signIn()
     }
 
     var body: some Scene {
         WindowGroup {
-            if onboardingCompleted {
-                ContentView()
-            } else {
-                OnboardingView()
+            Group {
+                if !authenticationService.isAuthenticationResolved {
+                    ProgressView("Connexion…")
+                } else if authenticationService.currentUserId == nil {
+                    AuthenticationView(
+                        authenticationService: authenticationService
+                    )
+                } else if onboardingCompleted {
+                    ContentView()
+                } else if !friendSyncService.isAccountBootstrapResolved {
+                    AccountBootstrapView(service: friendSyncService)
+                } else {
+                    OnboardingView(
+                        isRestoringExistingProfile:
+                            friendSyncService.accountProfileOrigin == .existing
+                    )
+                }
             }
+            .animation(
+                .default,
+                value: authenticationService.currentUserId
+            )
         }
         .modelContainer(container)
+    }
+}
+
+private struct AccountBootstrapView: View {
+    @ObservedObject var service: FriendSyncService
+
+    var body: some View {
+        Group {
+            if let errorMessage = service.accountBootstrapErrorMessage {
+                ContentUnavailableView {
+                    Label(
+                        "Compte indisponible",
+                        systemImage: "person.crop.circle.badge.exclamationmark"
+                    )
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Réessayer") {
+                        service.retryProfileSetup()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            } else {
+                ProgressView("Restauration de ton compte…")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

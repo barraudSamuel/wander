@@ -145,6 +145,7 @@ struct ContentView: View {
         }
         .onAppear {
             locationTracker.configure(with: modelContext)
+            restoreOwnExplorationIfAvailable()
             locationTracker.resumeTrackingIfNeeded()
             friendSyncService.updateDisplayName(displayName)
             syncProfileColor(profileColorHex)
@@ -216,6 +217,9 @@ struct ContentView: View {
         .onChange(of: friendSyncService.friendExplorationRevision) {
             refreshFriendExplorationProgress()
         }
+        .onChange(of: friendSyncService.ownExplorationRevision) {
+            restoreOwnExplorationIfAvailable()
+        }
         .onChange(of: cityBoundary.cityCellIDs) {
             refreshCityProgress()
             refreshFriendExplorationProgress()
@@ -277,6 +281,8 @@ struct ContentView: View {
                 onViewFriendProfile: presentFriendProfile
             )
             .ignoresSafeArea()
+
+            ownExplorationStatusOverlay
 
             Button {
                 filterSheetVisible = true
@@ -356,6 +362,60 @@ struct ContentView: View {
             )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+    }
+
+    @ViewBuilder
+    private var ownExplorationStatusOverlay: some View {
+        if locationTracker.discoveredCellIDs.isEmpty {
+            if locationTracker.explorationRestoreError != nil {
+                ContentUnavailableView {
+                    Label(
+                        "Carte indisponible",
+                        systemImage: "externaldrive.badge.exclamationmark"
+                    )
+                } description: {
+                    Text(
+                        "Wander n’a pas pu enregistrer les zones de ton compte "
+                            + "sur cet appareil."
+                    )
+                } actions: {
+                    Button("Réessayer") {
+                        restoreOwnExplorationIfAvailable()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.regularMaterial)
+            } else {
+                switch friendSyncService.ownExplorationSyncState {
+                case .idle, .loading:
+                    ProgressView("Restauration de ta carte…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.regularMaterial)
+                case .failed:
+                    ContentUnavailableView {
+                        Label(
+                            "Synchronisation impossible",
+                            systemImage: "icloud.slash"
+                        )
+                    } description: {
+                        Text(
+                            friendSyncService.ownExplorationErrorMessage
+                                ?? "Vérifie ta connexion internet pour retrouver les zones enregistrées sur ton compte."
+                        )
+                    } actions: {
+                        Button("Réessayer") {
+                            friendSyncService.retryOwnExplorationSync()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.regularMaterial)
+                case .ready:
+                    EmptyView()
+                }
+            }
         }
     }
 
@@ -604,6 +664,22 @@ struct ContentView: View {
         }
 
         friendSyncService.updateProfileColor(normalizedValue)
+    }
+
+    private func restoreOwnExplorationIfAvailable() {
+        guard friendSyncService.ownExplorationSyncState == .ready else {
+            return
+        }
+
+        guard locationTracker.restoreDiscoveredCells(
+            friendSyncService.ownExplorationCells
+        ) else {
+            return
+        }
+
+        let reconciledCellIDs = locationTracker.discoveredCellIDs
+        friendSyncService.syncDiscoveredCells(reconciledCellIDs)
+        refreshCityProgress(discoveredCellIDs: reconciledCellIDs)
     }
 
     // MARK: - City progress
@@ -1179,7 +1255,7 @@ private struct ProfileView: View {
                     }
                 } footer: {
                     Text(
-                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Les zones déjà partagées, le compte Firebase et les relations d’amitié ne sont pas effacés."
+                        "Supprime le profil, les préférences et la progression enregistrés sur cet appareil, puis relance l’onboarding. Les zones déjà partagées, le compte Firebase et les relations d’amitié ne sont pas effacés et pourront être restaurés depuis ton compte."
                     )
                 }
             }

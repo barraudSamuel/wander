@@ -1329,10 +1329,12 @@ struct MapWithFogView: UIViewRepresentable {
         updateUserLocationAnnotation(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
-        // Center on the user once we have a location; otherwise fit the loaded
-        // city boundary as a useful starting region.
+        // A loaded city boundary is only a temporary starting region. Always
+        // let the first valid user location take precedence, then leave later
+        // camera movement under the user's control.
         if let coordinate = locationTracker.lastLocation?.coordinate,
-           !context.coordinator.didSetInitialRegion {
+           !context.coordinator.didCenterOnUser {
+            context.coordinator.didCenterOnUser = true
             context.coordinator.didSetInitialRegion = true
             setFocusedRegion(on: uiView, center: coordinate, animated: true)
         } else if !context.coordinator.didSetInitialRegion,
@@ -1785,6 +1787,7 @@ struct MapWithFogView: UIViewRepresentable {
         var lastHeatMapRevision = 0
         var lastFriendExplorations: [String: FriendExploration] = [:]
         var didSetInitialRegion = false
+        var didCenterOnUser = false
         var userLocationAnnotation: UserLocationAnnotation?
         private var userAvatarImageData = Data()
         private var userDisplayName = ""

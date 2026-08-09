@@ -18,6 +18,11 @@ struct CellHeatMapUpdate {
     let visitIncrement: Int
 }
 
+struct RemoteDiscoveredCell: Identifiable, Equatable {
+    let id: String
+    let sharedAt: Date?
+}
+
 final class DiscoveredCellStore: ObservableObject {
     @Published private(set) var cells: [DiscoveredCell] = []
     private(set) var cellIDs: Set<String> = []
@@ -127,6 +132,58 @@ final class DiscoveredCellStore: ObservableObject {
 
         try? context.save()
         publishCells(adding: insertedCells)
+    }
+
+    /// Adds remotely discovered cells without changing metadata already
+    /// collected on this device. Exploration is monotone: a remote omission
+    /// never removes a local cell.
+    @discardableResult
+    func mergeRemoteCells(
+        _ remoteCells: [RemoteDiscoveredCell],
+        resolution: Int,
+        fallbackSeenAt: Date = Date()
+    ) throws -> Int {
+        guard let context = modelContext, !remoteCells.isEmpty else { return 0 }
+
+        var insertedCells: [DiscoveredCell] = []
+        insertedCells.reserveCapacity(remoteCells.count)
+        var pendingSaveCount = 0
+
+        do {
+            for remoteCell in remoteCells.sorted(by: { $0.id < $1.id }) {
+                guard cellsByID[remoteCell.id] == nil else { continue }
+
+                let seenAt = remoteCell.sharedAt ?? fallbackSeenAt
+                let cell = DiscoveredCell(
+                    id: remoteCell.id,
+                    resolution: resolution,
+                    firstSeenAt: seenAt,
+                    lastSeenAt: seenAt
+                )
+                context.insert(cell)
+                cellsByID[remoteCell.id] = cell
+                cellIDs.insert(remoteCell.id)
+                insertedCells.append(cell)
+                pendingSaveCount += 1
+
+                if pendingSaveCount == 450 {
+                    try context.save()
+                    pendingSaveCount = 0
+                }
+            }
+
+            guard !insertedCells.isEmpty else { return 0 }
+
+            if pendingSaveCount > 0 {
+                try context.save()
+            }
+        } catch {
+            context.rollback()
+            load()
+            throw error
+        }
+        publishCells(adding: insertedCells)
+        return insertedCells.count
     }
 
     func contains(_ cellID: String) -> Bool {
