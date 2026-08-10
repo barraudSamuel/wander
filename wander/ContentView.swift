@@ -1267,10 +1267,9 @@ private struct ProfileView: View {
                 deletionAuthorizationPresented = true
             }
         }
-        .confirmationDialog(
+        .alert(
             "Se déconnecter ?",
-            isPresented: $signOutConfirmationPresented,
-            titleVisibility: .visible
+            isPresented: $signOutConfirmationPresented
         ) {
             Button("Se déconnecter") {
                 if !authenticationService.signOut() {
@@ -1285,10 +1284,9 @@ private struct ProfileView: View {
                 "Tes données restent enregistrées et seront retrouvées à ta prochaine connexion."
             )
         }
-        .confirmationDialog(
+        .alert(
             "Supprimer définitivement ton compte ?",
-            isPresented: $deleteConfirmationPresented,
-            titleVisibility: .visible
+            isPresented: $deleteConfirmationPresented
         ) {
             Button("Continuer", role: .destructive) {
                 deletionAuthorizationPresented = true
