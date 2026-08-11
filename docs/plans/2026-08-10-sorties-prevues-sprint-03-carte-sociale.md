@@ -1,6 +1,6 @@
 ---
 title: "Sorties prévues — Sprint 3 — Affichage social sur la carte"
-status: proposed
+status: in_progress
 sprint: 3
 date: 2026-08-10
 completed_at:
@@ -14,8 +14,10 @@ tags: [plan, sprint, mapkit, friends]
 
 ## Status
 
-Ce sprint est `proposed`. Il requiert les Sprints 1 et 2 en statut `completed`
-et une approbation spécifique avant toute modification du code.
+Ce sprint est `in_progress`. Il a été approuvé explicitement par le
+propriétaire le 2026-08-11. Les Sprints 1 et 2 sont en statut `completed`.
+L'utilisation de la couleur du profil pour la sortie personnelle a été
+approuvée explicitement le 2026-08-11.
 
 ## Outcome
 
@@ -57,18 +59,22 @@ d'accessibilité doivent employer explicitement « sortie prévue » et une heur
 - `wander/OutingPlanService.swift` — écoute des amis acceptés et expiration.
 - `wander/MapWithFogView.swift` — annotations, callouts et recentrage.
 - `wander/ContentView.swift` — données transmises à la carte.
+- `todos/008-blocked-p1-valider-sorties-sociales-deux-comptes.md` —
+  validation interactive restante.
 
 ## Implementation checklist
 
-- [ ] Ajouter un écouteur direct par ami accepté, sans requête globale.
-- [ ] Retirer immédiatement les écouteurs des relations supprimées.
-- [ ] Ignorer tout document invalide ou expiré.
-- [ ] Mettre en place un minuteur d'expiration sans fuite mémoire.
-- [ ] Créer une classe d'annotation dédiée aux sorties.
-- [ ] Ajouter un callout natif avec heure locale et adresse facultative.
-- [ ] Fournir des libellés VoiceOver non ambigus.
-- [ ] Préserver l'ordre des overlays et les annotations de position existantes.
-- [ ] Ajouter le recentrage sans perturber le suivi de la position réelle.
+- [x] Ajouter un écouteur direct par ami accepté, sans requête globale.
+- [x] Retirer immédiatement les écouteurs des relations supprimées.
+- [x] Ignorer tout document invalide ou expiré.
+- [x] Mettre en place un minuteur d'expiration sans fuite mémoire.
+- [x] Créer une classe d'annotation dédiée aux sorties.
+- [x] Ajouter un callout natif avec heure locale et adresse facultative.
+- [x] Fournir des libellés VoiceOver non ambigus.
+- [x] Préserver l'ordre des overlays et les annotations de position existantes.
+- [x] Ajouter le recentrage sans perturber le suivi de la position réelle.
+- [x] Utiliser la couleur du profil pour le marqueur de la sortie personnelle,
+      en conservant son icône et son libellé distinctifs.
 
 ## Risks
 
@@ -82,7 +88,7 @@ d'accessibilité doivent employer explicitement « sortie prévue » et une heur
 
 ## Validation
 
-- [ ] Build Debug iOS réussi sans nouvel avertissement.
+- [x] Build Debug iOS réussi sans nouvel avertissement Swift.
 - [ ] Deux comptes amis voient la même sortie active.
 - [ ] Un compte non ami ne peut ni lire ni afficher la sortie.
 - [ ] Position réelle et sortie prévue sont visuellement distinctes.
@@ -93,6 +99,20 @@ d'accessibilité doivent employer explicitement « sortie prévue » et une heur
 
 ## Completion record
 
-Renseigner les validations à deux comptes, les captures et `completed_at` avant
-de marquer ce sprint `completed`. Arrêter ensuite et demander l'approbation du
-Sprint 4.
+Validation partielle du 2026-08-11 :
+
+- `xcodebuild ... build -quiet` réussi pour le simulateur iOS ;
+- `xcodebuild ... analyze -quiet` réussi ;
+- `git diff --check` réussi ;
+- revue statique terminée sans défaut de code bloquant ;
+- lancement confirmé sur l'iPhone 17 Pro simulé, arrêté volontairement avant
+  la connexion Apple ;
+- tests de règles non relancés : Firebase CLI 15 exige JDK 21, seul JDK 17 est
+  installé. Les règles et leurs tests sont inchangés depuis les 18 succès du
+  Sprint 1 ;
+- couleur du profil personnel : build Debug et analyse statique réussis le
+  2026-08-11, sans avertissement Swift.
+
+Le sprint reste `in_progress`. Renseigner les validations à deux comptes, les
+captures et `completed_at` avant de le marquer `completed`. Arrêter ensuite et
+demander l'approbation du Sprint 4.

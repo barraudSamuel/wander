@@ -80,10 +80,106 @@ struct MapUserCoordinate: Equatable {
     }
 }
 
+struct MapOutingPlan: Equatable {
+    let plan: OutingPlan
+    let displayName: String
+    let profileColorHex: String
+    let isCurrentUser: Bool
+}
+
 final class UserLocationAnnotation: MKPointAnnotation {}
 
 final class FriendLocationAnnotation: MKPointAnnotation {
     var userID = ""
+}
+
+fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
+    var ownerID = ""
+    var displayName = ""
+    var profileColorHex = ""
+    var plannedAt = Date()
+    var address: String?
+    var isCurrentUser = false
+}
+
+private final class OutingPlanAnnotationView: MKMarkerAnnotationView {
+    static let reuseIdentifier = "OutingPlanAnnotation"
+
+    private let relationshipLabel = UILabel()
+    private let timeLabel = UILabel()
+    private let addressLabel = UILabel()
+    private lazy var detailStack = UIStackView(
+        arrangedSubviews: [relationshipLabel, timeLabel, addressLabel]
+    )
+
+    override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        configureView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureView()
+    }
+
+    func configure(with annotation: OutingPlanAnnotation) {
+        let relationshipText = annotation.isCurrentUser
+            ? "Votre sortie prévue"
+            : "Sortie prévue de \(annotation.displayName)"
+        let timeText = annotation.plannedAt.formatted(
+            date: .omitted,
+            time: .shortened
+        )
+
+        markerTintColor = ProfileColor.uiColor(hex: annotation.profileColorHex)
+        glyphTintColor = markerForegroundColor(for: markerTintColor ?? .systemIndigo)
+        glyphImage = UIImage(
+            systemName: annotation.isCurrentUser
+                ? "calendar.badge.clock"
+                : "clock.fill"
+        )
+        displayPriority = annotation.isCurrentUser ? .required : .defaultHigh
+
+        relationshipLabel.text = relationshipText
+        timeLabel.text = "À \(timeText)"
+        addressLabel.text = annotation.address
+        addressLabel.isHidden = annotation.address == nil
+
+        let accessibilityParts = [
+            annotation.title ?? "Lieu sans nom",
+            relationshipText,
+            "à \(timeText)",
+            annotation.address
+        ].compactMap { $0 }
+        accessibilityLabel = accessibilityParts.joined(separator: ", ")
+        accessibilityHint = "Touchez deux fois pour afficher les détails de la sortie prévue."
+    }
+
+    private func configureView() {
+        canShowCallout = true
+        animatesWhenAdded = true
+        clusteringIdentifier = nil
+        collisionMode = .circle
+        titleVisibility = .adaptive
+        subtitleVisibility = .hidden
+
+        relationshipLabel.font = .preferredFont(forTextStyle: .subheadline)
+        relationshipLabel.textColor = .secondaryLabel
+        timeLabel.font = .preferredFont(forTextStyle: .body)
+        addressLabel.font = .preferredFont(forTextStyle: .footnote)
+        addressLabel.textColor = .secondaryLabel
+
+        for label in [relationshipLabel, timeLabel, addressLabel] {
+            label.adjustsFontForContentSizeCategory = true
+            label.numberOfLines = 0
+        }
+
+        detailStack.axis = .vertical
+        detailStack.alignment = .leading
+        detailStack.spacing = 2
+        detailStack.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        detailCalloutAccessoryView = detailStack
+    }
 }
 
 private final class CircularDurationView: UIView {
@@ -1233,6 +1329,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// Fresh locations belonging to accepted friends.
     var friendLocations: [String: FriendLocation] = [:]
 
+    /// Active future destinations belonging to the account and accepted friends.
+    var outingPlans: [String: MapOutingPlan] = [:]
+
     /// Selected friends whose explored cells are visible on the map.
     var friendExplorations: [String: FriendExploration] = [:]
 
@@ -1327,6 +1426,7 @@ struct MapWithFogView: UIViewRepresentable {
 
         updateFriendAnnotations(on: uiView, context: context)
         updateUserLocationAnnotation(on: uiView, context: context)
+        updateOutingPlanAnnotations(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
         // A loaded city boundary is only a temporary starting region. Always
@@ -1507,6 +1607,74 @@ struct MapWithFogView: UIViewRepresentable {
                 annotation.subtitle = nil
                 coordinator.friendAnnotations[friendLocation.userID] = annotation
                 mapView.addAnnotation(annotation)
+            }
+        }
+    }
+
+    // MARK: - Planned outing annotations
+
+    private func updateOutingPlanAnnotations(
+        on mapView: MKMapView,
+        context: Context
+    ) {
+        let coordinator = context.coordinator
+        let activeOutingPlans = outingPlans.filter { _, presentation in
+            presentation.plan.isActive()
+        }
+        let currentOwnerIDs = Set(activeOutingPlans.keys)
+        let removedOwnerIDs = coordinator.outingPlanAnnotations.keys
+            .filter { !currentOwnerIDs.contains($0) }
+            .sorted()
+
+        for ownerID in removedOwnerIDs {
+            if let annotation = coordinator.outingPlanAnnotations.removeValue(
+                forKey: ownerID
+            ) {
+                mapView.removeAnnotation(annotation)
+            }
+        }
+
+        for ownerID in activeOutingPlans.keys.sorted() {
+            guard let presentation = activeOutingPlans[ownerID] else { continue }
+            let plan = presentation.plan
+            let displayName = presentation.displayName
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedDisplayName = displayName.isEmpty
+                ? plan.displayName
+                : displayName
+
+            let annotation: OutingPlanAnnotation
+            let isNewAnnotation: Bool
+            if let existing = coordinator.outingPlanAnnotations[ownerID] {
+                annotation = existing
+                isNewAnnotation = false
+                if annotation.coordinate.latitude != plan.coordinate.latitude
+                    || annotation.coordinate.longitude != plan.coordinate.longitude {
+                    UIView.animate(withDuration: 0.35) {
+                        annotation.coordinate = plan.coordinate
+                    }
+                }
+            } else {
+                annotation = OutingPlanAnnotation()
+                annotation.ownerID = ownerID
+                annotation.coordinate = plan.coordinate
+                isNewAnnotation = true
+                coordinator.outingPlanAnnotations[ownerID] = annotation
+            }
+
+            annotation.title = plan.placeName
+            annotation.subtitle = nil
+            annotation.displayName = resolvedDisplayName
+            annotation.profileColorHex = presentation.profileColorHex
+            annotation.plannedAt = plan.plannedAt
+            annotation.address = plan.address
+            annotation.isCurrentUser = presentation.isCurrentUser
+
+            if isNewAnnotation {
+                mapView.addAnnotation(annotation)
+            } else if let annotationView = mapView.view(for: annotation)
+                as? OutingPlanAnnotationView {
+                annotationView.configure(with: annotation)
             }
         }
     }
@@ -1796,6 +1964,7 @@ struct MapWithFogView: UIViewRepresentable {
         var friendAnnotations: [String: FriendLocationAnnotation] = [:]
         var friendProfileColorHexByUserID: [String: String] = [:]
         var friendCalloutInfoByUserID: [String: MapUserCalloutInfo] = [:]
+        fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
         var onJoinFriend: (String) -> Void
         var onViewFriendProfile: (String) -> Void
 
@@ -1859,6 +2028,19 @@ struct MapWithFogView: UIViewRepresentable {
             }
 
             guard !(annotation is MKUserLocation) else { return nil }
+            if let outingPlanAnnotation = annotation as? OutingPlanAnnotation {
+                let annotationView = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: OutingPlanAnnotationView.reuseIdentifier
+                ) as? OutingPlanAnnotationView
+                    ?? OutingPlanAnnotationView(
+                        annotation: annotation,
+                        reuseIdentifier: OutingPlanAnnotationView.reuseIdentifier
+                    )
+                annotationView.annotation = annotation
+                annotationView.configure(with: outingPlanAnnotation)
+                return annotationView
+            }
+
             guard let friendAnnotation = annotation as? FriendLocationAnnotation else {
                 return nil
             }
@@ -1902,6 +2084,17 @@ struct MapWithFogView: UIViewRepresentable {
             for view in views where view.annotation is MKUserLocation {
                 view.isHidden = userLocationAnnotation != nil
             }
+        }
+
+        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            guard let annotation = view.annotation as? OutingPlanAnnotation else {
+                return
+            }
+
+            if mapView.userTrackingMode != .none {
+                mapView.setUserTrackingMode(.none, animated: false)
+            }
+            mapView.setCenter(annotation.coordinate, animated: true)
         }
 
         func mapView(

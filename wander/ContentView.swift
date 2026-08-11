@@ -48,6 +48,7 @@ struct ContentView: View {
 
     @StateObject private var locationTracker = LocationTracker()
     @StateObject private var friendSyncService = FriendSyncService.shared
+    @StateObject private var outingPlanService = OutingPlanService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @AppStorage("profile.displayName") private var displayName = ""
@@ -154,6 +155,7 @@ struct ContentView: View {
             friendSyncService.syncDiscoveredCells(discoveredCellIDs)
             refreshCityProgress(discoveredCellIDs: discoveredCellIDs)
             refreshFriendExplorationProgress()
+            synchronizeOutingPlanObservation()
 
             Task {
                 await cityBoundary.load()
@@ -196,6 +198,7 @@ struct ContentView: View {
             refreshCityProgress(discoveredCellIDs: discoveredCellIDs)
         }
         .onChange(of: friendSyncService.isProfileReady) { _, isReady in
+            synchronizeOutingPlanObservation()
             guard isReady else { return }
 
             friendSyncService.updateDisplayName(displayName)
@@ -208,6 +211,7 @@ struct ContentView: View {
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
             selectNewFriends(from: userIDs)
             reconcileFriendPresentations(acceptedUserIDs: userIDs)
+            synchronizeOutingPlanObservation()
         }
         .onChange(of: friendSyncService.friendLocations) {
             refreshFriendExplorationProgress()
@@ -245,6 +249,9 @@ struct ContentView: View {
                 break
             }
         }
+        .onDisappear {
+            outingPlanService.stopObserving()
+        }
     }
 
     // MARK: - Explore
@@ -263,6 +270,7 @@ struct ContentView: View {
                 discoveredCellIDs: locationTracker.discoveredCellIDs,
                 cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
                 friendLocations: friendSyncService.friendLocations,
+                outingPlans: mapOutingPlans,
                 friendExplorations: visibleFriendExplorations,
                 allFriendExplorations: allFriendExplorations,
                 userExplorationProgress: cityProgress,
@@ -689,6 +697,57 @@ struct ContentView: View {
 
     private var acceptedFriendUserIDs: Set<String> {
         Set(friendSyncService.acceptedFriends.map(\.userID))
+    }
+
+    private var mapOutingPlans: [String: MapOutingPlan] {
+        guard let currentUserID = FirebaseService.shared.currentUserId else {
+            return [:]
+        }
+
+        let acceptedFriendsByUserID = friendSyncService.acceptedFriends.reduce(
+            into: [String: FriendContact]()
+        ) { result, friend in
+            result[friend.userID] = friend
+        }
+
+        return outingPlanService.activePlans.reduce(
+            into: [String: MapOutingPlan]()
+        ) { result, entry in
+            let (ownerID, plan) = entry
+            if ownerID == currentUserID {
+                result[ownerID] = MapOutingPlan(
+                    plan: plan,
+                    displayName: displayName,
+                    profileColorHex:
+                        ProfileColor.normalizedHex(profileColorHex)
+                        ?? ProfileColor.generatedHex(seed: ownerID),
+                    isCurrentUser: true
+                )
+                return
+            }
+
+            guard let friend = acceptedFriendsByUserID[ownerID] else {
+                return
+            }
+            result[ownerID] = MapOutingPlan(
+                plan: plan,
+                displayName: friend.displayName,
+                profileColorHex:
+                    ProfileColor.normalizedHex(friend.profileColorHex)
+                    ?? ProfileColor.generatedHex(seed: ownerID),
+                isCurrentUser: false
+            )
+        }
+    }
+
+    private func synchronizeOutingPlanObservation() {
+        guard friendSyncService.isProfileReady else {
+            outingPlanService.stopObserving()
+            return
+        }
+        outingPlanService.observePlans(
+            forAcceptedFriendUserIDs: acceptedFriendUserIDs
+        )
     }
 
     private func refreshFriendExplorationProgress() {
