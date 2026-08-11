@@ -43,6 +43,23 @@ The original implementation request does not count as plan approval. Codex must 
 
 Keep the approved plan checklist current, validate before completion, record review findings as prioritized files in `todos/`, and capture reusable lessons in `docs/solutions/`. Never invoke `ce-commit`, `ce-commit-push-pr`, `ce-babysit-pr`, or `lfg` without an explicit user request. If the plugin or a required skill is unavailable, follow the equivalent workflow manually and say so. Update `AGENTS.md` only for durable repository-wide rules, not task-specific notes.
 
+### Sprint Planning and Status
+
+For work that spans multiple increments, create one standalone Markdown plan in
+`docs/plans/` per sprint. Each sprint file must contain enough context to be
+reviewed independently: outcome, scope, non-goals, dependencies, affected
+files, implementation checklist, risks, validation, and acceptance criteria.
+Do not use one combined plan as a substitute for the individual sprint files.
+
+Use the front-matter status lifecycle `proposed` → `approved` → `in_progress`
+→ `completed`. Use `blocked` only when progress genuinely cannot continue.
+Only one sprint may be implemented at a time, and approving a roadmap or one
+sprint never approves later sprints. Before starting a sprint, obtain explicit
+approval for that sprint and update its status. During work, keep its checklist
+current. Mark it `completed`, add `completed_at`, and record the exact validation
+only after its acceptance criteria pass. Then stop and present the next sprint
+for separate approval. Do not implement future sprint scope early.
+
 ## Testing Guidelines
 
 There is no XCTest target yet. Verify affected flows on a simulator or device. Add non-UI tests to a future `wanderTests` target using `<TypeName>Tests.swift`; record exact validation in the plan and PR.

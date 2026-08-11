@@ -708,6 +708,7 @@ final class FriendSyncService: ObservableObject {
                 .whereField("participants", arrayContains: userID)
         )
         try await db.collection("locations").document(userID).delete()
+        try await db.collection("plans").document(userID).delete()
 
         guard profileSnapshot.exists else { return }
         guard let friendCode, Self.isValidFriendCode(friendCode) else {

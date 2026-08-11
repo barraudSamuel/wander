@@ -29,6 +29,12 @@ Package.resolved
 # CocoaPods
 Pods/
 
+# Firebase rule tests
+node_modules/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
 # Carthage
 Carthage/Build/
 Carthage/Checkouts/

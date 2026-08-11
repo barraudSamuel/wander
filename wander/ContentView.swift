@@ -58,6 +58,7 @@ struct ContentView: View {
 
     @State private var selectedTab: RootTab = .explore
     @State private var filterSheetVisible = false
+    @State private var outingComposerVisible = false
     @State private var centerOnUser = false
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
@@ -298,7 +299,20 @@ struct ContentView: View {
             .padding(.trailing, 16)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack {
+            HStack(alignment: .bottom) {
+                Button {
+                    outingComposerVisible = true
+                } label: {
+                    Image(systemName: "mappin.and.ellipse")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .accessibilityLabel("Dire où je vais")
+                .accessibilityHint(
+                    "Rechercher un lieu et publier l’heure de ta sortie"
+                )
+
                 Spacer()
 
                 VStack(spacing: 10) {
@@ -333,6 +347,14 @@ struct ContentView: View {
                 selectedFriendUserIDs: $selectedFriendExplorationUserIDs
             )
             .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $outingComposerVisible) {
+            OutingPlanComposerView(
+                displayName: displayName.isEmpty ? "Explorer" : displayName,
+                initialCoordinate: outingComposerInitialCoordinate
+            )
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
         .alert(
@@ -422,6 +444,48 @@ struct ContentView: View {
     private func presentNavigationOptions(_ userID: String) {
         guard currentNavigationDestination(for: userID) != nil else { return }
         friendNavigationSelection = FriendSelection(userID: userID)
+    }
+
+    private var outingComposerInitialCoordinate: CLLocationCoordinate2D? {
+        if let coordinate = locationTracker.lastLocation?.coordinate,
+           CLLocationCoordinate2DIsValid(coordinate) {
+            return coordinate
+        }
+
+        guard let first = cityBoundary.boundaryCoordinates.first else {
+            return nil
+        }
+
+        let bounds = cityBoundary.boundaryCoordinates.dropFirst().reduce(
+            into: (
+                minimumLatitude: first.latitude,
+                maximumLatitude: first.latitude,
+                minimumLongitude: first.longitude,
+                maximumLongitude: first.longitude
+            )
+        ) { bounds, coordinate in
+            bounds.minimumLatitude = min(
+                bounds.minimumLatitude,
+                coordinate.latitude
+            )
+            bounds.maximumLatitude = max(
+                bounds.maximumLatitude,
+                coordinate.latitude
+            )
+            bounds.minimumLongitude = min(
+                bounds.minimumLongitude,
+                coordinate.longitude
+            )
+            bounds.maximumLongitude = max(
+                bounds.maximumLongitude,
+                coordinate.longitude
+            )
+        }
+
+        return CLLocationCoordinate2D(
+            latitude: (bounds.minimumLatitude + bounds.maximumLatitude) / 2,
+            longitude: (bounds.minimumLongitude + bounds.maximumLongitude) / 2
+        )
     }
 
     private func presentFriendProfile(_ userID: String) {

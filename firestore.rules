@@ -289,6 +289,100 @@ service cloud.firestore {
         && data.sharedAt == request.time;
     }
 
+    function hasExactPlanFields(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'publicationId',
+          'displayName',
+          'placeName',
+          'location',
+          'plannedAt',
+          'expiresAt',
+          'publishedAt',
+          'updatedAt',
+          'timeZoneIdentifier'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'publicationId',
+          'displayName',
+          'placeName',
+          'address',
+          'location',
+          'plannedAt',
+          'expiresAt',
+          'publishedAt',
+          'updatedAt',
+          'timeZoneIdentifier'
+        ]);
+    }
+
+    function isValidPublicationId(publicationId) {
+      return publicationId is string
+        && publicationId.matches(
+          '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$'
+        );
+    }
+
+    function isNormalizedPlanText(value) {
+      return value is string
+        && value.matches('^[^\\s]+( [^\\s]+)*$');
+    }
+
+    function isValidPlaceName(placeName) {
+      return isNormalizedPlanText(placeName)
+        && placeName.size() >= 1
+        && placeName.size() <= 120;
+    }
+
+    function isValidPlanAddress(data) {
+      return !data.keys().hasAny(['address'])
+        || (
+          data.address is string
+          && data.address.size() >= 1
+          && data.address.size() <= 200
+          && isNormalizedPlanText(data.address)
+        );
+    }
+
+    function isValidTimeZoneIdentifier(identifier) {
+      // Full IANA membership is validated by Foundation on the client. Rules
+      // still constrain the identifier to the IANA path character set.
+      return identifier is string
+        && identifier.size() >= 1
+        && identifier.size() <= 64
+        && identifier.matches(
+          '^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$'
+        );
+    }
+
+    function isValidPlan(data, uid) {
+      return hasExactPlanFields(data)
+        && data.ownerId == uid
+        && isValidUid(data.ownerId)
+        && isValidPublicationId(data.publicationId)
+        && isValidDisplayName(data.displayName)
+        && isNormalizedPlanText(data.displayName)
+        && isValidPlaceName(data.placeName)
+        && isValidPlanAddress(data)
+        && data.location is latlng
+        && data.location.latitude() >= -90
+        && data.location.latitude() <= 90
+        && data.location.longitude() >= -180
+        && data.location.longitude() <= 180
+        && data.plannedAt is timestamp
+        && data.plannedAt > request.time
+        && data.plannedAt <= request.time + duration.value(24, 'h')
+        && data.expiresAt is timestamp
+        && data.expiresAt > data.plannedAt
+        && data.expiresAt <= data.plannedAt + duration.value(2, 'h')
+        && data.publishedAt is timestamp
+        && data.publishedAt == request.time
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time
+        && isValidTimeZoneIdentifier(data.timeZoneIdentifier);
+    }
+
     match /users/{uid} {
       allow get: if isSignedIn()
         && (
@@ -483,6 +577,37 @@ service cloud.firestore {
         && request.auth.uid == uid
         && !accountDeletionIsPending(uid)
         && isValidExplorationCell(request.resource.data, cellId);
+
+      allow delete: if isSignedIn()
+        && request.auth.uid == uid;
+    }
+
+    match /plans/{uid} {
+      allow get: if isSignedIn()
+        && (
+          request.auth.uid == uid
+          || (
+            resource.data.expiresAt is timestamp
+            && resource.data.expiresAt > request.time
+            && usersAreLinked(
+              request.auth.uid,
+              uid,
+              ['accepted']
+            )
+          )
+        );
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && !accountDeletionIsPending(uid)
+        && isValidPlan(request.resource.data, uid);
+
+      allow update: if isSignedIn()
+        && request.auth.uid == uid
+        && !accountDeletionIsPending(uid)
+        && isValidPlan(request.resource.data, uid)
+        && request.resource.data.publicationId != resource.data.publicationId;
 
       allow delete: if isSignedIn()
         && request.auth.uid == uid;
