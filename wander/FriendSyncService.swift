@@ -28,11 +28,13 @@ struct FriendRequest: Identifiable, Equatable {
 }
 
 struct FriendLocation: Equatable {
-    static let maximumAge: TimeInterval = 5 * 60
+    static let maximumSampleAge: TimeInterval = 5 * 60
+    static let maximumConfirmationAge: TimeInterval = 30 * 60
     static let maximumFutureTimestampSkew: TimeInterval = 60
 
     let userID: String
     let displayName: String
+    let avatarID: String
     let profileColorHex: String
     let coordinate: CLLocationCoordinate2D
     let horizontalAccuracy: CLLocationAccuracy
@@ -44,6 +46,7 @@ struct FriendLocation: Equatable {
     static func == (lhs: FriendLocation, rhs: FriendLocation) -> Bool {
         lhs.userID == rhs.userID
             && lhs.displayName == rhs.displayName
+            && lhs.avatarID == rhs.avatarID
             && lhs.profileColorHex == rhs.profileColorHex
             && lhs.coordinate.latitude == rhs.coordinate.latitude
             && lhs.coordinate.longitude == rhs.coordinate.longitude
@@ -55,13 +58,20 @@ struct FriendLocation: Equatable {
     }
 
     func isFresh(at referenceDate: Date = Date()) -> Bool {
-        Self.isFresh(sampledAt: sampledAt, at: referenceDate)
+        let age = referenceDate.timeIntervalSince(updatedAt)
+        return age.isFinite
+            && age >= -Self.maximumFutureTimestampSkew
+            && age < Self.maximumConfirmationAge
+            && Self.isCurrentSample(sampledAt: sampledAt, at: updatedAt)
     }
 
-    static func isFresh(sampledAt: Date, at referenceDate: Date) -> Bool {
+    static func isCurrentSample(
+        sampledAt: Date,
+        at referenceDate: Date
+    ) -> Bool {
         let age = referenceDate.timeIntervalSince(sampledAt)
         return isValidLastKnown(sampledAt: sampledAt, at: referenceDate)
-            && age < maximumAge
+            && age < maximumSampleAge
     }
 
     static func isValidLastKnown(sampledAt: Date, at referenceDate: Date) -> Bool {
@@ -685,7 +695,7 @@ final class FriendSyncService: ObservableObject {
         guard location.horizontalAccuracy > 0,
               location.horizontalAccuracy <= 1_000,
               CLLocationCoordinate2DIsValid(location.coordinate),
-              FriendLocation.isFresh(
+              FriendLocation.isCurrentSample(
                 sampledAt: location.timestamp,
                 at: Date()
               ) else {
@@ -1693,6 +1703,7 @@ final class FriendSyncService: ObservableObject {
                             self.receivedFriendLocations[userID] = FriendLocation(
                                 userID: currentLocation.userID,
                                 displayName: profile.displayName,
+                                avatarID: profile.avatarID,
                                 profileColorHex: profile.profileColorHex,
                                 coordinate: currentLocation.coordinate,
                                 horizontalAccuracy: currentLocation.horizontalAccuracy,
@@ -1954,10 +1965,13 @@ final class FriendSyncService: ObservableObject {
                         let profileColorHex =
                             profile?.profileColorHex
                             ?? ProfileColor.generatedHex(seed: userID)
+                        let avatarID = profile?.avatarID
+                            ?? ProfileAvatar.generatedID(seed: userID)
 
                         let friendLocation = FriendLocation(
                             userID: userID,
                             displayName: displayName,
+                            avatarID: avatarID,
                             profileColorHex: profileColorHex,
                             coordinate: coordinate,
                             horizontalAccuracy: accuracy.doubleValue,
@@ -2002,8 +2016,8 @@ final class FriendSyncService: ObservableObject {
         }
         freshFriendLocationUserIDs.insert(location.userID)
 
-        let delay = location.sampledAt
-            .addingTimeInterval(FriendLocation.maximumAge)
+        let delay = location.updatedAt
+            .addingTimeInterval(FriendLocation.maximumConfirmationAge)
             .timeIntervalSinceNow
         guard delay > 0 else {
             freshFriendLocationUserIDs.remove(location.userID)
@@ -2011,7 +2025,7 @@ final class FriendSyncService: ObservableObject {
         }
 
         let userID = location.userID
-        let sampledAt = location.sampledAt
+        let updatedAt = location.updatedAt
         let timer = Timer(
             timeInterval: delay,
             repeats: false
@@ -2019,7 +2033,7 @@ final class FriendSyncService: ObservableObject {
             guard let self,
                   self.authenticationGeneration == generation,
                   let currentLocation = self.receivedFriendLocations[userID],
-                  currentLocation.sampledAt == sampledAt else {
+                  currentLocation.updatedAt == updatedAt else {
                 return
             }
             self.locationFreshnessTimers.removeValue(forKey: userID)?.invalidate()
@@ -2050,7 +2064,7 @@ final class FriendSyncService: ObservableObject {
     ) {
         guard !isAccountDeletionPending,
               currentUserID == userID,
-              FriendLocation.isFresh(
+              FriendLocation.isCurrentSample(
                 sampledAt: location.timestamp,
                 at: Date()
               ) else {

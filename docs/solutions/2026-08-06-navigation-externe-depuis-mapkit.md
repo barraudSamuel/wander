@@ -112,27 +112,43 @@ différence entre « pas encore chargé » et « chargé avec zéro zone »
 
 ### Séparer disponibilité et fraîcheur
 
-`FriendLocation.maximumAge` définit une fenêtre de cinq minutes et `isFresh`
-tolère seulement un faible décalage futur. Cette règle ne décide plus si la
-position existe : elle décide uniquement si l’interface peut la présenter
-comme récente.
+Deux horloges répondent à deux questions différentes :
+
+- `sampledAt` prouve quand la coordonnée a réellement été mesurée. Un nouvel
+  envoi doit encore contenir un échantillon de moins de cinq minutes ;
+- `updatedAt`, écrit par le serveur Firestore, prouve quand le document a été
+  accepté. Il pilote une période de confirmation de trente minutes.
+
+Cette séparation évite de réveiller le GPS uniquement pour maintenir un statut
+social lorsqu'iOS cesse naturellement de produire des échantillons pour une
+personne immobile. Elle accepte en contrepartie qu'une coupure réelle puisse
+rester invisible pendant cette période de grâce.
 
 1. À la réception Firestore, une coordonnée valide et un horodatage qui n’est
    pas excessivement futur sont conservés, même lorsque l’échantillon est
    ancien.
 2. Un ensemble publié contient séparément les amis dont la position est encore
-   récente.
+   confirmée. Cette confirmation exige un `updatedAt` de moins de trente
+   minutes et un `sampledAt` qui était admissible au moment de cet envoi.
 3. À l’échéance, une minuterie retire seulement l’identifiant de cet ensemble ;
    elle ne supprime pas la dernière coordonnée connue.
 4. La navigation reconstruit toujours sa destination depuis le service vivant,
    vérifie l’amitié et la coordonnée, puis annonce l’horodatage avant de lancer
    l’application externe.
 
-La minuterie de fraîcheur est ajoutée à `RunLoop.main` en mode `.common` : elle
-continue ainsi à avancer pendant les gestes MapKit. La transition conserve la
-taille du pin mais abaisse son opacité à 50 %, puis remplace « Au même endroit
-depuis… » par « Dernière position reçue… » dans le callout et le profil. Une
-nouvelle position restaure automatiquement l’opacité complète.
+La minuterie part de `updatedAt`, et non de l'heure locale de réception du
+snapshot : un document ancien relu depuis le cache ne redevient donc pas frais.
+Elle capture aussi `updatedAt` comme identité de version afin qu'un ancien
+timer ne puisse pas invalider une confirmation plus récente qui réutiliserait
+le même échantillon GPS. Ajoutée à `RunLoop.main` en mode `.common`, elle
+continue à avancer pendant les gestes MapKit.
+
+La transition conserve la taille du pin mais abaisse son opacité à 50 %, puis
+remplace « Au même endroit depuis… » par « Dernière position reçue… » dans le
+callout et le profil. Une nouvelle réception restaure automatiquement
+l’opacité complète. Cette mécanique exprime « confirmation reçue récemment »
+et ne prétend pas distinguer mode avion, force-quit, perte réseau ou suspension
+iOS.
 
 ### Garder la géométrie du pin indépendante de l’état
 

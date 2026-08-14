@@ -286,7 +286,7 @@ struct ContentView: View {
                 loadedFriendExplorationUserIDs:
                     friendSyncService.loadedFriendExplorationUserIDs,
                 userDisplayName: displayName,
-                userProfileColorHex: profileColorHex,
+                userAvatarID: avatarID,
                 centerOnUser: $centerOnUser,
                 resetMapOrientation: $resetMapOrientation,
                 centerOnFriendUserID: $centerOnFriendUserID,
@@ -1225,7 +1225,6 @@ private struct FriendRow: View {
 
         let sampleAge = referenceDate.timeIntervalSince(sampledAt)
         guard sampleAge >= -Self.maximumFutureTimestampSkew,
-              sampleAge <= Self.maximumPresenceSampleAge,
               enteredAt <= sampledAt else {
             return nil
         }
@@ -1251,7 +1250,6 @@ private struct FriendRow: View {
         return "\(minutes) min"
     }
 
-    private static let maximumPresenceSampleAge: TimeInterval = 5 * 60
     private static let maximumFutureTimestampSkew: TimeInterval = 60
 
     private static let relativePositionFormatter: RelativeDateTimeFormatter = {
