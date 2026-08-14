@@ -8,47 +8,73 @@ import SwiftUI
 
 struct AuthenticationView: View {
     @ObservedObject var authenticationService: FirebaseService
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         GeometryReader { geometry in
-            ScrollView {
-                VStack(spacing: 24) {
-                    Spacer()
+            ZStack {
+                Image("WelcomeForest")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(
+                        width: geometry.size.width,
+                        height: geometry.size.height
+                    )
+                    .clipped()
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
 
-                    Image(systemName: "map.fill")
-                        .font(.system(size: 56))
-                        .foregroundStyle(.tint)
-                        .accessibilityHidden(true)
-
-                    VStack(spacing: 10) {
-                        Text("Bienvenue sur Wander")
-                            .font(.largeTitle.bold())
-                            .multilineTextAlignment(.center)
-                            .accessibilityAddTraits(.isHeader)
-
-                        Text(
-                            "Connecte-toi avec ton compte Apple pour retrouver "
-                                + "ton profil et partager tes explorations "
-                                + "en toute sécurité."
-                        )
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Spacer()
-
-                    authenticationActions
-                }
-                .padding(24)
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: geometry.size.height
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0.02), location: 0),
+                        .init(color: .black.opacity(0.10), location: 0.38),
+                        .init(color: .black.opacity(0.68), location: 0.68),
+                        .init(color: .black.opacity(0.92), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+
+                ScrollView {
+                    VStack(spacing: 24) {
+                        Spacer(minLength: 160)
+
+                        welcomeCopy
+
+                        authenticationActions
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 24)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: geometry.size.height,
+                        alignment: .bottom
+                    )
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .scrollBounceBehavior(.basedOnSize)
         }
+    }
+
+    private var welcomeCopy: some View {
+        VStack(spacing: 10) {
+            Text("Bienvenue sur Wander")
+                .font(.largeTitle.bold())
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
+
+            Text(
+                "Connecte-toi avec ton compte Apple pour retrouver "
+                    + "ton profil et partager tes explorations "
+                    + "en toute sécurité."
+            )
+            .foregroundStyle(.white.opacity(0.90))
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 440)
     }
 
     private var authenticationActions: some View {
@@ -56,13 +82,15 @@ struct AuthenticationView: View {
             if let errorMessage = authenticationService.authErrorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Erreur : \(errorMessage)")
             }
 
             if authenticationService.isSigningIn {
                 ProgressView("Connexion…")
+                    .tint(.white)
+                    .foregroundStyle(.white)
             }
 
             if authenticationService.requiresExistingAccountConfirmation {
@@ -73,9 +101,7 @@ struct AuthenticationView: View {
                 } onCompletion: { result in
                     authenticationService.handleAppleAuthorizationCompletion(result)
                 }
-                .signInWithAppleButtonStyle(
-                    colorScheme == .dark ? .white : .black
-                )
+                .signInWithAppleButtonStyle(.white)
                 .frame(height: 50)
                 .disabled(authenticationService.isSigningIn)
                 .accessibilityHint(
@@ -92,6 +118,7 @@ struct AuthenticationView: View {
         VStack(spacing: 12) {
             Text("Ce compte Apple utilise déjà Wander")
                 .font(.headline)
+                .foregroundStyle(.white)
 
             Text(
                 "Le profil et les amis du compte anonyme ne peuvent pas être "
@@ -100,7 +127,7 @@ struct AuthenticationView: View {
                     + "seront ajoutées au profil Apple choisi."
             )
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white.opacity(0.86))
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
 
@@ -109,10 +136,13 @@ struct AuthenticationView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .tint(.white)
+            .foregroundStyle(.black)
 
             Button("Annuler", role: .cancel) {
                 authenticationService.cancelExistingAppleAccountSignIn()
             }
+            .foregroundStyle(.white)
         }
     }
 
@@ -123,20 +153,22 @@ struct AuthenticationView: View {
                 "En continuant, Wander tentera d’associer à ton compte Apple "
                     + "les données déjà créées sur cet appareil."
             )
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.78))
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 340)
         } else {
             Text(
                 "En continuant, les données locales de cet appareil, dont tes "
                     + "explorations, seront associées au compte Apple utilisé. "
                     + "Wander ne prend en charge aucun autre mode de connexion."
             )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.78))
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 340)
         }
     }
 }
