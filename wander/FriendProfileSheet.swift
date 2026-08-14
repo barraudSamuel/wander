@@ -119,7 +119,7 @@ struct FriendProfileSheet: View {
                     case .positionUnavailable:
                         LabeledContent("Progression", value: "Indisponible")
 
-                        Text("Une position récente est nécessaire pour calculer la progression par ville.")
+                        Text("Une position partagée est nécessaire pour calculer la progression par ville.")
                             .foregroundStyle(.secondary)
                     case .unsupportedCity:
                         LabeledContent("Progression", value: "Indisponible")
@@ -154,7 +154,11 @@ struct FriendProfileSheet: View {
 
                 Section {
                     if let location {
-                        LabeledContent("Dernière mise à jour") {
+                        LabeledContent(
+                            isLocationFresh
+                                ? "Dernière mise à jour"
+                                : "Dernière position reçue"
+                        ) {
                             Text(location.sampledAt, style: .relative)
                         }
 
@@ -167,10 +171,17 @@ struct FriendProfileSheet: View {
                             )
                         }
 
-                        if let spotEnteredAt = location.spotEnteredAt {
+                        if isLocationFresh,
+                           let spotEnteredAt = location.spotEnteredAt {
                             LabeledContent("Au même endroit depuis") {
                                 Text(spotEnteredAt, style: .relative)
                             }
+                        } else if !isLocationFresh {
+                            Label(
+                                "Position non actualisée récemment",
+                                systemImage: "clock"
+                            )
+                            .foregroundStyle(.secondary)
                         }
                     } else {
                         Text("Position indisponible")
@@ -179,7 +190,9 @@ struct FriendProfileSheet: View {
                 } header: {
                     Text("Position")
                 } footer: {
-                    Text("L’action Rejoindre utilise uniquement une position partagée il y a moins de cinq minutes.")
+                    Text(
+                        "L’action Rejoindre utilise la dernière position connue, même si elle n’a pas été actualisée récemment."
+                    )
                 }
             }
             .navigationTitle("Profil")
@@ -213,6 +226,10 @@ struct FriendProfileSheet: View {
 
     private var isFriendAccepted: Bool {
         friend != nil
+    }
+
+    private var isLocationFresh: Bool {
+        service.freshFriendLocationUserIDs.contains(userID)
     }
 
     private var isExplorationLoaded: Bool {

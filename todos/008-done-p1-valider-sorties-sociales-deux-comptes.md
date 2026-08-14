@@ -1,7 +1,7 @@
 ---
 id: "008"
 title: "Valider les sorties sociales avec deux comptes"
-status: blocked
+status: done
 priority: P1
 source: review
 created: 2026-08-11
@@ -34,18 +34,23 @@ validation.
 
 ## Acceptance criteria
 
-- [ ] Relancer les 18 tests de règles Firestore avec un JDK 21 ou supérieur.
-- [ ] Connecter deux comptes amis et publier une sortie depuis chacun.
-- [ ] Vérifier que les deux sorties sont visibles et distinctes des positions
+- [x] Relancer les 18 tests de règles Firestore avec un JDK 21 ou supérieur.
+- [x] Connecter deux comptes amis et publier une sortie depuis chacun.
+- [x] Vérifier que les deux sorties sont visibles et distinctes des positions
       réelles, en modes clair et sombre.
-- [ ] Vérifier le callout, l'heure locale, l'adresse facultative, VoiceOver et
+- [x] Vérifier le callout, l'heure locale, l'adresse facultative, VoiceOver et
       Dynamic Type.
-- [ ] Modifier puis annuler une sortie et confirmer qu'aucun marqueur en double
+- [x] Modifier puis annuler une sortie et confirmer qu'aucun marqueur en double
       ne reste affiché.
-- [ ] Révoquer l'amitié et confirmer le retrait immédiat du marqueur.
-- [ ] Vérifier l'expiration locale sans nouvelle écriture Firestore.
+- [x] Révoquer l'amitié et confirmer le retrait immédiat du marqueur.
+- [x] Vérifier l'expiration locale sans nouvelle écriture Firestore.
 
 ## Resolution notes
 
-Le code est implémenté et compilé. Le Sprint 3 doit rester `in_progress` jusqu'à
-la validation interactive et la nouvelle exécution des tests de règles.
+Résolu le 2026-08-12 :
+
+- le propriétaire a confirmé la réussite du parcours interactif complet à deux
+  comptes décrit dans les critères ci-dessus ;
+- Java 21.0.12 a été installé via Homebrew ;
+- `npm run test:rules` a réussi avec 18 tests sur 18, aucun échec ;
+- le Sprint 3 a été marqué `completed`.

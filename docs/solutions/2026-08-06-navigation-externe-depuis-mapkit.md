@@ -1,7 +1,7 @@
 ---
 title: "Piloter une callout MapKit et une fiche SwiftUI avec l’état vivant"
 date: 2026-08-06
-last_updated: 2026-08-07
+last_updated: 2026-08-14
 category: architecture-patterns
 module: friend-presence-map
 problem_type: architecture_pattern
@@ -9,7 +9,7 @@ component: frontend_stimulus
 severity: high
 applies_when:
   - "Une interaction MapKit présente une modale SwiftUI alimentée par des données observables"
-  - "Une position partagée peut expirer ou devenir inaccessible pendant la présentation"
+  - "Une position partagée peut vieillir ou devenir inaccessible pendant la présentation"
   - "Un chargement doit rester distinct d’une valeur valide à zéro"
   - "Une action externe dépend d’une autorisation ou d’une donnée à durée de vie courte"
 tags:
@@ -30,14 +30,13 @@ related_plan: "../plans/2026-08-06-rejoindre-un-ami.md"
 
 Une callout `MKAnnotationView` doit rester compacte et native tout en
 déclenchant des présentations qui appartiennent à SwiftUI. Dans Wander, la
-callout d’un ami contient seulement deux boutons système de 44 points, affichés
-côte à côte avec leurs SF Symbols. Les libellés **Rejoindre** et **Voir le
-profil** restent exposés à l’accessibilité sans encombrer l’interface. Les
-détails d’exploration et de position vivent dans une `Form` SwiftUI séparée
-(`wander/MapWithFogView.swift:839`, `wander/FriendProfileSheet.swift:40`).
+callout d’un ami contient deux boutons système de 44 points, affichés côte à
+côte avec leurs SF Symbols, ainsi qu’un libellé compact sur l’âge de la
+position. Les libellés **Rejoindre** et **Voir le profil** restent exposés à
+l’accessibilité. Les détails vivent dans une `Form` SwiftUI séparée.
 
 Le point délicat n’est pas seulement le pont UIKit vers SwiftUI. Une position
-précise peut expirer, disparaître ou devenir interdite après la révocation de
+précise peut vieillir, disparaître ou devenir interdite après la révocation de
 l’amitié pendant que le dialogue ou la fiche reste ouvert. Un instantané
 complet de la coordonnée pris au toucher devient alors obsolète sans que la
 présentation le sache.
@@ -71,10 +70,8 @@ toucher.
 
 ### Laisser chaque couche présenter ce qu’elle maîtrise
 
-UIKit construit uniquement la callout avec `UIButton.Configuration` et
-`UIStackView`. SwiftUI possède l’alerte de navigation et la `.sheet(item:)`
-(`wander/MapWithFogView.swift:839`, `wander/ContentView.swift:332`,
-`wander/ContentView.swift:350`).
+UIKit construit la callout avec `UIButton.Configuration`, `UILabel` et
+`UIStackView`. SwiftUI possède l’alerte de navigation et la `.sheet(item:)`.
 
 La fiche utilise les composants natifs `NavigationStack`, `Form`, `Section`,
 `LabeledContent` et `ProgressView`. La callout locale reste informationnelle et
@@ -104,7 +101,7 @@ La fiche représente séparément :
 
 - le chargement de l’exploration ;
 - la préparation ou l’indisponibilité des frontières de ville ;
-- l’absence de position récente ;
+- l’absence de position partagée ;
 - une position hors des villes prises en charge ;
 - une progression disponible.
 
@@ -113,26 +110,46 @@ différence entre « pas encore chargé » et « chargé avec zéro zone »
 (`wander/FriendProfileSheet.swift:48`, `wander/FriendProfileSheet.swift:93`,
 `wander/FriendProfileSheet.swift:242`).
 
-### Centraliser la fraîcheur et la vérifier à chaque frontière temporelle
+### Séparer disponibilité et fraîcheur
 
 `FriendLocation.maximumAge` définit une fenêtre de cinq minutes et `isFresh`
-tolère seulement un faible décalage futur (`wander/FriendSyncService.swift:29`,
-`wander/FriendSyncService.swift:55`). La même règle intervient à trois moments :
+tolère seulement un faible décalage futur. Cette règle ne décide plus si la
+position existe : elle décide uniquement si l’interface peut la présenter
+comme récente.
 
-1. à la réception Firestore, avant de publier la position
-   (`wander/FriendSyncService.swift:1519`) ;
-2. à l’échéance d’une minuterie, qui retire la position si aucun snapshot plus
-   récent ne l’a remplacée (`wander/FriendSyncService.swift:1586`) ;
-3. juste avant de reconstruire une destination et d’ouvrir Google Maps ou
-   Naver Map (`wander/ContentView.swift:383`, `wander/ContentView.swift:491`).
+1. À la réception Firestore, une coordonnée valide et un horodatage qui n’est
+   pas excessivement futur sont conservés, même lorsque l’échantillon est
+   ancien.
+2. Un ensemble publié contient séparément les amis dont la position est encore
+   récente.
+3. À l’échéance, une minuterie retire seulement l’identifiant de cet ensemble ;
+   elle ne supprime pas la dernière coordonnée connue.
+4. La navigation reconstruit toujours sa destination depuis le service vivant,
+   vérifie l’amitié et la coordonnée, puis annonce l’horodatage avant de lancer
+   l’application externe.
 
-Cette défense en profondeur est nécessaire : une position peut être fraîche à
-la réception, expirer sans nouveau snapshot, puis devenir invalide pendant que
-l’alerte reste affichée. La minuterie d’expiration est ajoutée à
-`RunLoop.main` en mode `.common` (`wander/FriendSyncService.swift:1623`) : elle
-continue ainsi à avancer pendant les modes de suivi utilisés par les gestes
-MapKit, au lieu de laisser un marqueur périmé visible jusqu’à la fin d’un
-panoramique ou d’un zoom.
+La minuterie de fraîcheur est ajoutée à `RunLoop.main` en mode `.common` : elle
+continue ainsi à avancer pendant les gestes MapKit. La transition conserve la
+taille du pin mais abaisse son opacité à 50 %, puis remplace « Au même endroit
+depuis… » par « Dernière position reçue… » dans le callout et le profil. Une
+nouvelle position restaure automatiquement l’opacité complète.
+
+### Garder la géométrie du pin indépendante de l’état
+
+Un statut métier ne doit pas modifier la surface apparente d’une annotation.
+Le marqueur de Wander utilise donc toujours un conteneur rond de 44 × 44
+points, un cercle coloré de 36 points et l’initiale du pseudo. Une ombre noire
+courte assure seulement la lisibilité sur la carte. Aucun halo coloré, avatar
+ou pointe n’est appliqué, et la taille du cœur ne varie jamais. Pour une
+position récente qualifiée, un texte circulaire statique affiche la durée de
+présence autour du rond. Il n’ajoute ni rotation ni glow et disparaît lorsque
+la position devient ancienne. L’opacité du cœur passe alors à 50 %.
+
+`centerOffset` et `calloutOffset` restent à zéro : le centre du rond coïncide
+avec la coordonnée MapKit. Ce réglage est identique pour l’utilisateur courant,
+les amis et les positions anciennes. La zone transparente de l’annotation est
+plus large pour accueillir le texte (88 × 88), mais le cœur visible reste à
+44 × 44 et demeure exactement concentrique.
 
 ### Réconcilier les présentations avec les droits courants
 
@@ -142,13 +159,12 @@ ou la position valide disparaît ; la fiche disparaît si l’amitié est révoq
 (`wander/ContentView.swift:208`, `wander/ContentView.swift:513`).
 
 La destination de navigation est reconstruite à partir de l’état courant et
-doit satisfaire toutes les gardes suivantes (`wander/ContentView.swift:491`) :
+doit satisfaire les gardes suivantes :
 
 ```swift
 guard acceptedFriendUserIDs.contains(userID),
       let location = friendSyncService.friendLocations[userID],
       location.userID == userID,
-      location.isFresh(at: referenceDate),
       CLLocationCoordinate2DIsValid(location.coordinate),
       location.coordinate.latitude.isFinite,
       location.coordinate.longitude.isFinite else {
@@ -176,7 +192,7 @@ Ce patron ferme quatre régressions fréquentes dans un pont UIKit/SwiftUI :
 - une fermeture de coordinateur devenue obsolète ;
 - une fiche figée pendant une écoute temps réel ;
 - la confusion entre « zéro » et « pas encore chargé » ;
-- l’ouverture d’une position expirée ou révoquée.
+- l’ouverture d’une position révoquée ou présentée sans son horodatage.
 
 Il maintient aussi une frontière de confidentialité claire. L’annotation et la
 couleur identifient visuellement un ami, mais ne prouvent pas que la relation ou

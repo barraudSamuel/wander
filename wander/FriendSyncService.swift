@@ -58,8 +58,13 @@ struct FriendLocation: Equatable {
 
     static func isFresh(sampledAt: Date, at referenceDate: Date) -> Bool {
         let age = referenceDate.timeIntervalSince(sampledAt)
-        return age >= -maximumFutureTimestampSkew
+        return isValidLastKnown(sampledAt: sampledAt, at: referenceDate)
             && age < maximumAge
+    }
+
+    static func isValidLastKnown(sampledAt: Date, at referenceDate: Date) -> Bool {
+        let age = referenceDate.timeIntervalSince(sampledAt)
+        return age.isFinite && age >= -maximumFutureTimestampSkew
     }
 }
 
@@ -108,6 +113,7 @@ final class FriendSyncService: ObservableObject {
     @Published private(set) var outgoingRequests: [FriendRequest] = []
     @Published private(set) var acceptedFriends: [FriendContact] = []
     @Published private var receivedFriendLocations: [String: FriendLocation] = [:]
+    @Published private(set) var freshFriendLocationUserIDs: Set<String> = []
     @Published private var receivedFriendExplorationCellIDs: [String: Set<String>] = [:]
     @Published private(set) var friendExplorationRevision = 0
     @Published private(set) var isProfileReady = false
@@ -176,7 +182,7 @@ final class FriendSyncService: ObservableObject {
     private var friendshipsListener: ListenerRegistration?
     private var profileListeners: [String: ListenerRegistration] = [:]
     private var locationListeners: [String: ListenerRegistration] = [:]
-    private var locationExpirationTimers: [String: Timer] = [:]
+    private var locationFreshnessTimers: [String: Timer] = [:]
     private var explorationListeners: [String: ListenerRegistration] = [:]
     private var profileUpdateTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
@@ -790,6 +796,7 @@ final class FriendSyncService: ObservableObject {
         outgoingRequests = []
         acceptedFriends = []
         receivedFriendLocations = [:]
+        freshFriendLocationUserIDs = []
         receivedFriendExplorationCellIDs = [:]
         friendExplorationRevision &+= 1
         isProcessingFriendAction = false
@@ -1801,7 +1808,7 @@ final class FriendSyncService: ObservableObject {
                             latitude: geoPoint.latitude,
                             longitude: geoPoint.longitude
                         )
-                        guard FriendLocation.isFresh(
+                        guard FriendLocation.isValidLastKnown(
                             sampledAt: sampledAt,
                             at: receivedAt
                         ), CLLocationCoordinate2DIsValid(coordinate),
@@ -1846,7 +1853,7 @@ final class FriendSyncService: ObservableObject {
                             spotEnteredAt: spotEnteredAt
                         )
                         self.receivedFriendLocations[userID] = friendLocation
-                        self.scheduleExpiration(
+                        self.updateFreshness(
                             for: friendLocation,
                             authenticationGeneration: generation
                         )
@@ -1864,21 +1871,28 @@ final class FriendSyncService: ObservableObject {
     }
 
     private func removeFriendLocation(for userID: String) {
-        locationExpirationTimers.removeValue(forKey: userID)?.invalidate()
+        locationFreshnessTimers.removeValue(forKey: userID)?.invalidate()
+        freshFriendLocationUserIDs.remove(userID)
         receivedFriendLocations.removeValue(forKey: userID)
     }
 
-    private func scheduleExpiration(
+    private func updateFreshness(
         for location: FriendLocation,
         authenticationGeneration generation: Int
     ) {
-        locationExpirationTimers.removeValue(forKey: location.userID)?.invalidate()
+        locationFreshnessTimers.removeValue(forKey: location.userID)?.invalidate()
+
+        guard location.isFresh() else {
+            freshFriendLocationUserIDs.remove(location.userID)
+            return
+        }
+        freshFriendLocationUserIDs.insert(location.userID)
 
         let delay = location.sampledAt
             .addingTimeInterval(FriendLocation.maximumAge)
             .timeIntervalSinceNow
         guard delay > 0 else {
-            removeFriendLocation(for: location.userID)
+            freshFriendLocationUserIDs.remove(location.userID)
             return
         }
 
@@ -1887,26 +1901,28 @@ final class FriendSyncService: ObservableObject {
         let timer = Timer(
             timeInterval: delay,
             repeats: false
-        ) { [weak self] _ in
+        ) { [weak self] timer in
             guard let self,
                   self.authenticationGeneration == generation,
                   let currentLocation = self.receivedFriendLocations[userID],
                   currentLocation.sampledAt == sampledAt else {
                 return
             }
+            self.locationFreshnessTimers.removeValue(forKey: userID)?.invalidate()
+            timer.invalidate()
 
             if currentLocation.isFresh() {
-                self.scheduleExpiration(
+                self.updateFreshness(
                     for: currentLocation,
                     authenticationGeneration: generation
                 )
             } else {
-                self.removeFriendLocation(for: userID)
+                self.freshFriendLocationUserIDs.remove(userID)
             }
         }
         timer.tolerance = min(1, delay * 0.1)
         RunLoop.main.add(timer, forMode: .common)
-        locationExpirationTimers[userID] = timer
+        locationFreshnessTimers[userID] = timer
     }
 
     // MARK: - Location writes
@@ -2045,10 +2061,10 @@ final class FriendSyncService: ObservableObject {
         }
         locationListeners.removeAll()
 
-        for timer in locationExpirationTimers.values {
+        for timer in locationFreshnessTimers.values {
             timer.invalidate()
         }
-        locationExpirationTimers.removeAll()
+        locationFreshnessTimers.removeAll()
 
         for listener in explorationListeners.values {
             listener.remove()

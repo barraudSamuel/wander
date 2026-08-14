@@ -25,6 +25,7 @@ private struct FriendMapSummary: Identifiable, Hashable {
     let profileColorHex: String
     let locationSampledAt: Date?
     let spotEnteredAt: Date?
+    let isLocationFresh: Bool
     let cellCount: Int
 
     var id: String { userID }
@@ -270,6 +271,8 @@ struct ContentView: View {
                 discoveredCellIDs: locationTracker.discoveredCellIDs,
                 cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
                 friendLocations: friendSyncService.friendLocations,
+                freshFriendLocationUserIDs:
+                    friendSyncService.freshFriendLocationUserIDs,
                 outingPlans: mapOutingPlans,
                 friendExplorations: visibleFriendExplorations,
                 allFriendExplorations: allFriendExplorations,
@@ -278,7 +281,6 @@ struct ContentView: View {
                 loadedFriendExplorationUserIDs:
                     friendSyncService.loadedFriendExplorationUserIDs,
                 userDisplayName: displayName,
-                userAvatarImageData: avatarImageData,
                 userProfileColorHex: profileColorHex,
                 centerOnUser: $centerOnUser,
                 resetMapOrientation: $resetMapOrientation,
@@ -621,13 +623,11 @@ struct ContentView: View {
     }
 
     private func currentNavigationDestination(
-        for userID: String,
-        at referenceDate: Date = Date()
+        for userID: String
     ) -> FriendNavigationDestination? {
         guard acceptedFriendUserIDs.contains(userID),
               let location = friendSyncService.friendLocations[userID],
               location.userID == userID,
-              location.isFresh(at: referenceDate),
               CLLocationCoordinate2DIsValid(location.coordinate),
               location.coordinate.latitude.isFinite,
               location.coordinate.longitude.isFinite else {
@@ -680,6 +680,10 @@ struct ContentView: View {
                     ) ?? ProfileColor.generatedHex(seed: friend.userID),
                     locationSampledAt: location?.sampledAt,
                     spotEnteredAt: location?.spotEnteredAt,
+                    isLocationFresh:
+                        friendSyncService.freshFriendLocationUserIDs.contains(
+                            friend.userID
+                        ),
                     cellCount: exploration?.cellIDs.count ?? 0
                 )
             }
@@ -1181,18 +1185,19 @@ private struct FriendRow: View {
     ) -> String {
         let age = referenceDate.timeIntervalSince(sampledAt)
         guard age >= 60 else {
-            return "Dernière position à l’instant"
+            return "Dernière position reçue à l’instant"
         }
 
         let relativeText = Self.relativePositionFormatter.localizedString(
             for: sampledAt,
             relativeTo: referenceDate
         )
-        return "Dernière position \(relativeText)"
+        return "Dernière position reçue \(relativeText)"
     }
 
     private func presenceStatusText(relativeTo referenceDate: Date) -> String? {
-        guard let sampledAt = friend.locationSampledAt,
+        guard friend.isLocationFresh,
+              let sampledAt = friend.locationSampledAt,
               let enteredAt = friend.spotEnteredAt else {
             return nil
         }

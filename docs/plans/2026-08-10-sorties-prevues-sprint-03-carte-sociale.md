@@ -1,9 +1,9 @@
 ---
 title: "Sorties prévues — Sprint 3 — Affichage social sur la carte"
-status: in_progress
+status: completed
 sprint: 3
 date: 2026-08-10
-completed_at:
+completed_at: "2026-08-12T15:49:16+09:00"
 depends_on:
   - "Sprint 1 completed"
   - "Sprint 2 completed"
@@ -14,10 +14,11 @@ tags: [plan, sprint, mapkit, friends]
 
 ## Status
 
-Ce sprint est `in_progress`. Il a été approuvé explicitement par le
-propriétaire le 2026-08-11. Les Sprints 1 et 2 sont en statut `completed`.
-L'utilisation de la couleur du profil pour la sortie personnelle a été
-approuvée explicitement le 2026-08-11.
+Ce sprint est `completed`. Il a été approuvé explicitement par le propriétaire
+le 2026-08-11, puis validé manuellement par le propriétaire le 2026-08-12. Les
+Sprints 1 et 2 sont également en statut `completed`. L'utilisation de la
+couleur du profil pour la sortie personnelle a été approuvée explicitement le
+2026-08-11.
 
 ## Outcome
 
@@ -59,8 +60,8 @@ d'accessibilité doivent employer explicitement « sortie prévue » et une heur
 - `wander/OutingPlanService.swift` — écoute des amis acceptés et expiration.
 - `wander/MapWithFogView.swift` — annotations, callouts et recentrage.
 - `wander/ContentView.swift` — données transmises à la carte.
-- `todos/008-blocked-p1-valider-sorties-sociales-deux-comptes.md` —
-  validation interactive restante.
+- `todos/008-done-p1-valider-sorties-sociales-deux-comptes.md` —
+  validation interactive terminée.
 
 ## Implementation checklist
 
@@ -89,13 +90,13 @@ d'accessibilité doivent employer explicitement « sortie prévue » et une heur
 ## Validation
 
 - [x] Build Debug iOS réussi sans nouvel avertissement Swift.
-- [ ] Deux comptes amis voient la même sortie active.
-- [ ] Un compte non ami ne peut ni lire ni afficher la sortie.
-- [ ] Position réelle et sortie prévue sont visuellement distinctes.
-- [ ] Révocation d'amitié, annulation et expiration retirent le marqueur.
-- [ ] Modification d'une sortie met à jour le marqueur existant.
-- [ ] Callout, VoiceOver, Dynamic Type et mode sombre vérifiés.
-- [ ] Les performances restent stables avec plusieurs amis acceptés.
+- [x] Deux comptes amis voient la même sortie active.
+- [x] Un compte non ami ne peut ni lire ni afficher la sortie.
+- [x] Position réelle et sortie prévue sont visuellement distinctes.
+- [x] Révocation d'amitié, annulation et expiration retirent le marqueur.
+- [x] Modification d'une sortie met à jour le marqueur existant.
+- [x] Callout, VoiceOver, Dynamic Type et mode sombre vérifiés.
+- [x] Les performances restent stables avec plusieurs amis acceptés.
 
 ## Completion record
 
@@ -113,6 +114,15 @@ Validation partielle du 2026-08-11 :
 - couleur du profil personnel : build Debug et analyse statique réussis le
   2026-08-11, sans avertissement Swift.
 
-Le sprint reste `in_progress`. Renseigner les validations à deux comptes, les
-captures et `completed_at` avant de le marquer `completed`. Arrêter ensuite et
-demander l'approbation du Sprint 4.
+Validation finale du 2026-08-12 :
+
+- le propriétaire a confirmé la réussite du parcours manuel complet à deux
+  comptes, y compris visibilité, distinction des positions, mise à jour,
+  annulation, révocation, expiration et accessibilité ;
+- `npm run test:rules` exécuté avec Java 21.0.12 et réussi avec 18 tests sur
+  18, aucun échec ;
+- le Sprint 3 est marqué `completed` à
+  `2026-08-12T15:49:16+09:00`.
+
+Le Sprint 4 reste `proposed` et requiert une approbation indépendante avant
+toute modification.
