@@ -11,6 +11,7 @@ import Foundation
 struct FriendContact: Identifiable, Equatable {
     let userID: String
     let displayName: String
+    let avatarID: String
     let profileColorHex: String
 
     var id: String { userID }
@@ -20,6 +21,7 @@ struct FriendRequest: Identifiable, Equatable {
     let pairID: String
     let userID: String
     let displayName: String
+    let avatarID: String
     let requestedBy: String
 
     var id: String { pairID }
@@ -90,6 +92,7 @@ enum AccountProfileOrigin: Equatable {
 
 private struct RemoteProfile {
     let displayName: String
+    let avatarID: String
     let profileColorHex: String
 }
 
@@ -170,9 +173,12 @@ final class FriendSyncService: ObservableObject {
 
     private var currentUserID: String?
     private var desiredDisplayName: String
+    private var desiredAvatarID: String
     private var desiredProfileColorHex: String
+    private var shouldAdoptRemoteAvatar: Bool
     private var shouldAdoptRemoteProfileColor: Bool
     private var lastKnownProfileDisplayName: String?
+    private var lastKnownProfileAvatarID: String?
     private var lastKnownProfileColorHex: String?
     private var friendshipRecords: [String: FriendshipRecord] = [:]
     private var profilesByUserID: [String: RemoteProfile] = [:]
@@ -191,8 +197,10 @@ final class FriendSyncService: ObservableObject {
     private var isUpdatingProfile = false
     private var isUploadingExploration = false
     private var hasPendingDisplayNameEditBeforeProfileHydration = false
+    private var hasPendingAvatarEditBeforeProfileHydration = false
     private var hasPendingProfileColorEditBeforeProfileHydration = false
     private var hasPendingDisplayNameChange = false
+    private var hasPendingAvatarChange = false
     private var hasPendingProfileColorChange = false
     private var hasPendingUserSelectedProfileColor = false
     private var hasLoadedOwnExploration = false
@@ -215,12 +223,19 @@ final class FriendSyncService: ObservableObject {
     private var shouldDeleteLocationWhenAuthenticated = false
 
     private init() {
+        let storedAvatarID = UserDefaults.standard.string(
+            forKey: ProfileAvatar.storageKey
+        )
         let storedProfileColorHex = UserDefaults.standard.string(
             forKey: ProfileColor.storageKey
         )
         desiredDisplayName = Self.normalizedDisplayName(
             UserDefaults.standard.string(forKey: "profile.displayName") ?? ""
         )
+        desiredAvatarID =
+            ProfileAvatar.normalizedID(storedAvatarID)
+            ?? ProfileAvatar.randomID()
+        shouldAdoptRemoteAvatar = true
         shouldAdoptRemoteProfileColor =
             storedProfileColorHex.flatMap(ProfileColor.normalizedHex) == nil
         desiredProfileColorHex =
@@ -297,6 +312,33 @@ final class FriendSyncService: ObservableObject {
             hasPendingDisplayNameChange = true
         } else {
             hasPendingDisplayNameEditBeforeProfileHydration = true
+        }
+        scheduleProfileUpdate()
+    }
+
+    func updateAvatarID(_ avatarID: String) {
+        guard !isAccountDeletionPending,
+              let normalizedAvatarID = ProfileAvatar.normalizedID(avatarID),
+              normalizedAvatarID != desiredAvatarID else {
+            return
+        }
+
+        desiredAvatarID = normalizedAvatarID
+        shouldAdoptRemoteAvatar = false
+        UserDefaults.standard.set(
+            normalizedAvatarID,
+            forKey: ProfileAvatar.storageKey
+        )
+        if let currentUserID {
+            UserDefaults.standard.set(
+                currentUserID,
+                forKey: ProfileAvatar.ownerStorageKey
+            )
+        }
+        if hasLoadedOwnProfileFromServer {
+            hasPendingAvatarChange = true
+        } else {
+            hasPendingAvatarEditBeforeProfileHydration = true
         }
         scheduleProfileUpdate()
     }
@@ -776,8 +818,10 @@ final class FriendSyncService: ObservableObject {
         accountProfileOrigin = .unresolved
         accountBootstrapErrorMessage = nil
         hasPendingDisplayNameEditBeforeProfileHydration = false
+        hasPendingAvatarEditBeforeProfileHydration = false
         hasPendingProfileColorEditBeforeProfileHydration = false
         hasPendingDisplayNameChange = false
+        hasPendingAvatarChange = false
         hasPendingProfileColorChange = false
         hasLoadedOwnExploration = false
         ownExplorationCellsByID = [:]
@@ -789,6 +833,7 @@ final class FriendSyncService: ObservableObject {
         ownExplorationSyncState = userID == nil ? .idle : .loading
         ownExplorationErrorMessage = nil
         lastKnownProfileDisplayName = nil
+        lastKnownProfileAvatarID = nil
         lastKnownProfileColorHex = nil
         friendshipRecords = [:]
         profilesByUserID = [:]
@@ -810,6 +855,31 @@ final class FriendSyncService: ObservableObject {
         }
 
         guard let userID else { return }
+
+        let storedAvatarID = UserDefaults.standard.string(
+            forKey: ProfileAvatar.storageKey
+        )
+        let storedAvatarOwnerID = UserDefaults.standard.string(
+            forKey: ProfileAvatar.ownerStorageKey
+        )
+        if storedAvatarOwnerID != userID
+            || ProfileAvatar.normalizedID(storedAvatarID) == nil {
+            desiredAvatarID = ProfileAvatar.randomID()
+            UserDefaults.standard.set(
+                desiredAvatarID,
+                forKey: ProfileAvatar.storageKey
+            )
+        } else if let storedAvatarID = ProfileAvatar.normalizedID(
+            storedAvatarID
+        ) {
+            desiredAvatarID = storedAvatarID
+        }
+        shouldAdoptRemoteAvatar = true
+        UserDefaults.standard.set(
+            userID,
+            forKey: ProfileAvatar.ownerStorageKey
+        )
+        UserDefaults.standard.removeObject(forKey: "profile.avatarImageData")
 
         let storedProfileColorHex = UserDefaults.standard.string(
             forKey: ProfileColor.storageKey
@@ -916,6 +986,7 @@ final class FriendSyncService: ObservableObject {
         let userReference = db.collection("users").document(userID)
         let codeReference = db.collection("friendCodes").document(proposedCode)
         let displayName = desiredDisplayName
+        let avatarID = desiredAvatarID
         let profileColorHex = desiredProfileColorHex
 
         db.runTransaction({ transaction, errorPointer -> Any? in
@@ -940,6 +1011,7 @@ final class FriendSyncService: ObservableObject {
                 transaction.setData(
                     [
                         "displayName": displayName,
+                        "avatarID": avatarID,
                         "profileColorHex": profileColorHex,
                         "friendCode": proposedCode,
                         "createdAt": FieldValue.serverTimestamp(),
@@ -1052,11 +1124,15 @@ final class FriendSyncService: ObservableObject {
                     let remoteDisplayName = Self.normalizedDisplayName(
                         data["displayName"] as? String ?? ""
                     )
+                    let remoteAvatarID = ProfileAvatar.normalizedID(
+                        data["avatarID"] as? String
+                    )
                     let remoteProfileColorHex =
                         (data["profileColorHex"] as? String).flatMap(
                             ProfileColor.normalizedHex
                         )
                     self.lastKnownProfileDisplayName = remoteDisplayName
+                    self.lastKnownProfileAvatarID = remoteAvatarID
                     self.lastKnownProfileColorHex = remoteProfileColorHex
 
                     guard !snapshot.metadata.isFromCache else {
@@ -1083,6 +1159,21 @@ final class FriendSyncService: ObservableObject {
                         )
                     }
 
+                    if self.hasPendingAvatarEditBeforeProfileHydration {
+                        self.hasPendingAvatarChange = true
+                    } else if !self.hasPendingAvatarChange {
+                        let resolvedAvatarID =
+                            remoteAvatarID ?? self.desiredAvatarID
+                        self.desiredAvatarID = resolvedAvatarID
+                        UserDefaults.standard.set(
+                            resolvedAvatarID,
+                            forKey: ProfileAvatar.storageKey
+                        )
+                        if remoteAvatarID == nil {
+                            self.hasPendingAvatarChange = true
+                        }
+                    }
+
                     if self.hasPendingProfileColorEditBeforeProfileHydration {
                         self.hasPendingProfileColorChange = true
                     } else if !self.hasPendingProfileColorChange {
@@ -1098,13 +1189,19 @@ final class FriendSyncService: ObservableObject {
                         }
                     }
 
+                    self.shouldAdoptRemoteAvatar = false
                     self.shouldAdoptRemoteProfileColor = false
                     self.hasLoadedOwnProfileFromServer = true
                     self.accountBootstrapErrorMessage = nil
                     self.hasPendingDisplayNameEditBeforeProfileHydration = false
+                    self.hasPendingAvatarEditBeforeProfileHydration = false
                     self.hasPendingProfileColorEditBeforeProfileHydration = false
                     self.isPreparingProfile = false
 
+                    UserDefaults.standard.set(
+                        userID,
+                        forKey: ProfileAvatar.ownerStorageKey
+                    )
                     UserDefaults.standard.set(
                         userID,
                         forKey: ProfileColor.ownerStorageKey
@@ -1118,6 +1215,7 @@ final class FriendSyncService: ObservableObject {
                     )
 
                     if self.lastKnownProfileDisplayName != self.desiredDisplayName
+                        || self.lastKnownProfileAvatarID != self.desiredAvatarID
                         || self.lastKnownProfileColorHex != self.desiredProfileColorHex {
                         self.scheduleProfileUpdate()
                     }
@@ -1148,18 +1246,21 @@ final class FriendSyncService: ObservableObject {
     private func performProfileUpdate() {
         guard !isAccountDeletionPending,
               !isUpdatingProfile,
+              !shouldAdoptRemoteAvatar,
               !shouldAdoptRemoteProfileColor,
               hasLoadedOwnProfileFromServer,
               let currentUserID,
               let friendCode,
               isProfileReady,
               lastKnownProfileDisplayName != desiredDisplayName
+                || lastKnownProfileAvatarID != desiredAvatarID
                 || lastKnownProfileColorHex != desiredProfileColorHex else {
             return
         }
 
         isUpdatingProfile = true
         let newDisplayName = desiredDisplayName
+        let newAvatarID = desiredAvatarID
         let newProfileColorHex = desiredProfileColorHex
         let displayNameChanged =
             lastKnownProfileDisplayName != newDisplayName
@@ -1167,6 +1268,7 @@ final class FriendSyncService: ObservableObject {
         batch.updateData(
             [
                 "displayName": newDisplayName,
+                "avatarID": newAvatarID,
                 "profileColorHex": newProfileColorHex,
                 "updatedAt": FieldValue.serverTimestamp()
             ],
@@ -1193,6 +1295,7 @@ final class FriendSyncService: ObservableObject {
                 }
 
                 self.lastKnownProfileDisplayName = newDisplayName
+                self.lastKnownProfileAvatarID = newAvatarID
                 self.lastKnownProfileColorHex = newProfileColorHex
                 if self.desiredDisplayName == newDisplayName {
                     self.hasPendingDisplayNameChange = false
@@ -1200,7 +1303,11 @@ final class FriendSyncService: ObservableObject {
                 if self.desiredProfileColorHex == newProfileColorHex {
                     self.hasPendingProfileColorChange = false
                 }
+                if self.desiredAvatarID == newAvatarID {
+                    self.hasPendingAvatarChange = false
+                }
                 if self.desiredDisplayName != newDisplayName
+                    || self.desiredAvatarID != newAvatarID
                     || self.desiredProfileColorHex != newProfileColorHex {
                     self.scheduleProfileUpdate()
                 }
@@ -1568,12 +1675,16 @@ final class FriendSyncService: ObservableObject {
                         let displayName = (data?["displayName"] as? String).map {
                             Self.normalizedDisplayName($0)
                         } ?? "Explorer"
+                        let avatarID = ProfileAvatar.normalizedID(
+                            data?["avatarID"] as? String
+                        ) ?? ProfileAvatar.generatedID(seed: userID)
                         let profileColorHex =
                             (data?["profileColorHex"] as? String).flatMap(
                                 ProfileColor.normalizedHex
                             ) ?? ProfileColor.generatedHex(seed: userID)
                         let profile = RemoteProfile(
                             displayName: displayName,
+                            avatarID: avatarID,
                             profileColorHex: profileColorHex
                         )
                         self.profilesByUserID[userID] = profile
@@ -1616,6 +1727,7 @@ final class FriendSyncService: ObservableObject {
             }
             let profile = profilesByUserID[otherUserID] ?? RemoteProfile(
                 displayName: "Explorer",
+                avatarID: ProfileAvatar.generatedID(seed: otherUserID),
                 profileColorHex: ProfileColor.generatedHex(seed: otherUserID)
             )
             let displayName = profile.displayName
@@ -1625,6 +1737,7 @@ final class FriendSyncService: ObservableObject {
                     FriendContact(
                         userID: otherUserID,
                         displayName: displayName,
+                        avatarID: profile.avatarID,
                         profileColorHex: profile.profileColorHex
                     )
                 )
@@ -1633,6 +1746,7 @@ final class FriendSyncService: ObservableObject {
                     pairID: record.pairID,
                     userID: otherUserID,
                     displayName: displayName,
+                    avatarID: profile.avatarID,
                     requestedBy: record.requestedBy
                 )
 

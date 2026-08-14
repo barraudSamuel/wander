@@ -6,8 +6,6 @@
 //
 
 import CoreLocation
-import MapKit
-import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -15,15 +13,15 @@ struct OnboardingView: View {
     let isRestoringExistingProfile: Bool
 
     @AppStorage("profile.displayName") private var storedDisplayName = ""
-    @AppStorage("profile.avatarImageData") private var avatarImageData = Data()
+    @AppStorage(ProfileAvatar.storageKey) private var avatarID = ""
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     @Environment(\.openURL) private var openURL
     @StateObject private var locationTracker = LocationTracker()
+    @ObservedObject private var friendSyncService = FriendSyncService.shared
 
     @State private var path: [Destination] = []
     @State private var displayName = ""
-    @State private var selectedPhoto: PhotosPickerItem?
 
     private enum Destination: Hashable {
         case profile
@@ -52,54 +50,50 @@ struct OnboardingView: View {
         }
         .onAppear {
             displayName = storedDisplayName
+            ensureAvatarSelection()
         }
-        .onChange(of: selectedPhoto) { _, newPhoto in
-            loadAvatar(from: newPhoto)
+        .onChange(of: avatarID) { _, newAvatarID in
+            friendSyncService.updateAvatarID(newAvatarID)
         }
     }
 
     private var discoveryStep: some View {
         VStack(spacing: 0) {
-            OnboardingProgressView(step: 1)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    Map(
-                        initialPosition: previewMapPosition,
-                        interactionModes: []
-                    ) {
-                        MapCircle(center: previewCoordinate, radius: 480)
-                            .foregroundStyle(Color.accentColor.opacity(0.16))
-                            .stroke(Color.accentColor, lineWidth: 2)
-
-                        Annotation("Zone explorée", coordinate: previewCoordinate) {
-                            Image(systemName: "figure.walk.circle.fill")
-                                .font(.largeTitle)
-                                .foregroundStyle(.tint)
-                                .padding(8)
-                                .background(.regularMaterial, in: Circle())
-                        }
-                    }
-                    .mapStyle(.standard)
-                    .frame(minHeight: 300)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Aperçu d’une carte qui se révèle autour d’un trajet")
+                    Image("OnboardingDiscoveryMap")
+                        .resizable()
+                        .scaledToFill()
+                        .aspectRatio(1, contentMode: .fit)
+                        .clipShape(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        )
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(
+                            "Illustration d’une carte partagée entre plusieurs téléphones"
+                        )
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Redécouvre les lieux que tu traverses")
+                        Text("Découvre la carte avec tes amis")
                             .font(.largeTitle.bold())
                             .accessibilityAddTraits(.isHeader)
 
-                        Text("Chaque trajet dévoile peu à peu ta carte. Marche, roule ou voyage, puis retrouve tout ce que tu as exploré.")
+                        Text(
+                            "Dévoile la carte au fil de tes déplacements et "
+                                + "partage ta position avec tes amis pour vous "
+                                + "retrouver plus facilement."
+                        )
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
                     VStack(alignment: .leading, spacing: 14) {
-                        Label("Suis ta progression quartier par quartier", systemImage: "map.fill")
-                        Label("Retrouve tes amis en direct", systemImage: "person.2.fill")
+                        Label("Explore la carte zone par zone", systemImage: "map.fill")
+                        Label(
+                            "Partage ta position avec tes amis",
+                            systemImage: "person.2.fill"
+                        )
                     }
                     .font(.headline)
                 }
@@ -130,8 +124,6 @@ struct OnboardingView: View {
 
     private var profileStep: some View {
         VStack(spacing: 0) {
-            OnboardingProgressView(step: 2)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -146,28 +138,17 @@ struct OnboardingView: View {
                         Text(
                             isRestoringExistingProfile
                                 ? "Ton pseudo a été récupéré depuis ton compte. Tu peux le vérifier avant de configurer ce téléphone."
-                                : "Ton pseudo et ta photo permettent à tes amis de te reconnaître sur la carte."
+                                : "Ton pseudo et ton avatar permettent à tes amis de te reconnaître."
                         )
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
                     VStack(spacing: 16) {
-                        ProfileAvatarView(imageData: avatarImageData, size: 112)
+                        ProfileAvatarView(avatarID: avatarID, size: 112)
                             .accessibilityHidden(true)
 
-                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                            Label(
-                                avatarImageData.isEmpty ? "Ajouter une photo" : "Changer la photo",
-                                systemImage: "photo"
-                            )
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityHint("Ouvre la photothèque")
-
-                        Text("La photo est facultative.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        ProfileAvatarPicker(selection: $avatarID)
                     }
                     .frame(maxWidth: .infinity)
 
@@ -209,8 +190,6 @@ struct OnboardingView: View {
 
     private var locationStep: some View {
         VStack(spacing: 0) {
-            OnboardingProgressView(step: 3)
-
             ScrollView {
                 locationMessage
                     .padding(.horizontal, 24)
@@ -423,19 +402,6 @@ struct OnboardingView: View {
         }
     }
 
-    private var previewCoordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522)
-    }
-
-    private var previewMapPosition: MapCameraPosition {
-        .region(
-            MKCoordinateRegion(
-                center: previewCoordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.025, longitudeDelta: 0.025)
-            )
-        )
-    }
-
     private func saveProfileAndContinue() {
         guard canContinue else { return }
         storedDisplayName = trimmedDisplayName
@@ -467,38 +433,9 @@ struct OnboardingView: View {
         openURL(settingsURL)
     }
 
-    private func loadAvatar(from item: PhotosPickerItem?) {
-        guard let item else { return }
-
-        Task {
-            guard
-                let data = try? await item.loadTransferable(type: Data.self),
-                let image = UIImage(data: data),
-                let jpegData = image.preparingThumbnail(of: CGSize(width: 360, height: 360))?.jpegData(compressionQuality: 0.82)
-            else { return }
-
-            await MainActor.run {
-                avatarImageData = jpegData
-            }
-        }
-    }
-}
-
-private struct OnboardingProgressView: View {
-    let step: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Étape \(step) sur 3")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            ProgressView(value: Double(step), total: 3)
-                .accessibilityLabel("Progression de la configuration")
-                .accessibilityValue("Étape \(step) sur 3")
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+    private func ensureAvatarSelection() {
+        guard ProfileAvatar.normalizedID(avatarID) == nil else { return }
+        avatarID = ProfileAvatar.randomID()
     }
 }
 
@@ -527,30 +464,5 @@ private struct OnboardingInformationRow: View {
 
             Spacer(minLength: 0)
         }
-    }
-}
-
-struct ProfileAvatarView: View {
-    let imageData: Data
-    let size: CGFloat
-
-    var body: some View {
-        Group {
-            if let image = UIImage(data: imageData) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Image(systemName: "person.circle.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(.secondary)
-                    .padding(size * 0.1)
-            }
-        }
-        .frame(width: size, height: size)
-        .background(Color(uiColor: .secondarySystemBackground))
-        .clipShape(Circle())
-        .contentShape(Circle())
     }
 }

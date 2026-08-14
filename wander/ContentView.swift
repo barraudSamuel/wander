@@ -8,7 +8,6 @@
 import AuthenticationServices
 import CoreLocation
 import MapKit
-import PhotosUI
 import SwiftData
 import SwiftUI
 import UIKit
@@ -22,6 +21,7 @@ private enum RootTab: Hashable {
 private struct FriendMapSummary: Identifiable, Hashable {
     let userID: String
     let displayName: String
+    let avatarID: String
     let profileColorHex: String
     let locationSampledAt: Date?
     let spotEnteredAt: Date?
@@ -53,7 +53,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @AppStorage("profile.displayName") private var displayName = ""
-    @AppStorage("profile.avatarImageData") private var avatarImageData = Data()
+    @AppStorage(ProfileAvatar.storageKey) private var avatarID = ""
     @AppStorage(ProfileColor.storageKey) private var profileColorHex = ""
 
     @ObservedObject private var cityBoundary = CityBoundary.shared
@@ -108,7 +108,7 @@ struct ContentView: View {
 
                 ProfileView(
                     displayName: $displayName,
-                    avatarImageData: $avatarImageData,
+                    avatarID: $avatarID,
                     profileColorHex: $profileColorHex,
                     locationTracker: locationTracker,
                     cityProgress: cityProgress,
@@ -151,6 +151,7 @@ struct ContentView: View {
             restoreOwnExplorationIfAvailable()
             locationTracker.resumeTrackingIfNeeded()
             friendSyncService.updateDisplayName(displayName)
+            friendSyncService.updateAvatarID(avatarID)
             syncProfileColor(profileColorHex)
             let discoveredCellIDs = locationTracker.discoveredCellIDs
             friendSyncService.syncDiscoveredCells(discoveredCellIDs)
@@ -188,6 +189,9 @@ struct ContentView: View {
         .onChange(of: displayName) { _, newDisplayName in
             friendSyncService.updateDisplayName(newDisplayName)
         }
+        .onChange(of: avatarID) { _, newAvatarID in
+            friendSyncService.updateAvatarID(newAvatarID)
+        }
         .onChange(of: profileColorHex) { _, newProfileColorHex in
             syncProfileColor(newProfileColorHex)
         }
@@ -203,6 +207,7 @@ struct ContentView: View {
             guard isReady else { return }
 
             friendSyncService.updateDisplayName(displayName)
+            friendSyncService.updateAvatarID(avatarID)
             friendSyncService.updateProfileColor(profileColorHex)
             friendSyncService.syncDiscoveredCells(locationTracker.discoveredCellIDs)
             if !locationTracker.trackingEnabled {
@@ -673,6 +678,7 @@ struct ContentView: View {
                     displayName: location?.displayName
                         ?? exploration?.displayName
                         ?? friend.displayName,
+                    avatarID: friend.avatarID,
                     profileColorHex: ProfileColor.normalizedHex(
                         location?.profileColorHex
                             ?? exploration?.profileColorHex
@@ -934,7 +940,15 @@ private struct FriendsView: View {
                     Section("Demandes reçues") {
                         ForEach(service.incomingRequests) { request in
                             VStack(alignment: .leading, spacing: 10) {
-                                Label(request.displayName, systemImage: "person.crop.circle")
+                                HStack(spacing: 10) {
+                                    ProfileAvatarView(
+                                        avatarID: request.avatarID,
+                                        size: 32
+                                    )
+                                    .accessibilityHidden(true)
+
+                                    Text(request.displayName)
+                                }
 
                                 if processingRequestID == request.id {
                                     HStack(spacing: 10) {
@@ -1013,6 +1027,12 @@ private struct FriendsView: View {
                     Section("En attente") {
                         ForEach(service.outgoingRequests) { request in
                             HStack {
+                                ProfileAvatarView(
+                                    avatarID: request.avatarID,
+                                    size: 32
+                                )
+                                .accessibilityHidden(true)
+
                                 Text(request.displayName)
                                 Spacer()
                                 Text("Demande envoyée")
@@ -1140,6 +1160,7 @@ private struct FriendRow: View {
     var body: some View {
         HStack(spacing: 12) {
             FriendAvatarBadge(
+                avatarID: friend.avatarID,
                 profileColorHex: friend.profileColorHex,
                 size: 30
             )
@@ -1257,7 +1278,7 @@ private struct FriendRow: View {
 
 private struct ProfileView: View {
     @Binding var displayName: String
-    @Binding var avatarImageData: Data
+    @Binding var avatarID: String
     @Binding var profileColorHex: String
     @ObservedObject var locationTracker: LocationTracker
     @ObservedObject private var authenticationService = FirebaseService.shared
@@ -1268,7 +1289,6 @@ private struct ProfileView: View {
     let cityProgressUnavailableText: String
     let onProfileColorSelected: (String) -> Void
 
-    @State private var selectedPhoto: PhotosPickerItem?
     @State private var signOutConfirmationPresented = false
     @State private var deleteConfirmationPresented = false
     @State private var deletionAuthorizationPresented = false
@@ -1279,7 +1299,7 @@ private struct ProfileView: View {
             Form {
                 Section {
                     HStack(spacing: 16) {
-                        ProfileAvatarView(imageData: avatarImageData, size: 72)
+                        ProfileAvatarView(avatarID: avatarID, size: 72)
                             .overlay {
                                 Circle()
                                     .stroke(
@@ -1301,10 +1321,10 @@ private struct ProfileView: View {
                         }
                     }
                     .padding(.vertical, 8)
+                }
 
-                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                        Label("Choisir une photo", systemImage: "photo")
-                    }
+                Section("Avatar") {
+                    ProfileAvatarPicker(selection: $avatarID)
                 }
 
                 Section {
@@ -1381,9 +1401,6 @@ private struct ProfileView: View {
                 accountSection
             }
             .navigationTitle("Profil")
-        }
-        .onChange(of: selectedPhoto) { _, newPhoto in
-            loadAvatar(from: newPhoto)
         }
         .onAppear {
             if friendSyncService.isAccountDeletionPending {
@@ -1534,26 +1551,6 @@ private struct ProfileView: View {
         return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
     }
 
-    private func loadAvatar(from item: PhotosPickerItem?) {
-        guard let item else { return }
-
-        Task {
-            guard
-                let data = try? await item.loadTransferable(type: Data.self),
-                let image = UIImage(data: data),
-                let jpegData = image
-                    .preparingThumbnail(of: CGSize(width: 360, height: 360))?
-                    .jpegData(compressionQuality: 0.82)
-            else {
-                return
-            }
-
-            await MainActor.run {
-                avatarImageData = jpegData
-            }
-        }
-    }
-
     private func handleAccountDeletionAuthorization(
         _ result: Result<ASAuthorization, Error>
     ) {
@@ -1615,12 +1612,13 @@ private struct ProfileView: View {
     }
 
     private func clearLocalProfileData() {
-        selectedPhoto = nil
         displayName = ""
-        avatarImageData = Data()
+        avatarID = ""
         profileColorHex = ""
 
         let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: ProfileAvatar.storageKey)
+        defaults.removeObject(forKey: ProfileAvatar.ownerStorageKey)
         defaults.removeObject(forKey: ProfileColor.storageKey)
         defaults.removeObject(forKey: ProfileColor.ownerStorageKey)
         defaults.removeObject(forKey: ProfileColor.pendingOwnerStorageKey)

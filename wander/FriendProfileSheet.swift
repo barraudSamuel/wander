@@ -14,26 +14,25 @@ enum CityBoundaryResolutionState: Equatable {
 }
 
 struct FriendAvatarBadge: View {
+    private let avatarID: String
     private let profileColorHex: String
     private let size: CGFloat
 
-    init(profileColorHex: String, size: CGFloat) {
+    init(avatarID: String, profileColorHex: String, size: CGFloat) {
+        self.avatarID = avatarID
         self.profileColorHex = profileColorHex
         self.size = size
     }
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(ProfileColor.color(hex: profileColorHex))
-
-            Image(systemName: "person.fill")
-                .font(.system(size: size * 0.42, weight: .bold))
-                .foregroundStyle(
-                    ProfileColor.foregroundColor(hex: profileColorHex)
-                )
-        }
-        .frame(width: size, height: size)
+        ProfileAvatarView(avatarID: avatarID, size: size)
+            .overlay {
+                Circle()
+                    .stroke(
+                        ProfileColor.color(hex: profileColorHex),
+                        lineWidth: max(2, size * 0.055)
+                    )
+            }
     }
 }
 
@@ -72,6 +71,7 @@ struct FriendProfileSheet: View {
                 Section {
                     HStack(spacing: 16) {
                         FriendAvatarBadge(
+                            avatarID: avatarID,
                             profileColorHex: profileColorHex,
                             size: 64
                         )
@@ -245,6 +245,10 @@ struct FriendProfileSheet: View {
             ?? exploration?.displayName
             ?? friend?.displayName
             ?? "Ami"
+    }
+
+    private var avatarID: String {
+        friend?.avatarID ?? ""
     }
 
     private var profileColorHex: String {

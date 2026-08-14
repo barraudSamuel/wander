@@ -15,6 +15,14 @@ struct wanderApp: App {
     @StateObject private var authenticationService = FirebaseService.shared
     @StateObject private var friendSyncService = FriendSyncService.shared
 
+    private var showsOnboardingPreview: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-preview-onboarding")
+        #else
+        false
+        #endif
+    }
+
     init() {
         do {
             container = try ModelContainer(for: DiscoveredCell.self, migrationPlan: WanderMigrationPlan.self)
@@ -29,7 +37,9 @@ struct wanderApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if !authenticationService.isAuthenticationResolved {
+                if showsOnboardingPreview {
+                    OnboardingView(isRestoringExistingProfile: false)
+                } else if !authenticationService.isAuthenticationResolved {
                     ProgressView("Connexion…")
                 } else if authenticationService.currentUserId == nil {
                     AuthenticationView(

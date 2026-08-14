@@ -32,6 +32,13 @@ service cloud.firestore {
         && color.matches('^#[0-9A-F]{6}$');
     }
 
+    function isValidAvatarID(avatarID) {
+      return avatarID is string
+        && avatarID.matches(
+          '^(cyclops-horns|cyclops-crown|radiant-eye|radar-face|star-eye|skull|wave-hair|flame-hair|labyrinth|locator-hair|social-rays|antenna-hair)$'
+        );
+    }
+
     function hasExactUserFields(data) {
       return data.keys().hasAll([
           'displayName',
@@ -44,6 +51,7 @@ service cloud.firestore {
           'friendCode',
           'createdAt',
           'updatedAt',
+          'avatarID',
           'profileColorHex',
           'deletionRequestedAt'
         ]);
@@ -53,6 +61,11 @@ service cloud.firestore {
       return hasExactUserFields(data)
         && isValidDisplayName(data.displayName)
         && isValidFriendCode(data.friendCode)
+        // avatarID remains optional only so existing documents can migrate.
+        && (
+          !data.keys().hasAny(['avatarID'])
+          || isValidAvatarID(data.avatarID)
+        )
         // profileColorHex remains optional while legacy clients/documents are
         // still in circulation. New clients always write a generated color.
         && (
@@ -422,8 +435,17 @@ service cloud.firestore {
               !resource.data.keys().hasAny(['profileColorHex'])
               || request.resource.data.keys().hasAll(['profileColorHex'])
             )
+            && (
+              !resource.data.keys().hasAny(['avatarID'])
+              || request.resource.data.keys().hasAll(['avatarID'])
+            )
             && request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['displayName', 'profileColorHex', 'updatedAt'])
+              .hasOnly([
+                'displayName',
+                'avatarID',
+                'profileColorHex',
+                'updatedAt'
+              ])
             && friendCodeMatchesProfile(
               request.resource.data.friendCode,
               uid,
