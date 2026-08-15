@@ -200,6 +200,7 @@ final class FriendSyncService: ObservableObject {
     private var locationListeners: [String: ListenerRegistration] = [:]
     private var locationFreshnessTimers: [String: Timer] = [:]
     private var explorationListeners: [String: ListenerRegistration] = [:]
+    private var friendshipAccessChecksInFlight: Set<String> = []
     private var profileUpdateTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
@@ -1502,8 +1503,9 @@ final class FriendSyncService: ObservableObject {
                         }
 
                         if let error {
-                            self.errorMessage = self.friendlyMessage(
+                            self.handleRelatedListenerError(
                                 for: error,
+                                relatedUserID: userID,
                                 fallback: "Impossible de charger la carte d’un ami."
                             )
                             return
@@ -1677,8 +1679,9 @@ final class FriendSyncService: ObservableObject {
                         }
 
                         if let error {
-                            self.errorMessage = self.friendlyMessage(
+                            self.handleRelatedListenerError(
                                 for: error,
+                                relatedUserID: userID,
                                 fallback: "Impossible de charger le profil d’un ami."
                             )
                             return
@@ -1913,8 +1916,9 @@ final class FriendSyncService: ObservableObject {
                         }
 
                         if let error {
-                            self.errorMessage = self.friendlyMessage(
+                            self.handleRelatedListenerError(
                                 for: error,
+                                relatedUserID: userID,
                                 fallback: "Impossible de recevoir la position d’un ami."
                             )
                             return
@@ -2201,7 +2205,7 @@ final class FriendSyncService: ObservableObject {
             listener.remove()
         }
         explorationListeners.removeAll()
-
+        friendshipAccessChecksInFlight.removeAll()
     }
 
     private func finishFriendAction(
@@ -2219,6 +2223,83 @@ final class FriendSyncService: ObservableObject {
         completion(success)
     }
 
+    private func handleRelatedListenerError(
+        for error: Error,
+        relatedUserID: String,
+        fallback: String
+    ) {
+        guard Self.isFirestorePermissionDenied(error) else {
+            errorMessage = friendlyMessage(for: error, fallback: fallback)
+            return
+        }
+
+        guard let currentUserID,
+              let friendship = friendshipRecords.values.first(where: { record in
+                  record.otherUserID(for: currentUserID) == relatedUserID
+              }),
+              friendshipAccessChecksInFlight.insert(friendship.pairID).inserted
+        else {
+            return
+        }
+
+        let pairID = friendship.pairID
+        let generation = authenticationGeneration
+        db.collection("friendships").document(pairID)
+            .getDocument(source: .server) { [weak self] snapshot, checkError in
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.currentUserID == currentUserID,
+                          self.authenticationGeneration == generation else {
+                        return
+                    }
+
+                    self.friendshipAccessChecksInFlight.remove(pairID)
+
+                    guard let currentFriendship = self.friendshipRecords[pairID],
+                          currentFriendship.requestedBy == friendship.requestedBy,
+                          currentFriendship.createdAt == friendship.createdAt else {
+                        return
+                    }
+
+                    if let checkError {
+                        self.errorMessage = self.friendlyMessage(
+                            for: checkError,
+                            fallback: fallback
+                        )
+                        return
+                    }
+
+                    let data = snapshot?.data()
+                    let participants = data?["participants"] as? [String]
+                    let status = data?["status"] as? String
+                    let relationshipStillExists = snapshot?.exists == true
+                        && participants?.count == 2
+                        && participants?.contains(currentUserID) == true
+                        && participants?.contains(relatedUserID) == true
+                        && (status == "pending" || status == "accepted")
+
+                    if relationshipStillExists {
+                        self.errorMessage = self.friendlyMessage(
+                            for: error,
+                            fallback: fallback
+                        )
+                        return
+                    }
+
+                    guard self.friendshipRecords[pairID] != nil else { return }
+                    self.friendshipRecords.removeValue(forKey: pairID)
+                    self.reconcileRelatedListeners()
+                    self.rebuildPublishedRelationships()
+                }
+            }
+    }
+
+    private static func isFirestorePermissionDenied(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == FirestoreErrorDomain
+            && nsError.code == FirestoreErrorCode.permissionDenied.rawValue
+    }
+
     private func friendlyMessage(for error: Error, fallback: String) -> String {
         let nsError = error as NSError
 
@@ -2228,7 +2309,7 @@ final class FriendSyncService: ObservableObject {
             return "Problème réseau. Vérifie ta connexion puis réessaie."
         }
 
-        if nsError.code == 7 {
+        if Self.isFirestorePermissionDenied(error) {
             return "Accès Firestore refusé. Vérifie les règles de sécurité publiées."
         }
 
