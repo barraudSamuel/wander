@@ -99,7 +99,7 @@ struct ContentView: View {
                     friendSummaries: summaries
                 )
                     .tabItem {
-                        Label("Explorer", systemImage: "map")
+                        tabBarImage("TabIconExplore", accessibilityLabel: "Explorer")
                     }
                     .tag(RootTab.explore)
 
@@ -109,7 +109,7 @@ struct ContentView: View {
                     onShowOnMap: showFriendOnMap
                 )
                 .tabItem {
-                    Label("Amis", systemImage: "person.2")
+                    tabBarImage("TabIconFriends", accessibilityLabel: "Amis")
                 }
                 .tag(RootTab.friends)
 
@@ -128,7 +128,7 @@ struct ContentView: View {
                     }
                 )
                 .tabItem {
-                    Label("Profil", systemImage: "person.crop.circle")
+                    tabBarImage("TabIconProfile", accessibilityLabel: "Profil")
                 }
                 .tag(RootTab.profile)
             }
@@ -288,6 +288,15 @@ struct ContentView: View {
             outingPlanService.stopObserving()
             outingAttendanceService.stopObserving()
         }
+    }
+
+    private func tabBarImage(
+        _ assetName: String,
+        accessibilityLabel: String
+    ) -> some View {
+        Image(assetName)
+            .renderingMode(.original)
+            .accessibilityLabel(accessibilityLabel)
     }
 
     // MARK: - Explore
