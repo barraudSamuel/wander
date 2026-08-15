@@ -766,6 +766,15 @@ final class FriendSyncService: ObservableObject {
             from: explorationCellsCollection(for: userID)
         )
         try await deleteDocumentsInBatches(
+            from: db.collectionGroup("attendees")
+                .whereField("participantId", isEqualTo: userID)
+        )
+        try await deleteDocumentsInBatches(
+            from: db.collection("plans")
+                .document(userID)
+                .collection("attendees")
+        )
+        try await deleteDocumentsInBatches(
             from: db.collection("friendships")
                 .whereField("participants", arrayContains: userID)
         )

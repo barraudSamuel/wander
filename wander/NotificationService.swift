@@ -15,6 +15,10 @@ struct OutingNotificationRoute: Equatable {
     let publicationID: UUID
 }
 
+struct FriendRequestNotificationRoute: Equatable {
+    let friendshipID: String
+}
+
 @MainActor
 final class NotificationService: ObservableObject {
     static let shared = NotificationService()
@@ -25,6 +29,7 @@ final class NotificationService: ObservableObject {
     @Published private(set) var isEnabled: Bool
     @Published private(set) var errorMessage: String?
     @Published private(set) var pendingRoute: OutingNotificationRoute?
+    @Published private(set) var pendingFriendRequestRoute: FriendRequestNotificationRoute?
 
     private static let deviceIDStorageKey = "notifications.installationID"
     private static let registeredOwnerStorageKey = "notifications.registeredOwnerID"
@@ -170,26 +175,47 @@ final class NotificationService: ObservableObject {
     }
 
     func receiveNotification(userInfo: [AnyHashable: Any]) {
-        guard let type = userInfo["type"] as? String,
-              type == "outingPublished",
-              let ownerID = userInfo["outingOwnerId"] as? String,
-              !ownerID.isEmpty,
-              ownerID.count <= 128,
-              !ownerID.contains("__"),
-              let publicationIDValue = userInfo["publicationId"] as? String,
-              let publicationID = UUID(uuidString: publicationIDValue) else {
+        guard let type = userInfo["type"] as? String else {
             return
         }
 
-        pendingRoute = OutingNotificationRoute(
-            ownerID: ownerID,
-            publicationID: publicationID
-        )
+        switch type {
+        case "outingPublished", "outingAttendanceCreated":
+            guard let ownerID = userInfo["outingOwnerId"] as? String,
+                  Self.isValidUserID(ownerID),
+                  let publicationIDValue = userInfo["publicationId"] as? String,
+                  let publicationID = UUID(uuidString: publicationIDValue) else {
+                return
+            }
+
+            pendingFriendRequestRoute = nil
+            pendingRoute = OutingNotificationRoute(
+                ownerID: ownerID,
+                publicationID: publicationID
+            )
+        case "friendRequestCreated":
+            guard let friendshipID = userInfo["friendshipId"] as? String,
+                  Self.isValidFriendshipID(friendshipID) else {
+                return
+            }
+
+            pendingRoute = nil
+            pendingFriendRequestRoute = FriendRequestNotificationRoute(
+                friendshipID: friendshipID
+            )
+        default:
+            return
+        }
     }
 
     func consume(_ route: OutingNotificationRoute) {
         guard pendingRoute == route else { return }
         pendingRoute = nil
+    }
+
+    func consume(_ route: FriendRequestNotificationRoute) {
+        guard pendingFriendRequestRoute == route else { return }
+        pendingFriendRequestRoute = nil
     }
 
     func clearError() {
@@ -335,6 +361,22 @@ final class NotificationService: ObservableObject {
             return "Connexion impossible. Vérifie ta connexion internet."
         }
         return fallback
+    }
+
+    private static func isValidUserID(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 128 && !value.contains("__")
+    }
+
+    private static func isValidFriendshipID(_ value: String) -> Bool {
+        let participants = value.components(separatedBy: "__")
+        guard participants.count == 2,
+              let first = participants.first,
+              let second = participants.last else {
+            return false
+        }
+        return isValidUserID(first)
+            && isValidUserID(second)
+            && first < second
     }
 }
 

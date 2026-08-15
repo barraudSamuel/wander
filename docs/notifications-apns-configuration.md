@@ -38,10 +38,26 @@ partie de la signature.
 
 ## Backend
 
-La fonction `notifyAcceptedFriendsOfOuting` est préparée pour la région
-`asia-northeast3`. Avant le premier déploiement du Sprint 5, confirmer que cette
-région est adaptée à l’emplacement Firestore du projet ; changer une région
-après déploiement crée une nouvelle fonction au lieu de déplacer l’existante.
+Les fonctions `notifyAcceptedFriendsOfOuting`,
+`notifyRecipientOfFriendRequest` et
+`notifyOutingParticipantsOfAttendance` sont préparées pour la région
+`asia-northeast3`. Avant le premier déploiement, confirmer que cette région est
+adaptée à l'emplacement Firestore du projet ; changer une région après
+déploiement crée une nouvelle fonction au lieu de déplacer l'existante.
+
+Le broadcast de participation utilise le payload minimal suivant :
+
+- `type: outingAttendanceCreated` ;
+- `outingOwnerId` ;
+- `publicationId`.
+
+Le participant qui vient de rejoindre est exclu. L'organisateur et les autres
+participants encore amis avec lui reçoivent « Nouvelle participation — Léa va
+vous rejoindre pour Namsan. ». Le backend relit la participation, le profil, le
+plan et les amitiés avant l'envoi. L'identité de dispatch inclut le timestamp
+serveur de l'inscription : une relance du même événement ne duplique pas le
+push, tandis qu'un véritable départ suivi d'une nouvelle arrivée constitue un
+nouvel événement.
 
 Installer et valider localement le backend :
 
@@ -71,6 +87,10 @@ hors du Sprint 4 et nécessite l’approbation indépendante du Sprint 5.
 - Depuis un deuxième compte accepté, publier une sortie.
 - Vérifier une seule notification, sans adresse ni coordonnées.
 - Toucher la notification et confirmer le recentrage sur la sortie.
+- Avec trois comptes, faire rejoindre B puis C : A reçoit les deux arrivées, B
+  reçoit celle de C, et aucun compte ne reçoit sa propre arrivée.
+- Confirmer que les participants voient les mêmes avatars dans la callout et
+  qu'un ami non participant ne voit pas la liste.
 - Refaire les essais avec une demande en attente, un non-ami, une amitié
   révoquée, un refus de permission, une déconnexion et une suppression de
   compte.

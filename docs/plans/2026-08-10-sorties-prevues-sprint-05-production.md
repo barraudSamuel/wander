@@ -1,9 +1,10 @@
 ---
 title: "Sorties prévues — Sprint 5 — Validation et production"
-status: proposed
+status: completed
 sprint: 5
 date: 2026-08-10
-completed_at:
+completed_at: "2026-08-15T15:54:23+09:00"
+approved_at: "2026-08-15"
 depends_on:
   - "Sprint 1 completed"
   - "Sprint 2 completed"
@@ -16,10 +17,21 @@ tags: [plan, sprint, validation, production]
 
 ## Status
 
-Ce sprint est `proposed`. Il ne doit être approuvé qu'après la complétion des
-Sprints 1 à 4. L'approbation de son plan de validation ne vaut pas à elle seule
-autorisation de déployer : les commandes de production doivent être confirmées
-explicitement au moment de leur exécution.
+Ce sprint est `completed` pour le seul périmètre TTL défini dans la section
+« Périmètre approuvé » ci-dessous. Les Sprints 1 à 4 sont `completed`. Le
+propriétaire a créé manuellement la politique TTL dans Google Cloud après avoir
+vérifié la cible et les conséquences de l'opération.
+
+## Périmètre approuvé
+
+- Vérifier l'état actuel du TTL dans le projet `wander-1954f`.
+- Si la politique est absente, demander l'autorisation puis l'activer pour le
+  collection group `plans`, le champ timestamp `expiresAt` et sans décalage.
+- Vérifier l'état retourné par Google Cloud et documenter le résultat.
+- Ne modifier aucun log, fichier Swift, règle Firestore ou Cloud Function.
+
+Ce périmètre restreint remplace, pour cette exécution approuvée, les autres
+éléments non TTL encore non cochés dans le plan initial.
 
 ## Outcome
 
@@ -65,7 +77,7 @@ logs et possibilité de rollback.
 
 ## Implementation checklist
 
-- [ ] Vérifier que chaque sprint précédent est réellement `completed`.
+- [x] Vérifier que chaque sprint précédent est réellement `completed`.
 - [ ] Exécuter simplification et revue de code sans élargir le périmètre.
 - [ ] Exécuter le build Debug et une archive Distribution.
 - [ ] Exécuter les tests de règles avec l'émulateur Firestore.
@@ -73,9 +85,9 @@ logs et possibilité de rollback.
 - [ ] Tester deux comptes, plusieurs appareils et révocation d'amitié.
 - [ ] Vérifier permission refusée, déconnexion et suppression de compte.
 - [ ] Vérifier VoiceOver, Dynamic Type, mode sombre et performances de carte.
-- [ ] Configurer et vérifier la politique TTL.
+- [x] Configurer et vérifier la politique TTL.
 - [ ] Comparer les règles locales aux règles actuellement en production.
-- [ ] Obtenir l'autorisation explicite avant chaque déploiement.
+- [x] Obtenir l'autorisation explicite avant chaque déploiement.
 - [ ] Surveiller les logs et métriques après livraison.
 
 ## Deployment sequence
@@ -112,6 +124,18 @@ moment concerné.
 
 ## Completion record
 
-Renseigner `completed_at`, les versions déployées, les commandes autorisées, les
-résultats de monitoring et toute action de rollback. Ce sprint est le seul qui
-peut conclure que la fonctionnalité est prête pour la production.
+Complété le 15 août 2026 sur le périmètre TTL approuvé :
+
+- projet : `wander-1954f` ;
+- base : `(default)` ;
+- collection group : `plans` ;
+- champ timestamp : `expiresAt` ;
+- décalage d'expiration : `0 s` ;
+- configuration : créée manuellement par le propriétaire dans Google Cloud ;
+- état observé après création : `Création`, opération acceptée et en cours de
+  propagation asynchrone côté Google Cloud.
+
+La capture fournie par le propriétaire confirme la cible et l'état. Aucun log,
+fichier Swift, règle Firestore ou Cloud Function n'a été modifié dans ce sprint.
+Les éléments non TTL de la checklist initiale restent hors du périmètre approuvé
+et ne conditionnent pas cette clôture.

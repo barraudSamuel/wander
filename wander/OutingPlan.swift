@@ -16,6 +16,7 @@ struct OutingPlan: Identifiable, Equatable {
 
     let ownerID: String
     let publicationID: UUID
+    let publicationIDValue: String
     let displayName: String
     let placeName: String
     let address: String?
@@ -35,6 +36,7 @@ struct OutingPlan: Identifiable, Equatable {
     static func == (lhs: OutingPlan, rhs: OutingPlan) -> Bool {
         lhs.ownerID == rhs.ownerID
             && lhs.publicationID == rhs.publicationID
+            && lhs.publicationIDValue == rhs.publicationIDValue
             && lhs.displayName == rhs.displayName
             && lhs.placeName == rhs.placeName
             && lhs.address == rhs.address
@@ -230,6 +232,7 @@ extension OutingPlan {
 
         self.ownerID = ownerID
         self.publicationID = publicationID
+        self.publicationIDValue = publicationIDValue
         self.displayName = displayName
         self.placeName = placeName
         self.address = address

@@ -289,7 +289,7 @@ struct OutingPlanComposerView: View {
 
             Section {
                 Toggle(
-                    "Recevoir les sorties de mes amis",
+                    "Recevoir les notifications sociales",
                     isOn: notificationsBinding
                 )
 
@@ -312,7 +312,7 @@ struct OutingPlanComposerView: View {
                 Text("Notifications")
             } footer: {
                 Text(
-                    "Ce réglage ne bloque jamais la publication. Il permet de recevoir les prochaines sorties de tes amis acceptés."
+                    "Ce réglage ne bloque jamais la publication. Il permet de recevoir les demandes d’amis et les prochaines sorties de tes amis acceptés."
                 )
             }
 

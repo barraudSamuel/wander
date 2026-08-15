@@ -50,6 +50,8 @@ struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
     @StateObject private var friendSyncService = FriendSyncService.shared
     @StateObject private var outingPlanService = OutingPlanService.shared
+    @StateObject private var outingAttendanceService =
+        OutingAttendanceService.shared
     @StateObject private var notificationService = NotificationService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
@@ -73,6 +75,7 @@ struct ContentView: View {
     @State private var friendExplorationProgress: [String: CityProgress] = [:]
     @State private var friendNavigationSelection: FriendSelection?
     @State private var selectedFriendProfile: FriendSelection?
+    @State private var outingAttendanceErrorMessage: String?
     @State private var cityBoundaryResolutionState: CityBoundaryResolutionState = .loading
 
     #if DEBUG
@@ -160,6 +163,7 @@ struct ContentView: View {
             refreshCityProgress(discoveredCellIDs: discoveredCellIDs)
             refreshFriendExplorationProgress()
             synchronizeOutingPlanObservation()
+            synchronizeOutingAttendanceObservation()
 
             Task {
                 await cityBoundary.load()
@@ -206,6 +210,7 @@ struct ContentView: View {
         }
         .onChange(of: friendSyncService.isProfileReady) { _, isReady in
             synchronizeOutingPlanObservation()
+            synchronizeOutingAttendanceObservation()
             guard isReady else { return }
 
             friendSyncService.updateDisplayName(displayName)
@@ -216,15 +221,26 @@ struct ContentView: View {
                 friendSyncService.stopSharingLocation()
             }
             openPendingNotificationRouteIfPossible()
+            openPendingFriendRequestNotificationRouteIfPossible()
         }
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
             selectNewFriends(from: userIDs)
             reconcileFriendPresentations(acceptedUserIDs: userIDs)
             synchronizeOutingPlanObservation()
+            synchronizeOutingAttendanceObservation()
             openPendingNotificationRouteIfPossible()
+        }
+        .onChange(of: outingPlanService.activePlans) {
+            synchronizeOutingAttendanceObservation()
         }
         .onChange(of: notificationService.pendingRoute, initial: true) {
             openPendingNotificationRouteIfPossible()
+        }
+        .onChange(
+            of: notificationService.pendingFriendRequestRoute,
+            initial: true
+        ) {
+            openPendingFriendRequestNotificationRouteIfPossible()
         }
         .onChange(of: friendSyncService.friendLocations) {
             refreshFriendExplorationProgress()
@@ -253,6 +269,7 @@ struct ContentView: View {
             case .active:
                 locationTracker.resumeTrackingIfNeeded()
                 openPendingNotificationRouteIfPossible()
+                openPendingFriendRequestNotificationRouteIfPossible()
             case .background:
                 if locationTracker.trackingEnabled {
                     locationTracker.applyTrackingMode(.background)
@@ -265,6 +282,7 @@ struct ContentView: View {
         }
         .onDisappear {
             outingPlanService.stopObserving()
+            outingAttendanceService.stopObserving()
         }
     }
 
@@ -303,7 +321,8 @@ struct ContentView: View {
                 heatMapCellData: locationTracker.heatMapCellData,
                 heatMapRevision: locationTracker.heatMapRevision,
                 onJoinFriend: presentNavigationOptions,
-                onViewFriendProfile: presentFriendProfile
+                onViewFriendProfile: presentFriendProfile,
+                onToggleOutingAttendance: toggleOutingAttendance
             )
             .ignoresSafeArea()
 
@@ -408,6 +427,17 @@ struct ContentView: View {
             )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .alert(
+            "Participation impossible",
+            isPresented: outingAttendanceErrorIsPresented
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(
+                outingAttendanceErrorMessage
+                    ?? "La participation n’a pas pu être modifiée. Réessaie."
+            )
         }
     }
 
@@ -523,6 +553,17 @@ struct ContentView: View {
             set: { isPresented in
                 if !isPresented {
                     friendNavigationSelection = nil
+                }
+            }
+        )
+    }
+
+    private var outingAttendanceErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { outingAttendanceErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    outingAttendanceErrorMessage = nil
                 }
             }
         )
@@ -728,6 +769,32 @@ struct ContentView: View {
         ) { result, friend in
             result[friend.userID] = friend
         }
+        func attendees(for plan: OutingPlan) -> [MapOutingAttendee] {
+            outingAttendanceService.visibleAttendances(
+                ownerID: plan.ownerID,
+                publicationIDValue: plan.publicationIDValue
+            )
+            .filter {
+                plan.ownerID != currentUserID
+                    || acceptedFriendUserIDs.contains($0.participantID)
+            }
+            .map { attendance in
+                MapOutingAttendee(
+                    userID: attendance.participantID,
+                    displayName: attendance.displayName,
+                    avatarID: attendance.avatarID
+                )
+            }
+            .sorted { lhs, rhs in
+                let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
+                    rhs.displayName
+                )
+                if comparison != .orderedSame {
+                    return comparison == .orderedAscending
+                }
+                return lhs.userID < rhs.userID
+            }
+        }
 
         return outingPlanService.activePlans.reduce(
             into: [String: MapOutingPlan]()
@@ -740,7 +807,10 @@ struct ContentView: View {
                     profileColorHex:
                         ProfileColor.normalizedHex(profileColorHex)
                         ?? ProfileColor.generatedHex(seed: ownerID),
-                    isCurrentUser: true
+                    isCurrentUser: true,
+                    attendees: attendees(for: plan),
+                    isCurrentUserAttending: false,
+                    isAttendanceUpdating: false
                 )
                 return
             }
@@ -754,7 +824,14 @@ struct ContentView: View {
                 profileColorHex:
                     ProfileColor.normalizedHex(friend.profileColorHex)
                     ?? ProfileColor.generatedHex(seed: ownerID),
-                isCurrentUser: false
+                isCurrentUser: false,
+                attendees: attendees(for: plan),
+                isCurrentUserAttending: outingAttendanceService.isAttending(
+                    ownerID: ownerID,
+                    publicationIDValue: plan.publicationIDValue
+                ),
+                isAttendanceUpdating:
+                    outingAttendanceService.updatingOwnerIDs.contains(ownerID)
             )
         }
     }
@@ -767,6 +844,45 @@ struct ContentView: View {
         outingPlanService.observePlans(
             forAcceptedFriendUserIDs: acceptedFriendUserIDs
         )
+    }
+
+    private func synchronizeOutingAttendanceObservation() {
+        guard friendSyncService.isProfileReady else {
+            outingAttendanceService.stopObserving()
+            return
+        }
+        outingAttendanceService.observe(
+            plans: outingPlanService.activePlans,
+            acceptedFriendUserIDs: acceptedFriendUserIDs
+        )
+    }
+
+    private func toggleOutingAttendance(for ownerID: String) {
+        guard acceptedFriendUserIDs.contains(ownerID),
+              let plan = outingPlanService.activePlans[ownerID],
+              plan.isActive() else {
+            outingAttendanceErrorMessage = "Cette sortie n’est plus disponible."
+            return
+        }
+
+        let shouldAttend = !outingAttendanceService.isAttending(
+            ownerID: ownerID,
+            publicationIDValue: plan.publicationIDValue
+        )
+        Task {
+            do {
+                try await outingAttendanceService.setAttending(
+                    shouldAttend,
+                    plan: plan
+                )
+            } catch let error as OutingAttendanceServiceError {
+                outingAttendanceErrorMessage = error.errorDescription
+                    ?? "La participation n’a pas pu être modifiée. Réessaie."
+            } catch {
+                outingAttendanceErrorMessage =
+                    "La participation n’a pas pu être modifiée. Réessaie."
+            }
+        }
     }
 
     private func openPendingNotificationRouteIfPossible() {
@@ -785,7 +901,9 @@ struct ContentView: View {
                 // The direct Firestore read proves current authorization. Wait
                 // for the local friendship presentation before asking MapKit
                 // to select the corresponding annotation.
-                guard acceptedFriendUserIDs.contains(route.ownerID) else {
+                guard let currentUserID = FirebaseService.shared.currentUserId,
+                      route.ownerID == currentUserID
+                        || acceptedFriendUserIDs.contains(route.ownerID) else {
                     return
                 }
 
@@ -799,6 +917,16 @@ struct ContentView: View {
                 // the active scene retries the server-side authorization read.
             }
         }
+    }
+
+    private func openPendingFriendRequestNotificationRouteIfPossible() {
+        guard friendSyncService.isProfileReady,
+              let route = notificationService.pendingFriendRequestRoute else {
+            return
+        }
+
+        selectedTab = .friends
+        notificationService.consume(route)
     }
 
     private func refreshFriendExplorationProgress() {
@@ -1424,7 +1552,7 @@ private struct ProfileView: View {
 
                 Section {
                     Toggle(
-                        "Sorties de mes amis",
+                        "Activité de mes amis",
                         isOn: notificationsBinding
                     )
 
@@ -1453,7 +1581,7 @@ private struct ProfileView: View {
                     Text("Notifications")
                 } footer: {
                     Text(
-                        "Active-les pour recevoir les nouvelles sorties de tes amis acceptés. Wander n’affiche jamais leur adresse ni leurs coordonnées dans une notification."
+                        "Active-les pour recevoir les demandes d’amis, les nouvelles sorties et les participations de tes amis acceptés. Wander n’affiche jamais leur adresse ni leurs coordonnées dans une notification."
                     )
                 }
 

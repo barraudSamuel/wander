@@ -396,6 +396,76 @@ service cloud.firestore {
         && isValidTimeZoneIdentifier(data.timeZoneIdentifier);
     }
 
+    function hasExactAttendanceFields(data) {
+      return data.keys().hasAll([
+          'participantId',
+          'publicationId',
+          'displayName',
+          'avatarID',
+          'joinedAt',
+          'expiresAt'
+        ])
+        && data.keys().hasOnly([
+          'participantId',
+          'publicationId',
+          'displayName',
+          'avatarID',
+          'joinedAt',
+          'expiresAt'
+        ]);
+    }
+
+    function attendanceIdentityIsValid(data, attendanceId) {
+      return hasExactAttendanceFields(data)
+        && isValidUid(data.participantId)
+        && isValidPublicationId(data.publicationId)
+        && isValidDisplayName(data.displayName)
+        && isNormalizedPlanText(data.displayName)
+        && isValidAvatarID(data.avatarID)
+        && attendanceId
+          == data.publicationId + '__' + data.participantId
+        && data.joinedAt is timestamp
+        && data.expiresAt is timestamp
+        && data.joinedAt < data.expiresAt;
+    }
+
+    function isValidAttendanceCreate(data, ownerId, attendanceId) {
+      let planPath = /databases/$(database)/documents/plans/$(ownerId);
+      let plan = get(planPath);
+      let profilePath =
+        /databases/$(database)/documents/users/$(data.participantId);
+      let profile = get(profilePath);
+
+      return attendanceIdentityIsValid(data, attendanceId)
+        && exists(planPath)
+        && exists(profilePath)
+        && profile.data.displayName == data.displayName
+        && profile.data.avatarID == data.avatarID
+        && plan.data.ownerId == ownerId
+        && plan.data.publicationId == data.publicationId
+        && plan.data.expiresAt is timestamp
+        && plan.data.expiresAt > request.time
+        && data.expiresAt == plan.data.expiresAt
+        && data.joinedAt == request.time;
+    }
+
+    function requesterIsCurrentPlanParticipant(ownerId) {
+      let planPath = /databases/$(database)/documents/plans/$(ownerId);
+      let plan = get(planPath);
+      let attendanceId = plan.data.publicationId + '__' + request.auth.uid;
+      let attendancePath =
+        /databases/$(database)/documents/plans/$(ownerId)/attendees/$(attendanceId);
+
+      return request.auth.uid != ownerId
+        && exists(planPath)
+        && plan.data.ownerId == ownerId
+        && isValidPublicationId(plan.data.publicationId)
+        && plan.data.expiresAt is timestamp
+        && plan.data.expiresAt > request.time
+        && usersAreLinked(request.auth.uid, ownerId, ['accepted'])
+        && exists(attendancePath);
+    }
+
     function isValidDeviceId(deviceId) {
       return deviceId is string
         && deviceId.matches(
@@ -663,6 +733,60 @@ service cloud.firestore {
 
       allow delete: if isSignedIn()
         && request.auth.uid == uid;
+
+      match /attendees/{attendanceId} {
+        allow get: if isSignedIn()
+          && attendanceIdentityIsValid(resource.data, attendanceId)
+          && (
+            request.auth.uid == uid
+            || request.auth.uid == resource.data.participantId
+          );
+
+        allow list: if isSignedIn()
+          && (
+            request.auth.uid == uid
+            || (
+              requesterIsCurrentPlanParticipant(uid)
+              && resource.data.publicationId
+                == get(
+                  /databases/$(database)/documents/plans/$(uid)
+                ).data.publicationId
+            )
+          );
+
+        allow create: if isSignedIn()
+          && request.auth.uid != uid
+          && request.auth.uid == request.resource.data.participantId
+          && !accountDeletionIsPending(uid)
+          && !accountDeletionIsPending(request.auth.uid)
+          && usersAreLinked(
+            request.auth.uid,
+            uid,
+            ['accepted']
+          )
+          && isValidAttendanceCreate(
+            request.resource.data,
+            uid,
+            attendanceId
+          );
+
+        allow update: if false;
+
+        allow delete: if isSignedIn()
+          && attendanceIdentityIsValid(resource.data, attendanceId)
+          && (
+            request.auth.uid == uid
+            || request.auth.uid == resource.data.participantId
+          );
+      }
+    }
+
+    // Allows account cleanup to find only attendance documents owned by the
+    // authenticated participant. Query constraints must prove that every
+    // possible result has participantId equal to the current UID.
+    match /{path=**}/attendees/{attendanceId} {
+      allow list: if isSignedIn()
+        && request.auth.uid == resource.data.participantId;
     }
 
     // Any collection or subcollection not explicitly listed above is private.
