@@ -55,6 +55,7 @@ struct ContentView: View {
     @StateObject private var notificationService = NotificationService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage("profile.displayName") private var displayName = ""
     @AppStorage(ProfileAvatar.storageKey) private var avatarID = ""
     @AppStorage(ProfileColor.storageKey) private var profileColorHex = ""
@@ -68,6 +69,7 @@ struct ContentView: View {
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
     @State private var centerOnOutingPlanOwnerID: String?
+    @State private var selectedOutingPlanOwnerID: String?
     @State private var heatMapEnabled = false
     @State private var selectedFriendExplorationUserIDs: Set<String> = []
     @State private var knownFriendUserIDs: Set<String> = []
@@ -228,10 +230,12 @@ struct ContentView: View {
             reconcileFriendPresentations(acceptedUserIDs: userIDs)
             synchronizeOutingPlanObservation()
             synchronizeOutingAttendanceObservation()
+            reconcileSelectedOutingPlan()
             openPendingNotificationRouteIfPossible()
         }
         .onChange(of: outingPlanService.activePlans) {
             synchronizeOutingAttendanceObservation()
+            reconcileSelectedOutingPlan()
         }
         .onChange(of: notificationService.pendingRoute, initial: true) {
             openPendingNotificationRouteIfPossible()
@@ -295,6 +299,10 @@ struct ContentView: View {
         let visibleFriendExplorations = allFriendExplorations.filter {
             selectedFriendExplorationUserIDs.contains($0.key)
         }
+        let outingPlans = mapOutingPlans
+        let selectedOutingPlan = selectedOutingPlanOwnerID.flatMap {
+            outingPlans[$0]
+        }
 
         return ZStack(alignment: .topTrailing) {
             MapWithFogView(
@@ -304,7 +312,7 @@ struct ContentView: View {
                 friendLocations: friendSyncService.friendLocations,
                 freshFriendLocationUserIDs:
                     friendSyncService.freshFriendLocationUserIDs,
-                outingPlans: mapOutingPlans,
+                outingPlans: outingPlans,
                 friendExplorations: visibleFriendExplorations,
                 allFriendExplorations: allFriendExplorations,
                 userExplorationProgress: cityProgress,
@@ -317,30 +325,68 @@ struct ContentView: View {
                 resetMapOrientation: $resetMapOrientation,
                 centerOnFriendUserID: $centerOnFriendUserID,
                 centerOnOutingPlanOwnerID: $centerOnOutingPlanOwnerID,
+                selectedOutingPlanOwnerID: selectedOutingPlanOwnerID,
                 showsHeatMap: heatMapEnabled,
                 heatMapCellData: locationTracker.heatMapCellData,
                 heatMapRevision: locationTracker.heatMapRevision,
                 onJoinFriend: presentNavigationOptions,
                 onViewFriendProfile: presentFriendProfile,
-                onToggleOutingAttendance: toggleOutingAttendance
+                onSelectOutingPlan: { ownerID in
+                    selectedOutingPlanOwnerID = ownerID
+                },
+                onDeselectOutingPlan: { ownerID in
+                    guard selectedOutingPlanOwnerID == ownerID else { return }
+                    selectedOutingPlanOwnerID = nil
+                }
             )
             .ignoresSafeArea()
 
             ownExplorationStatusOverlay
 
-            Button {
-                filterSheetVisible = true
-            } label: {
-                Image(systemName: "line.3.horizontal.decrease")
+            if let selectedOutingPlan {
+                OutingPlanDetailCardView(
+                    outing: selectedOutingPlan,
+                    onDismiss: {
+                        selectedOutingPlanOwnerID = nil
+                    },
+                    onToggleAttendance: {
+                        toggleOutingAttendance(
+                            for: selectedOutingPlan.plan.ownerID
+                        )
+                    }
+                )
+                .frame(maxWidth: 600)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .transition(
+                    accessibilityReduceMotion
+                        ? .identity
+                        : .move(edge: .top).combined(with: .opacity)
+                )
+                .zIndex(1)
+            } else {
+                Button {
+                    filterSheetVisible = true
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .accessibilityLabel("Filtres de la carte")
+                .accessibilityHint("Choisir les informations visibles sur la carte")
+                .padding(.top, 8)
+                .padding(.trailing, 16)
+                .transition(.opacity)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .controlSize(.large)
-            .accessibilityLabel("Filtres de la carte")
-            .accessibilityHint("Choisir les informations visibles sur la carte")
-            .padding(.top, 8)
-            .padding(.trailing, 16)
         }
+        .animation(
+            accessibilityReduceMotion
+                ? nil
+                : .spring(response: 0.42, dampingFraction: 0.86),
+            value: selectedOutingPlanOwnerID
+        )
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(alignment: .bottom) {
                 Button {
@@ -834,6 +880,14 @@ struct ContentView: View {
                     outingAttendanceService.updatingOwnerIDs.contains(ownerID)
             )
         }
+    }
+
+    private func reconcileSelectedOutingPlan() {
+        guard let selectedOutingPlanOwnerID,
+              mapOutingPlans[selectedOutingPlanOwnerID] == nil else {
+            return
+        }
+        self.selectedOutingPlanOwnerID = nil
     }
 
     private func synchronizeOutingPlanObservation() {

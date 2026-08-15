@@ -1,12 +1,13 @@
 ---
 title: "Sorties prévues — Sprint 6 — Participation aux sorties"
-status: in_progress
+status: completed
 sprint: 6
 date: 2026-08-15
 approved_at: "2026-08-15T16:57:24+09:00"
 in_progress_at: "2026-08-15T16:57:24+09:00"
 revised_approved_at: "2026-08-15T17:43:17+09:00"
 revised_in_progress_at: "2026-08-15T17:43:17+09:00"
+completed_at: "2026-08-15T18:28:21+09:00"
 depends_on:
   - "Sprint 1 completed"
   - "Sprint 2 completed"
@@ -22,7 +23,8 @@ tags: [plan, sprint, firestore, mapkit, friends, participation, notifications]
 
 Ce sprint révisé a été approuvé explicitement par le propriétaire le
 2026-08-15 avec avatars partagés entre participants et broadcast automatique.
-Il est désormais `in_progress`. Toute opération distante,
+Le propriétaire a rapporté avoir testé le parcours et a explicitement demandé
+sa clôture le 2026-08-15. Le sprint est désormais `completed`. Toute opération distante,
 notamment le déploiement des règles ou la création d'une politique TTL, exige
 une autorisation distincte au moment concerné.
 
@@ -208,6 +210,8 @@ doivent pas nécessiter d'entrée manuelle dans `project.pbxproj`.
 - [x] Les tests unitaires Functions couvrent les destinataires, le contenu, le
       payload minimal et l'identité de dispatch d'une arrivée.
 - [x] L'audit npm du backend ne signale aucune vulnérabilité.
+- [x] Le propriétaire a rapporté un test manuel réussi et a explicitement
+      accepté la clôture du sprint le 2026-08-15.
 - [ ] Le remplacement, l'annulation, l'expiration et la révocation retirent
       immédiatement l'état visible.
 - [ ] Le parcours réel à trois comptes/appareils réussit, en utilisant seulement
@@ -245,9 +249,11 @@ doivent pas nécessiter d'entrée manuelle dans `project.pbxproj`.
   créerait des écritures concurrentes. L'instantané validé dans la participation
   garde la lecture locale au bon périmètre.
 - Least certain: la disposition réelle de la callout avec quatre avatars et le
-  parcours bidirectionnel nécessitent deux comptes après déploiement des règles.
-  Le lancement signé déconnecté ne permet pas de fabriquer cet état de façon
-  représentative.
+  détail exact de la matrice manuelle n'a pas été fourni à Codex ; la validation
+  du parcours a été rapportée directement par le propriétaire.
+- Carried review debt: les findings de fiabilité FCM, de nettoyage après
+  révocation et de course avec le profil sont conservés dans `todos/011`,
+  `todos/012` et `todos/013` sans être présentés comme corrigés.
 
 ## Local validation record
 
@@ -266,8 +272,11 @@ Validations exécutées le 2026-08-15 avant toute mutation distante :
 - `git diff --check` — succès ;
 - validation JSON de `firebase.json` et `firebase-tests/package.json` — succès ;
 - revue sécurité, confidentialité, expiration, changement de compte et
-  accessibilité statique terminée sans finding restant à créer dans `todos/`.
+  accessibilité statique terminée ; trois findings ouverts sont consignés dans
+  `todos/011`, `todos/012` et `todos/013`.
 
-Les règles et `notifyOutingParticipantsOfAttendance` ne sont pas déployées, la
-politique TTL `attendees.expiresAt` n'est pas créée et la validation réelle à
-trois comptes/appareils reste donc en attente.
+Codex n'a pas vérifié l'état distant des règles, de
+`notifyOutingParticipantsOfAttendance` ni de la politique TTL
+`attendees.expiresAt`. Le propriétaire a rapporté le test manuel réussi et a
+explicitement demandé la clôture ; les findings ouverts restent documentés et
+ne sont pas présentés comme corrigés.

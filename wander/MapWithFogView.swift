@@ -107,34 +107,12 @@ final class FriendLocationAnnotation: MKPointAnnotation {
 
 fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
     var ownerID = ""
-    var displayName = ""
     var profileColorHex = ""
-    var plannedAt = Date()
-    var address: String?
     var isCurrentUser = false
-    var attendees: [MapOutingAttendee] = []
-    var isCurrentUserAttending = false
-    var isAttendanceUpdating = false
 }
 
 private final class OutingPlanAnnotationView: MKMarkerAnnotationView {
     static let reuseIdentifier = "OutingPlanAnnotation"
-
-    private let relationshipLabel = UILabel()
-    private let timeLabel = UILabel()
-    private let addressLabel = UILabel()
-    private let participationLabel = UILabel()
-    private let avatarStack = UIStackView()
-    private let attendanceButton = UIButton(type: .system)
-    private lazy var detailStack = UIStackView(
-        arrangedSubviews: [
-            relationshipLabel,
-            timeLabel,
-            addressLabel,
-            participationLabel,
-            avatarStack
-        ]
-    )
 
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -147,14 +125,6 @@ private final class OutingPlanAnnotationView: MKMarkerAnnotationView {
     }
 
     func configure(with annotation: OutingPlanAnnotation) {
-        let relationshipText = annotation.isCurrentUser
-            ? "Votre sortie prévue"
-            : "Sortie prévue de \(annotation.displayName)"
-        let timeText = annotation.plannedAt.formatted(
-            date: .omitted,
-            time: .shortened
-        )
-
         markerTintColor = ProfileColor.uiColor(hex: annotation.profileColorHex)
         glyphTintColor = markerForegroundColor(for: markerTintColor ?? .systemIndigo)
         glyphImage = UIImage(
@@ -164,162 +134,20 @@ private final class OutingPlanAnnotationView: MKMarkerAnnotationView {
         )
         displayPriority = annotation.isCurrentUser ? .required : .defaultHigh
 
-        relationshipLabel.text = relationshipText
-        timeLabel.text = "À \(timeText)"
-        addressLabel.text = annotation.address
-        addressLabel.isHidden = annotation.address == nil
-
-        let participationText: String
-        if annotation.isCurrentUser {
-            participationText = Self.participationSummary(
-                count: annotation.attendees.count
-            )
-        } else if annotation.isCurrentUserAttending {
-            participationText = Self.participationSummary(
-                count: annotation.attendees.count
-            ) + " · Vous participez"
-        } else {
-            participationText = "Vous ne participez pas"
-        }
-        participationLabel.text = participationText
-        configureAvatarStack(with: annotation.attendees)
-        configureAttendanceButton(with: annotation)
-
-        let accessibilityParts = [
-            annotation.title ?? "Lieu sans nom",
-            relationshipText,
-            "à \(timeText)",
-            annotation.address,
-            participationText
-        ].compactMap { $0 }
-        accessibilityLabel = accessibilityParts.joined(separator: ", ")
-        accessibilityHint = "Touchez deux fois pour afficher les détails de la sortie prévue."
+        let placeName = annotation.title ?? "Lieu sans nom"
+        accessibilityLabel = annotation.isCurrentUser
+            ? "Votre sortie prévue, \(placeName)"
+            : "Sortie prévue, \(placeName)"
+        accessibilityHint = "Touchez deux fois pour afficher la fiche de la sortie."
     }
 
     private func configureView() {
-        canShowCallout = true
+        canShowCallout = false
         animatesWhenAdded = true
         clusteringIdentifier = nil
         collisionMode = .circle
         titleVisibility = .adaptive
         subtitleVisibility = .hidden
-
-        relationshipLabel.font = .preferredFont(forTextStyle: .subheadline)
-        relationshipLabel.textColor = .secondaryLabel
-        timeLabel.font = .preferredFont(forTextStyle: .body)
-        addressLabel.font = .preferredFont(forTextStyle: .footnote)
-        addressLabel.textColor = .secondaryLabel
-        participationLabel.font = .preferredFont(forTextStyle: .footnote)
-        participationLabel.textColor = .secondaryLabel
-
-        for label in [
-            relationshipLabel,
-            timeLabel,
-            addressLabel,
-            participationLabel
-        ] {
-            label.adjustsFontForContentSizeCategory = true
-            label.numberOfLines = 0
-        }
-
-        avatarStack.axis = .horizontal
-        avatarStack.alignment = .center
-        avatarStack.spacing = 4
-        avatarStack.isAccessibilityElement = true
-
-        attendanceButton.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
-        attendanceButton.accessibilityHint = "Modifie ta participation à cette sortie"
-
-        detailStack.axis = .vertical
-        detailStack.alignment = .leading
-        detailStack.spacing = 2
-        detailStack.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
-        detailCalloutAccessoryView = detailStack
-    }
-
-    private func configureAttendanceButton(
-        with annotation: OutingPlanAnnotation
-    ) {
-        guard !annotation.isCurrentUser else {
-            rightCalloutAccessoryView = nil
-            return
-        }
-
-        var configuration = UIButton.Configuration.plain()
-        configuration.image = UIImage(
-            systemName: annotation.isCurrentUserAttending
-                ? "checkmark.circle.fill"
-                : "person.badge.plus"
-        )
-        configuration.preferredSymbolConfigurationForImage =
-            UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        configuration.contentInsets = .zero
-        configuration.showsActivityIndicator = annotation.isAttendanceUpdating
-        attendanceButton.configuration = configuration
-        attendanceButton.isEnabled = !annotation.isAttendanceUpdating
-        attendanceButton.accessibilityLabel = annotation.isCurrentUserAttending
-            ? "Je ne participe plus"
-            : "Je participe"
-        rightCalloutAccessoryView = attendanceButton
-    }
-
-    private func configureAvatarStack(
-        with attendees: [MapOutingAttendee]
-    ) {
-        for view in avatarStack.arrangedSubviews {
-            avatarStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-
-        avatarStack.isHidden = attendees.isEmpty
-        guard !attendees.isEmpty else {
-            avatarStack.accessibilityLabel = nil
-            return
-        }
-
-        for attendee in attendees.prefix(4) {
-            let imageView = UIImageView()
-            if let avatar = ProfileAvatar(rawValue: attendee.avatarID) {
-                imageView.image = UIImage(named: avatar.assetName)
-            } else {
-                imageView.image = UIImage(systemName: "person.circle.fill")
-                imageView.tintColor = .secondaryLabel
-            }
-            imageView.contentMode = .scaleAspectFill
-            imageView.backgroundColor = .secondarySystemBackground
-            imageView.clipsToBounds = true
-            imageView.layer.cornerRadius = 14
-            imageView.isAccessibilityElement = false
-            imageView.widthAnchor.constraint(equalToConstant: 28).isActive = true
-            imageView.heightAnchor.constraint(equalToConstant: 28).isActive = true
-            avatarStack.addArrangedSubview(imageView)
-        }
-
-        let hiddenCount = attendees.count - min(attendees.count, 4)
-        if hiddenCount > 0 {
-            let overflowLabel = UILabel()
-            overflowLabel.text = "+\(hiddenCount)"
-            overflowLabel.font = .preferredFont(forTextStyle: .caption1)
-            overflowLabel.textColor = .secondaryLabel
-            overflowLabel.adjustsFontForContentSizeCategory = true
-            overflowLabel.isAccessibilityElement = false
-            avatarStack.addArrangedSubview(overflowLabel)
-        }
-
-        let names = attendees.map(\.displayName)
-        avatarStack.accessibilityLabel = "Participants : "
-            + ListFormatter.localizedString(byJoining: names)
-    }
-
-    private static func participationSummary(count: Int) -> String {
-        switch count {
-        case 0:
-            "Aucun participant"
-        case 1:
-            "1 participant"
-        default:
-            "\(count) participants"
-        }
     }
 }
 
@@ -1425,6 +1253,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// When set, centers and selects the owner's active outing once.
     @Binding var centerOnOutingPlanOwnerID: String?
 
+    /// Owner of the outing whose detail card is currently visible.
+    var selectedOutingPlanOwnerID: String?
+
     var showsHeatMap = false
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
     /// Monotonic token that must change whenever heat-map values change.
@@ -1436,8 +1267,11 @@ struct MapWithFogView: UIViewRepresentable {
     /// Presents the native profile sheet for the selected friend.
     var onViewFriendProfile: (String) -> Void = { _ in }
 
-    /// Toggles the authenticated account's response to a planned outing.
-    var onToggleOutingAttendance: (String) -> Void = { _ in }
+    /// Presents the native detail card for the selected outing.
+    var onSelectOutingPlan: (String) -> Void = { _ in }
+
+    /// Hides the detail card when MapKit clears that outing's selection.
+    var onDeselectOutingPlan: (String) -> Void = { _ in }
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -1467,7 +1301,8 @@ struct MapWithFogView: UIViewRepresentable {
     func updateUIView(_ uiView: MKMapView, context: Context) {
         context.coordinator.onJoinFriend = onJoinFriend
         context.coordinator.onViewFriendProfile = onViewFriendProfile
-        context.coordinator.onToggleOutingAttendance = onToggleOutingAttendance
+        context.coordinator.onSelectOutingPlan = onSelectOutingPlan
+        context.coordinator.onDeselectOutingPlan = onDeselectOutingPlan
 
         let visibleCellIDs = visibleDiscoveredCellIDs
         let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
@@ -1497,6 +1332,7 @@ struct MapWithFogView: UIViewRepresentable {
         updateFriendAnnotations(on: uiView, context: context)
         updateUserLocationAnnotation(on: uiView, context: context)
         updateOutingPlanAnnotations(on: uiView, context: context)
+        synchronizeOutingPlanSelection(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
         // A loaded city boundary is only a temporary starting region. Always
@@ -1549,7 +1385,8 @@ struct MapWithFogView: UIViewRepresentable {
             fogColor: fogColor,
             onJoinFriend: onJoinFriend,
             onViewFriendProfile: onViewFriendProfile,
-            onToggleOutingAttendance: onToggleOutingAttendance
+            onSelectOutingPlan: onSelectOutingPlan,
+            onDeselectOutingPlan: onDeselectOutingPlan
         )
     }
 
@@ -1718,11 +1555,6 @@ struct MapWithFogView: UIViewRepresentable {
         for ownerID in activeOutingPlans.keys.sorted() {
             guard let presentation = activeOutingPlans[ownerID] else { continue }
             let plan = presentation.plan
-            let displayName = presentation.displayName
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedDisplayName = displayName.isEmpty
-                ? plan.displayName
-                : displayName
 
             let annotation: OutingPlanAnnotation
             let isNewAnnotation: Bool
@@ -1745,16 +1577,8 @@ struct MapWithFogView: UIViewRepresentable {
 
             annotation.title = plan.placeName
             annotation.subtitle = nil
-            annotation.displayName = resolvedDisplayName
             annotation.profileColorHex = presentation.profileColorHex
-            annotation.plannedAt = plan.plannedAt
-            annotation.address = plan.address
             annotation.isCurrentUser = presentation.isCurrentUser
-            annotation.attendees = presentation.attendees
-            annotation.isCurrentUserAttending =
-                presentation.isCurrentUserAttending
-            annotation.isAttendanceUpdating =
-                presentation.isAttendanceUpdating
 
             if isNewAnnotation {
                 mapView.addAnnotation(annotation)
@@ -1831,6 +1655,30 @@ struct MapWithFogView: UIViewRepresentable {
         camera.heading = 0
         camera.pitch = 0
         mapView.setCamera(camera, animated: true)
+    }
+
+    private func synchronizeOutingPlanSelection(
+        on mapView: MKMapView,
+        context: Context
+    ) {
+        for annotation in mapView.selectedAnnotations {
+            guard let outingAnnotation = annotation as? OutingPlanAnnotation,
+                  outingAnnotation.ownerID != selectedOutingPlanOwnerID else {
+                continue
+            }
+            mapView.deselectAnnotation(outingAnnotation, animated: true)
+        }
+
+        guard let selectedOutingPlanOwnerID,
+              let annotation = context.coordinator
+                .outingPlanAnnotations[selectedOutingPlanOwnerID],
+              !mapView.selectedAnnotations.contains(where: {
+                  ($0 as AnyObject) === annotation
+              }) else {
+            return
+        }
+
+        mapView.selectAnnotation(annotation, animated: true)
     }
 
     private func centerMap(
@@ -2071,18 +1919,21 @@ struct MapWithFogView: UIViewRepresentable {
         fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
         var onJoinFriend: (String) -> Void
         var onViewFriendProfile: (String) -> Void
-        var onToggleOutingAttendance: (String) -> Void
+        var onSelectOutingPlan: (String) -> Void
+        var onDeselectOutingPlan: (String) -> Void
 
         init(
             fogColor: UIColor,
             onJoinFriend: @escaping (String) -> Void,
             onViewFriendProfile: @escaping (String) -> Void,
-            onToggleOutingAttendance: @escaping (String) -> Void
+            onSelectOutingPlan: @escaping (String) -> Void,
+            onDeselectOutingPlan: @escaping (String) -> Void
         ) {
             self.fogColor = fogColor
             self.onJoinFriend = onJoinFriend
             self.onViewFriendProfile = onViewFriendProfile
-            self.onToggleOutingAttendance = onToggleOutingAttendance
+            self.onSelectOutingPlan = onSelectOutingPlan
+            self.onDeselectOutingPlan = onDeselectOutingPlan
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -2200,6 +2051,14 @@ struct MapWithFogView: UIViewRepresentable {
                 mapView.setUserTrackingMode(.none, animated: false)
             }
             mapView.setCenter(annotation.coordinate, animated: true)
+            onSelectOutingPlan(annotation.ownerID)
+        }
+
+        func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
+            guard let annotation = view.annotation as? OutingPlanAnnotation else {
+                return
+            }
+            onDeselectOutingPlan(annotation.ownerID)
         }
 
         func mapView(
@@ -2207,14 +2066,6 @@ struct MapWithFogView: UIViewRepresentable {
             annotationView view: MKAnnotationView,
             calloutAccessoryControlTapped control: UIControl
         ) {
-            if control === view.rightCalloutAccessoryView,
-               let annotation = view.annotation as? OutingPlanAnnotation,
-               !annotation.isCurrentUser,
-               !annotation.isAttendanceUpdating {
-                onToggleOutingAttendance(annotation.ownerID)
-                return
-            }
-
             guard control === view.rightCalloutAccessoryView,
                   let annotationView = view as? UserLocationAnnotationView else {
                 return
