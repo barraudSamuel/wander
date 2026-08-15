@@ -10,6 +10,9 @@ import SwiftData
 
 @main
 struct wanderApp: App {
+    @UIApplicationDelegateAdaptor(WanderAppDelegate.self)
+    private var appDelegate
+
     let container: ModelContainer
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
     @StateObject private var authenticationService = FirebaseService.shared

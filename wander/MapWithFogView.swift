@@ -1282,6 +1282,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// When set, centers the map on the selected friend once.
     @Binding var centerOnFriendUserID: String?
 
+    /// When set, centers and selects the owner's active outing once.
+    @Binding var centerOnOutingPlanOwnerID: String?
+
     var showsHeatMap = false
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
     /// Monotonic token that must change whenever heat-map values change.
@@ -1383,6 +1386,15 @@ struct MapWithFogView: UIViewRepresentable {
                 onFriend: friendUserID,
                 on: uiView,
                 friendLocations: friendLocations,
+                context: context
+            )
+        }
+
+        if let outingOwnerID = centerOnOutingPlanOwnerID {
+            DispatchQueue.main.async { centerOnOutingPlanOwnerID = nil }
+            centerMap(
+                onOutingPlanOwnedBy: outingOwnerID,
+                on: uiView,
                 context: context
             )
         }
@@ -1690,6 +1702,25 @@ struct MapWithFogView: UIViewRepresentable {
         if let overlay = friendScratchOverlay(for: userID, context: context) {
             setVisibleRegion(for: overlay, on: mapView)
         }
+    }
+
+    private func centerMap(
+        onOutingPlanOwnedBy ownerID: String,
+        on mapView: MKMapView,
+        context: Context
+    ) {
+        guard let annotation = context.coordinator
+            .outingPlanAnnotations[ownerID] else {
+            return
+        }
+
+        mapView.setUserTrackingMode(.none, animated: false)
+        setFocusedRegion(
+            on: mapView,
+            center: annotation.coordinate,
+            animated: true
+        )
+        mapView.selectAnnotation(annotation, animated: true)
     }
 
     private func friendScratchOverlay(

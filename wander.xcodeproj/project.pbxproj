@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		3758ECE42FEBBC270082CF8C /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE32FEBBC270082CF8C /* FirebaseFirestore */; };
 		3758ECE62FEBBC300082CF8C /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE52FEBBC300082CF8C /* FirebaseAuth */; };
+		37A4A1013000000000000001 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 37A4A1003000000000000001 /* FirebaseMessaging */; };
 		37F8D0E92FE2AAB700AA042A /* H3 in Frameworks */ = {isa = PBXBuildFile; productRef = 37F8D0E82FE2AAB700AA042A /* H3 */; };
 /* End PBXBuildFile section */
 
@@ -45,6 +46,7 @@
 				37F8D0E92FE2AAB700AA042A /* H3 in Frameworks */,
 				3758ECE62FEBBC300082CF8C /* FirebaseAuth in Frameworks */,
 				3758ECE42FEBBC270082CF8C /* FirebaseFirestore in Frameworks */,
+				37A4A1013000000000000001 /* FirebaseMessaging in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -98,6 +100,7 @@
 				37F8D0E82FE2AAB700AA042A /* H3 */,
 				3758ECE32FEBBC270082CF8C /* FirebaseFirestore */,
 				3758ECE52FEBBC300082CF8C /* FirebaseAuth */,
+				37A4A1003000000000000001 /* FirebaseMessaging */,
 			);
 			productName = wander;
 			productReference = 37F8D0D52FE28F0200AA042A /* wander.app */;
@@ -116,6 +119,12 @@
 					37F8D0D42FE28F0200AA042A = {
 						CreatedOnToolsVersion = 26.3;
 						SystemCapabilities = {
+							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+							com.apple.Push = {
+								enabled = 1;
+							};
 							com.apple.SignInWithApple = {
 								enabled = 1;
 							};
@@ -295,7 +304,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -329,7 +338,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -408,6 +417,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 3758ECDD2FEBB9630082CF8C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseAuth;
+		};
+		37A4A1003000000000000001 /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3758ECDD2FEBB9630082CF8C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 		37F8D0E82FE2AAB700AA042A /* H3 */ = {
 			isa = XCSwiftPackageProductDependency;

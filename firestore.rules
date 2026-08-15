@@ -396,6 +396,25 @@ service cloud.firestore {
         && isValidTimeZoneIdentifier(data.timeZoneIdentifier);
     }
 
+    function isValidDeviceId(deviceId) {
+      return deviceId is string
+        && deviceId.matches(
+          '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+        );
+    }
+
+    function isValidDevice(data, deviceId) {
+      return isValidDeviceId(deviceId)
+        && data.keys().hasAll(['token', 'platform', 'updatedAt'])
+        && data.keys().hasOnly(['token', 'platform', 'updatedAt'])
+        && data.token is string
+        && data.token.size() >= 20
+        && data.token.size() <= 4096
+        && data.platform == 'ios'
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
     match /users/{uid} {
       allow get: if isSignedIn()
         && (
@@ -471,6 +490,17 @@ service cloud.firestore {
         && !existsAfter(
           /databases/$(database)/documents/friendCodes/$(resource.data.friendCode)
         );
+
+      match /devices/{deviceId} {
+        allow get, list: if isSignedIn() && request.auth.uid == uid;
+
+        allow create, update: if isSignedIn()
+          && request.auth.uid == uid
+          && !accountDeletionIsPending(uid)
+          && isValidDevice(request.resource.data, deviceId);
+
+        allow delete: if isSignedIn() && request.auth.uid == uid;
+      }
     }
 
     match /friendCodes/{code} {

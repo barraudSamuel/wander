@@ -759,6 +759,9 @@ final class FriendSyncService: ObservableObject {
         suspendSynchronizationForAccountDeletion()
 
         try await deleteDocumentsInBatches(
+            from: userReference.collection("devices")
+        )
+        try await deleteDocumentsInBatches(
             from: explorationCellsCollection(for: userID)
         )
         try await deleteDocumentsInBatches(

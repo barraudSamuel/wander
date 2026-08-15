@@ -1,6 +1,6 @@
 ---
 title: "Sorties prévues — Sprint 4 — Notifications privées"
-status: proposed
+status: in_progress
 sprint: 4
 date: 2026-08-10
 completed_at:
@@ -15,9 +15,9 @@ tags: [plan, sprint, fcm, apns, functions]
 
 ## Status
 
-Ce sprint est `proposed`. Il implique de nouvelles capacités Apple et un
-backend déployable ; il exige donc une approbation indépendante après la
-validation complète des trois premiers sprints.
+Ce sprint est `in_progress`. Il implique de nouvelles capacités Apple et un
+backend déployable. Son implémentation a été approuvée après la validation
+complète des trois premiers sprints.
 
 ## Outcome
 
@@ -59,7 +59,8 @@ le routage ; les données de destination sont relues depuis Firestore.
 ## Affected files
 
 - `wander/NotificationService.swift` — permission, token et routage.
-- `wander/wanderApp.swift` — delegate d'application.
+- `wander/WanderAppDelegate.swift` et `wander/wanderApp.swift` — delegates
+  APNs/FCM et cycle de vie de l'application.
 - `wander/ContentView.swift` — ouverture ciblée et réglage utilisateur.
 - `wander/OutingPlanComposerView.swift` — demande contextuelle éventuelle.
 - `wander/FriendSyncService.swift` — nettoyage du token.
@@ -67,19 +68,22 @@ le routage ; les données de destination sont relues depuis Firestore.
 - `wander.xcodeproj/project.pbxproj` — Firebase Messaging et Push.
 - `firestore.rules` — sous-collection privée des appareils.
 - `firebase.json` et `functions/` — fonction et tests serveur.
+- `firebase-tests/tests/device-tokens.rules.test.mjs` — confidentialité des
+  appareils.
+- `docs/notifications-apns-configuration.md` — configuration et validation.
 
 ## Implementation checklist
 
-- [ ] Ajouter Firebase Messaging sans autre bibliothèque UI.
-- [ ] Enregistrer le token seulement pour le compte authentifié courant.
-- [ ] Ne pas bloquer le partage si la permission est refusée.
-- [ ] Protéger la sous-collection des appareils par des règles strictes.
-- [ ] Cibler les destinataires à partir des amitiés acceptées côté Admin SDK.
-- [ ] Ajouter une clé idempotente avant tout envoi FCM.
-- [ ] Exclure adresse et coordonnées du message.
-- [ ] Gérer le toucher après relecture autorisée de la sortie.
-- [ ] Nettoyer les enregistrements d'appareil obsolètes et à la déconnexion.
-- [ ] Ajouter les tests serveur et documenter la configuration APNs requise.
+- [x] Ajouter Firebase Messaging sans autre bibliothèque UI.
+- [x] Enregistrer le token seulement pour le compte authentifié courant.
+- [x] Ne pas bloquer le partage si la permission est refusée.
+- [x] Protéger la sous-collection des appareils par des règles strictes.
+- [x] Cibler les destinataires à partir des amitiés acceptées côté Admin SDK.
+- [x] Ajouter une clé idempotente avant tout envoi FCM.
+- [x] Exclure adresse et coordonnées du message.
+- [x] Gérer le toucher après relecture autorisée de la sortie.
+- [x] Nettoyer les enregistrements d'appareil obsolètes et à la déconnexion.
+- [x] Ajouter les tests serveur et documenter la configuration APNs requise.
 
 ## Risks
 
@@ -93,8 +97,8 @@ le routage ; les données de destination sont relues depuis Firestore.
 ## Validation
 
 - [ ] Build iOS réussi avec les capacités Push pour Debug et Distribution.
-- [ ] Tests TypeScript et audit des dépendances réussis.
-- [ ] Règles des tokens testées pour propriétaire et comptes étrangers.
+- [x] Tests TypeScript et audit des dépendances réussis.
+- [x] Règles des tokens testées pour propriétaire et comptes étrangers.
 - [ ] Push reçu sur appareil physique après publication d'un ami accepté.
 - [ ] Aucun push pour demande en attente, non-ami ou ancien ami.
 - [ ] Une seule notification reçue par publication et par appareil.
@@ -106,3 +110,17 @@ le routage ; les données de destination sont relues depuis Firestore.
 Ne marquer `completed` qu'après un test sur appareil physique et consignation de
 la configuration APNs utilisée. Le déploiement de production appartient au
 Sprint 5 et demande une approbation séparée.
+
+Validation locale du 2026-08-14 :
+
+- builds Debug et Release réussis pour le simulateur iOS ;
+- analyse statique Xcode réussie ;
+- lancement réussi sur l'iPhone 17 Simulator existant, sans crash FCM ;
+- 6 tests TypeScript réussis et audit npm à 0 vulnérabilité ;
+- 31 tests de règles Firestore réussis, aucun échec ;
+- `git diff --check` et validation des fichiers plist réussis ;
+- revue statique terminée sans défaut de code bloquant ;
+- approche idempotente consignée dans
+  `../solutions/2026-08-14-notifications-fcm-idempotentes.md` ;
+- validation APNs réelle encore bloquée par les prérequis externes consignés
+  dans `../../todos/010-blocked-p1-valider-notifications-apns-appareil.md`.

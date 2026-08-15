@@ -126,6 +126,49 @@ final class OutingPlanService: ObservableObject {
         return try OutingPlan(document: document)
     }
 
+    /// Re-reads a notification destination under the current Firestore rules.
+    /// The payload alone is never trusted to reveal or center a destination.
+    func refreshPlanFromNotification(
+        ownerID: String,
+        publicationID: UUID
+    ) async throws -> OutingPlan {
+        _ = try authenticatedUserID()
+        guard !ownerID.isEmpty,
+              ownerID.count <= 128,
+              !ownerID.contains("__") else {
+            throw OutingPlanServiceError.notificationPlanUnavailable
+        }
+
+        let document: DocumentSnapshot
+        do {
+            document = try await planReference(for: ownerID)
+                .getDocument(source: .server)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == FirestoreErrorDomain,
+               nsError.code == FirestoreErrorCode.permissionDenied.rawValue
+                || nsError.code == FirestoreErrorCode.notFound.rawValue
+                || nsError.code == FirestoreErrorCode.unauthenticated.rawValue {
+                throw OutingPlanServiceError.notificationPlanUnavailable
+            }
+            throw error
+        }
+        guard document.exists else {
+            throw OutingPlanServiceError.notificationPlanUnavailable
+        }
+
+        let plan = try OutingPlan(document: document)
+        guard plan.ownerID == ownerID,
+              plan.publicationID == publicationID,
+              plan.isActive() else {
+            throw OutingPlanServiceError.notificationPlanUnavailable
+        }
+
+        activePlans[ownerID] = plan
+        removeExpiredPlansAndScheduleTimer()
+        return plan
+    }
+
     func cancelCurrentPlan() async throws {
         let userID = try authenticatedUserID()
         try await planReference(for: userID).delete()
@@ -243,6 +286,7 @@ final class OutingPlanService: ObservableObject {
 enum OutingPlanServiceError: LocalizedError, Equatable {
     case noAuthenticatedUser
     case missingPublishedPlan
+    case notificationPlanUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -250,6 +294,8 @@ enum OutingPlanServiceError: LocalizedError, Equatable {
             return "Connecte-toi pour gérer une sortie."
         case .missingPublishedPlan:
             return "La sortie publiée n’a pas pu être relue. Réessaie."
+        case .notificationPlanUnavailable:
+            return "Cette sortie n’est plus disponible."
         }
     }
 }

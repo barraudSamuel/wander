@@ -50,6 +50,7 @@ struct ContentView: View {
     @StateObject private var locationTracker = LocationTracker()
     @StateObject private var friendSyncService = FriendSyncService.shared
     @StateObject private var outingPlanService = OutingPlanService.shared
+    @StateObject private var notificationService = NotificationService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @AppStorage("profile.displayName") private var displayName = ""
@@ -64,6 +65,7 @@ struct ContentView: View {
     @State private var centerOnUser = false
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
+    @State private var centerOnOutingPlanOwnerID: String?
     @State private var heatMapEnabled = false
     @State private var selectedFriendExplorationUserIDs: Set<String> = []
     @State private var knownFriendUserIDs: Set<String> = []
@@ -213,11 +215,16 @@ struct ContentView: View {
             if !locationTracker.trackingEnabled {
                 friendSyncService.stopSharingLocation()
             }
+            openPendingNotificationRouteIfPossible()
         }
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
             selectNewFriends(from: userIDs)
             reconcileFriendPresentations(acceptedUserIDs: userIDs)
             synchronizeOutingPlanObservation()
+            openPendingNotificationRouteIfPossible()
+        }
+        .onChange(of: notificationService.pendingRoute, initial: true) {
+            openPendingNotificationRouteIfPossible()
         }
         .onChange(of: friendSyncService.friendLocations) {
             refreshFriendExplorationProgress()
@@ -245,6 +252,7 @@ struct ContentView: View {
             switch newPhase {
             case .active:
                 locationTracker.resumeTrackingIfNeeded()
+                openPendingNotificationRouteIfPossible()
             case .background:
                 if locationTracker.trackingEnabled {
                     locationTracker.applyTrackingMode(.background)
@@ -290,6 +298,7 @@ struct ContentView: View {
                 centerOnUser: $centerOnUser,
                 resetMapOrientation: $resetMapOrientation,
                 centerOnFriendUserID: $centerOnFriendUserID,
+                centerOnOutingPlanOwnerID: $centerOnOutingPlanOwnerID,
                 showsHeatMap: heatMapEnabled,
                 heatMapCellData: locationTracker.heatMapCellData,
                 heatMapRevision: locationTracker.heatMapRevision,
@@ -758,6 +767,38 @@ struct ContentView: View {
         outingPlanService.observePlans(
             forAcceptedFriendUserIDs: acceptedFriendUserIDs
         )
+    }
+
+    private func openPendingNotificationRouteIfPossible() {
+        guard friendSyncService.isProfileReady,
+              let route = notificationService.pendingRoute else {
+            return
+        }
+
+        Task {
+            do {
+                _ = try await outingPlanService.refreshPlanFromNotification(
+                    ownerID: route.ownerID,
+                    publicationID: route.publicationID
+                )
+
+                // The direct Firestore read proves current authorization. Wait
+                // for the local friendship presentation before asking MapKit
+                // to select the corresponding annotation.
+                guard acceptedFriendUserIDs.contains(route.ownerID) else {
+                    return
+                }
+
+                selectedTab = .explore
+                centerOnOutingPlanOwnerID = route.ownerID
+                notificationService.consume(route)
+            } catch is OutingPlanServiceError {
+                notificationService.consume(route)
+            } catch {
+                // Keep a route after a transient network failure. Returning to
+                // the active scene retries the server-side authorization read.
+            }
+        }
     }
 
     private func refreshFriendExplorationProgress() {
@@ -1281,6 +1322,7 @@ private struct ProfileView: View {
     @ObservedObject var locationTracker: LocationTracker
     @ObservedObject private var authenticationService = FirebaseService.shared
     @ObservedObject private var friendSyncService = FriendSyncService.shared
+    @ObservedObject private var notificationService = NotificationService.shared
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     let cityProgress: CityProgress?
@@ -1291,6 +1333,7 @@ private struct ProfileView: View {
     @State private var deleteConfirmationPresented = false
     @State private var deletionAuthorizationPresented = false
     @State private var accountActionErrorMessage: String?
+    @State private var isSigningOut = false
 
     var body: some View {
         NavigationStack {
@@ -1379,6 +1422,41 @@ private struct ProfileView: View {
                     )
                 }
 
+                Section {
+                    Toggle(
+                        "Sorties de mes amis",
+                        isOn: notificationsBinding
+                    )
+
+                    Label(
+                        notificationAuthorizationText,
+                        systemImage: notificationAuthorizationSystemImage
+                    )
+                    .foregroundStyle(.secondary)
+
+                    if notificationService.authorizationStatus == .denied {
+                        Button {
+                            openSettings()
+                        } label: {
+                            Label("Ouvrir Réglages", systemImage: "gear")
+                        }
+                    }
+
+                    if let errorMessage = notificationService.errorMessage {
+                        Label(
+                            errorMessage,
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text(
+                        "Active-les pour recevoir les nouvelles sorties de tes amis acceptés. Wander n’affiche jamais leur adresse ni leurs coordonnées dans une notification."
+                    )
+                }
+
                 Section("Progression") {
                     LabeledContent(
                         "Ville",
@@ -1401,6 +1479,9 @@ private struct ProfileView: View {
             .navigationTitle("Profil")
         }
         .onAppear {
+            Task {
+                await notificationService.refreshAuthorizationStatus()
+            }
             if friendSyncService.isAccountDeletionPending {
                 deletionAuthorizationPresented = true
             }
@@ -1415,9 +1496,19 @@ private struct ProfileView: View {
             isPresented: $signOutConfirmationPresented
         ) {
             Button("Se déconnecter") {
-                if !authenticationService.signOut() {
-                    accountActionErrorMessage =
-                        authenticationService.authErrorMessage
+                isSigningOut = true
+                Task {
+                    do {
+                        try await notificationService.prepareForSignOut()
+                        if !authenticationService.signOut() {
+                            await notificationService.enableNotifications()
+                            accountActionErrorMessage =
+                                authenticationService.authErrorMessage
+                        }
+                    } catch {
+                        accountActionErrorMessage = error.localizedDescription
+                    }
+                    isSigningOut = false
                 }
             }
 
@@ -1464,6 +1555,7 @@ private struct ProfileView: View {
                     systemImage: "rectangle.portrait.and.arrow.right"
                 )
             }
+            .disabled(isSigningOut)
 
             Button(role: .destructive) {
                 deleteConfirmationPresented = true
@@ -1473,6 +1565,7 @@ private struct ProfileView: View {
                     systemImage: "person.crop.circle.badge.minus"
                 )
             }
+            .disabled(isSigningOut)
         } header: {
             Text("Compte")
         } footer: {
@@ -1544,6 +1637,45 @@ private struct ProfileView: View {
         )
     }
 
+    private var notificationsBinding: Binding<Bool> {
+        Binding(
+            get: { notificationService.isEnabled },
+            set: { isEnabled in
+                notificationService.clearError()
+                Task {
+                    if isEnabled {
+                        await notificationService.enableNotifications()
+                    } else {
+                        await notificationService.disableNotifications()
+                    }
+                }
+            }
+        )
+    }
+
+    private var notificationAuthorizationText: String {
+        switch notificationService.authorizationStatus {
+        case .notDetermined:
+            "Autorisation non demandée"
+        case .denied:
+            "Notifications refusées dans Réglages"
+        case .authorized:
+            "Notifications autorisées"
+        case .provisional:
+            "Notifications autorisées provisoirement"
+        case .ephemeral:
+            "Notifications autorisées temporairement"
+        @unknown default:
+            "État des notifications indisponible"
+        }
+    }
+
+    private var notificationAuthorizationSystemImage: String {
+        notificationService.authorizationAllowsNotifications
+            ? "bell.badge"
+            : "bell.slash"
+    }
+
     private var exploredCellsText: String {
         guard let cityProgress else { return "—" }
         return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
@@ -1569,6 +1701,7 @@ private struct ProfileView: View {
                     return
                 }
 
+                try await notificationService.prepareForAccountDeletion()
                 try await friendSyncService.deleteCurrentAccountData()
                 try await authenticationService.finishAccountDeletion(
                     authorizationCode: authorizationCode

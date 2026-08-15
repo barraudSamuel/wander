@@ -6,6 +6,7 @@
 import CoreLocation
 import MapKit
 import SwiftUI
+import UIKit
 
 @MainActor
 struct OutingPlanComposerView: View {
@@ -33,6 +34,7 @@ struct OutingPlanComposerView: View {
     let displayName: String
 
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var notificationService = NotificationService.shared
 
     @State private var loadingState: LoadingState = .loading
     @State private var existingPlan: OutingPlan?
@@ -285,6 +287,35 @@ struct OutingPlanComposerView: View {
                 Text("Choisis une heure dans les prochaines 24 heures.")
             }
 
+            Section {
+                Toggle(
+                    "Recevoir les sorties de mes amis",
+                    isOn: notificationsBinding
+                )
+
+                if notificationService.authorizationStatus == .denied {
+                    Button {
+                        openSettings()
+                    } label: {
+                        Label("Ouvrir Réglages", systemImage: "gear")
+                    }
+                }
+
+                if let errorMessage = notificationService.errorMessage {
+                    Label(
+                        errorMessage,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text(
+                    "Ce réglage ne bloque jamais la publication. Il permet de recevoir les prochaines sorties de tes amis acceptés."
+                )
+            }
+
             if let writeErrorMessage {
                 Section {
                     Label(
@@ -338,6 +369,22 @@ struct OutingPlanComposerView: View {
             && plannedAt > referenceDate
             && plannedAt.timeIntervalSince(referenceDate)
                 <= OutingPlan.maximumPlanningInterval
+    }
+
+    private var notificationsBinding: Binding<Bool> {
+        Binding(
+            get: { notificationService.isEnabled },
+            set: { isEnabled in
+                notificationService.clearError()
+                Task {
+                    if isEnabled {
+                        await notificationService.enableNotifications()
+                    } else {
+                        await notificationService.disableNotifications()
+                    }
+                }
+            }
+        )
     }
 
     private func loadCurrentPlan() async {
@@ -563,6 +610,15 @@ struct OutingPlanComposerView: View {
         searchRequestID = nil
         isSearching = false
         cancelReverseGeocoding()
+    }
+
+    private func openSettings() {
+        guard let settingsURL = URL(
+            string: UIApplication.openSettingsURLString
+        ) else {
+            return
+        }
+        UIApplication.shared.open(settingsURL)
     }
 
     private func cancelReverseGeocoding() {
