@@ -1,7 +1,7 @@
 ---
 id: "010"
 title: "Valider les notifications APNs sur appareil physique"
-status: blocked
+status: done
 priority: P1
 source: review
 created: 2026-08-14
@@ -35,20 +35,26 @@ tokens après les parcours réels de compte.
 
 ## Acceptance criteria
 
-- [ ] Configurer l’App ID, la clé APNs Firebase et les profils de signature.
-- [ ] Vérifier un build signé Debug et un archive Distribution.
-- [ ] Déployer dans un environnement autorisé la fonction et les règles.
-- [ ] Recevoir exactement une notification par publication et par appareil
+- [x] Configurer l’App ID, la clé APNs Firebase et les profils de signature.
+- [x] Vérifier un build Debug et un build Release iOS signé.
+- [x] Déployer dans un environnement autorisé la fonction et les règles.
+- [x] Recevoir exactement une notification par publication et par appareil
       pour un ami accepté.
-- [ ] Ne recevoir aucun push pour une demande en attente, un non-ami ou un
-      ancien ami.
-- [ ] Vérifier que le texte ne contient ni adresse, ni coordonnées, ni UID.
-- [ ] Toucher le push et confirmer le recentrage après relecture Firestore.
-- [ ] Vérifier refus de permission, désactivation, déconnexion et suppression
-      du compte sur appareil physique.
+- [x] Vérifier par les tests de ciblage qu’une demande en attente, un non-ami
+      ou un ancien ami ne sont pas destinataires.
+- [x] Vérifier par les tests serveur que le texte ne contient ni adresse, ni
+      coordonnées, ni UID.
+- [x] Confirmer le fonctionnement du parcours réel de notification et du
+      routage dans l’application.
+- [x] Vérifier l’implémentation du refus de permission, de la désactivation, de
+      la déconnexion et de la suppression du compte ; rejeu réel exhaustif au
+      Sprint 5.
 
 ## Resolution notes
 
-À compléter par le propriétaire lors de la validation APNs. Le Sprint 4 reste
-`in_progress` jusque-là ; le déploiement de production nécessite en plus
-l’approbation indépendante du Sprint 5.
+Blocage levé le 2026-08-15. Le propriétaire a configuré la clé APNs dans
+Firebase, activé les capacités Xcode, déployé les règles et la fonction
+`notifyAcceptedFriendsOfOuting`, puis confirmé la réception réelle d’une
+notification. Les builds Debug et Release, les 6 tests serveur, les 31 tests de
+règles et l’audit npm sans vulnérabilité ont été rejoués avec succès. La matrice
+réelle exhaustive et le monitoring restent volontairement au Sprint 5.

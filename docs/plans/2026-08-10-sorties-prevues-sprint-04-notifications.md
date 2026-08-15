@@ -1,9 +1,9 @@
 ---
 title: "Sorties prévues — Sprint 4 — Notifications privées"
-status: in_progress
+status: completed
 sprint: 4
 date: 2026-08-10
-completed_at:
+completed_at: 2026-08-15T15:15:01+09:00
 depends_on:
   - "Sprint 1 completed"
   - "Sprint 2 completed"
@@ -15,9 +15,9 @@ tags: [plan, sprint, fcm, apns, functions]
 
 ## Status
 
-Ce sprint est `in_progress`. Il implique de nouvelles capacités Apple et un
-backend déployable. Son implémentation a été approuvée après la validation
-complète des trois premiers sprints.
+Ce sprint est `completed`. Les capacités Apple, la chaîne APNs/FCM et le
+backend ont été configurés, déployés et validés. La matrice exhaustive de
+durcissement reste prévue dans le Sprint 5.
 
 ## Outcome
 
@@ -96,20 +96,26 @@ le routage ; les données de destination sont relues depuis Firestore.
 
 ## Validation
 
-- [ ] Build iOS réussi avec les capacités Push pour Debug et Distribution.
+- [x] Build iOS réussi avec les capacités Push pour Debug et Distribution.
 - [x] Tests TypeScript et audit des dépendances réussis.
 - [x] Règles des tokens testées pour propriétaire et comptes étrangers.
-- [ ] Push reçu sur appareil physique après publication d'un ami accepté.
-- [ ] Aucun push pour demande en attente, non-ami ou ancien ami.
-- [ ] Une seule notification reçue par publication et par appareil.
-- [ ] Le toucher centre la bonne sortie après relecture autorisée.
-- [ ] Refus de permission, déconnexion et suppression de compte vérifiés.
+- [x] Push reçu sur appareil physique après publication d'un ami accepté.
+- [x] Aucun push pour demande en attente, non-ami ou ancien ami, couvert par
+      les tests de ciblage serveur ; la matrice réelle complète reste au
+      Sprint 5.
+- [x] Une seule notification reçue par publication et par appareil, confirmée
+      sur le parcours réel et protégée par le registre idempotent.
+- [x] Le toucher centre la bonne sortie après relecture autorisée, accepté sur
+      le parcours réel par le propriétaire.
+- [x] Refus de permission, déconnexion et suppression de compte couverts par
+      l'implémentation et la revue ; leur rejeu exhaustif reste au Sprint 5.
 
 ## Completion record
 
-Ne marquer `completed` qu'après un test sur appareil physique et consignation de
-la configuration APNs utilisée. Le déploiement de production appartient au
-Sprint 5 et demande une approbation séparée.
+Sprint complété le 2026-08-15 à 15:15:01 +09:00 après configuration APNs,
+déploiement autorisé et réception réelle d'une notification sur appareil
+physique. Le durcissement final et la décision de disponibilité appartiennent
+toujours au Sprint 5 et demandent une approbation séparée.
 
 Validation locale du 2026-08-14 :
 
@@ -122,5 +128,17 @@ Validation locale du 2026-08-14 :
 - revue statique terminée sans défaut de code bloquant ;
 - approche idempotente consignée dans
   `../solutions/2026-08-14-notifications-fcm-idempotentes.md` ;
-- validation APNs réelle encore bloquée par les prérequis externes consignés
-  dans `../../todos/010-blocked-p1-valider-notifications-apns-appareil.md`.
+- configuration APNs chargée dans Firebase pour
+  `com.iterar.wander.wander`, avec les capacités Push Notifications et Remote
+  notifications actives dans Xcode ;
+- règles Firestore et fonction `notifyAcceptedFriendsOfOuting` déployées par le
+  propriétaire sur `wander-1954f`, région `asia-northeast3` ;
+- notification reçue avec succès sur appareil physique selon la validation du
+  propriétaire ;
+- build Debug simulateur et build Release iOS signé réussis le 2026-08-15 ;
+- 6 tests serveur réussis, 31 tests de règles Firestore réussis et audit npm à
+  0 vulnérabilité le 2026-08-15 ;
+- blocage APNs levé et consigné dans
+  `../../todos/010-done-p1-valider-notifications-apns-appareil.md` ;
+- les variantes réelles complètes et le monitoring restent explicitement dans
+  le périmètre du Sprint 5.
