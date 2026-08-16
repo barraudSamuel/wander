@@ -29,6 +29,7 @@ struct FriendEdgeRailView<Content: View>: View {
     private let minimumRailHeight: CGFloat = 150
     private let maximumRailHeight: CGFloat = 260
     private let edgeTouchWidth: CGFloat = 14
+    private let closeGestureReach: CGFloat = 32
     private let openingDeadZone: CGFloat = 5
     private let openingResistance: CGFloat = 0.62
     private let openingThreshold: CGFloat = 38
@@ -71,17 +72,30 @@ struct FriendEdgeRailView<Content: View>: View {
                                 - railHeight / 2
                         )
 
-                        FriendRailAvatarList(
-                            friends: friends,
-                            focusedFriendID: $focusedFriendID,
-                            focusedFriendCenterY: $focusedFriendCenterY,
-                            onActivate: activate
-                        )
-                        .frame(width: railWidth, height: railHeight)
-                        .mask {
-                            FriendRailShape()
-                                .frame(width: railWidth, height: railHeight)
+                        ZStack(alignment: .trailing) {
+                            Color.clear
+                                .contentShape(Rectangle())
+
+                            FriendRailAvatarList(
+                                friends: friends,
+                                focusedFriendID: $focusedFriendID,
+                                focusedFriendCenterY: $focusedFriendCenterY,
+                                onActivate: activate
+                            )
+                            .frame(width: railWidth, height: railHeight)
+                            .mask {
+                                FriendRailShape()
+                                    .frame(
+                                        width: railWidth,
+                                        height: railHeight
+                                    )
+                            }
                         }
+                        .frame(
+                            width: railWidth + closeGestureReach,
+                            height: railHeight,
+                            alignment: .trailing
+                        )
                         .offset(x: railWidth * (1 - revealProgress))
                         .opacity(revealProgress)
                         .allowsHitTesting(isOpen)
@@ -152,8 +166,14 @@ struct FriendEdgeRailView<Content: View>: View {
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-                .shadow(color: .black.opacity(0.8), radius: 1, y: 1)
+                .shadow(color: .black.opacity(0.55), radius: 1, y: 1)
                 .contentTransition(.opacity)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .glassEffect(
+                    .regular,
+                    in: Capsule()
+                )
                 .padding(.trailing, railWidth + 10)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .opacity(progress)
@@ -272,14 +292,14 @@ struct FriendEdgeRailView<Content: View>: View {
     }
 
     private func closeGesture(railWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+        DragGesture(minimumDistance: 5, coordinateSpace: .global)
             .onChanged { value in
                 let horizontalDistance = value.translation.width
                 let verticalDistance = abs(value.translation.height)
 
                 if !isTrackingClose {
-                    guard horizontalDistance > 6,
-                          horizontalDistance > verticalDistance * 1.2 else {
+                    guard horizontalDistance > 4,
+                          horizontalDistance > verticalDistance * 0.9 else {
                         return
                     }
                     isTrackingClose = true
@@ -290,8 +310,8 @@ struct FriendEdgeRailView<Content: View>: View {
             .onEnded { value in
                 guard isTrackingClose else { return }
 
-                let shouldClose = value.translation.width > railWidth * 0.34
-                    || value.predictedEndTranslation.width > railWidth * 0.56
+                let shouldClose = value.translation.width > railWidth * 0.24
+                    || value.predictedEndTranslation.width > railWidth * 0.42
 
                 if shouldClose {
                     closeRail()

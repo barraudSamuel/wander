@@ -43,6 +43,39 @@ The original implementation request does not count as plan approval. Codex must 
 
 Keep the approved plan checklist current, validate before completion, record review findings as prioritized files in `todos/`, and capture reusable lessons in `docs/solutions/`. Never invoke `ce-commit`, `ce-commit-push-pr`, `ce-babysit-pr`, or `lfg` without an explicit user request. If the plugin or a required skill is unavailable, follow the equivalent workflow manually and say so. Update `AGENTS.md` only for durable repository-wide rules, not task-specific notes.
 
+### Obsidian Wander Documentation
+
+The curated Wander documentation lives in the Obsidian vault at
+`/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander`.
+When work materially changes the product or its implementation, include every
+affected Obsidian note in the proposed plan's affected-files list before
+approval and update it during the same approved work:
+
+- `Backlog features.md` — update when a feature is added, reprioritized,
+  started, blocked, completed, removed, or materially rescoped.
+- `Documentation technique.md` — update for material changes to architecture,
+  data models, persistence, synchronization, Firebase, security, notifications,
+  testing strategy, dependencies, or module responsibilities.
+- `Documentation UX.md` — update for material changes to navigation, user
+  journeys, permissions, loading/empty/error states, accessibility, visual
+  behavior, map interactions, or user-facing copy and controls.
+- `00 - Wander.md` — update when the product vision, overall scope, project
+  status summary, or documentation links change.
+
+For every changed Obsidian note, update its `updated` frontmatter property,
+preserve valid wikilinks, and verify the affected properties, links, tables,
+callouts, code fences, and Mermaid diagrams in Obsidian reading view. The code,
+`docs/`, and `todos/` remain the detailed sources of truth; these Obsidian notes
+are the maintained product and architecture overview. Pure internal refactors
+with no backlog, technical-documentation, or UX impact do not require an
+Obsidian update.
+
+If the vault path is absent or not writable, do not create a substitute vault
+or duplicate `wander` folder elsewhere. Record the exact notes and sections
+that still require updates in the plan's validation or review notes, report the
+limitation explicitly to the project owner, and do not claim that Obsidian
+validation succeeded.
+
 ### Sprint Planning and Status
 
 For work that spans multiple increments, create one standalone Markdown plan in

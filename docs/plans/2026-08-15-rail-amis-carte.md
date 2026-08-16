@@ -19,6 +19,10 @@ nearest_default_focus_reapproved_at: 2026-08-16
 cold_launch_focus_reapproved_at: 2026-08-16
 nearest_focus_rollback_reapproved_at: 2026-08-16
 centered_snap_reapproved_at: 2026-08-16
+name_blur_reapproved_at: 2026-08-16
+permissive_close_reapproved_at: 2026-08-16
+liquid_glass_name_reapproved_at: 2026-08-16
+untinted_liquid_glass_reapproved_at: 2026-08-17
 owner: "Samuel Barraud"
 related: []
 tags: [plan, map, friends, interaction]
@@ -117,6 +121,8 @@ de données.
 - `wander/RightEdgePanGestureView.swift` — reconnaissance du geste de bord et
   transmission de sa progression.
 - `docs/plans/2026-08-15-rail-amis-carte.md` — source de vérité et validation.
+- `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Documentation UX.md`
+  — synthèse du comportement visuel du rail dans le vault Obsidian.
 - `docs/solutions/` — note uniquement si une leçon réutilisable émerge.
 - `todos/` — findings de revue uniquement si un défaut reste ouvert.
 
@@ -177,6 +183,12 @@ de données.
 - [x] Recompiler et vérifier le diff après le retour arrière complet.
 - [x] Aligner le snap de fin de geste sur l’ancre centrale du rail.
 - [x] Recompiler et vérifier le diff après la correction du snap.
+- [x] Remplacer le halo flouté par un Liquid Glass natif sans teinte.
+- [x] Recompiler et vérifier le diff après l’adoption de Liquid Glass.
+- [x] Mettre à jour `Documentation UX.md` et vérifier son rendu Obsidian.
+- [x] Étendre de 32 points la zone tactile de fermeture à gauche de la rail.
+- [x] Assouplir le verrou directionnel et les seuils de fermeture.
+- [x] Recompiler et vérifier le diff après la révision de fermeture.
 - [ ] Vérifier le rendu et les gestes sur l’iPhone 17 Simulator déjà démarré.
 - [ ] Simplifier puis effectuer la revue finale.
 
@@ -209,6 +221,8 @@ de données.
 - [ ] La sélection, le nom, le centrage et la fermeture fonctionnent.
 - [ ] Dynamic Type, VoiceOver et Réduire les animations restent utilisables.
 - [x] `git diff --check` réussit.
+- [x] `Documentation UX.md` conserve un frontmatter valide, ses wikilinks,
+  tableaux et callouts, et s’affiche correctement en mode Aperçu dans Obsidian.
 - [ ] La revue ne laisse aucun défaut P1/P2 non consigné.
 
 ## Acceptance criteria
@@ -220,10 +234,14 @@ de données.
 - La carte remplit l’écran tandis que les commandes restent au-dessus de la
   barre d’onglets.
 - Elle exige un geste intentionnel avec résistance avant de s’ouvrir.
+- La fermeture peut commencer légèrement à gauche de la rail et tolère un
+  mouvement diagonal modéré sans gêner son scroll vertical.
 - Le franchissement du seuil produit un unique retour haptique ferme.
 - Les avatars acceptés sont affichés et défilables dans la rail noire.
 - Aucun avatar ne peut dépasser du contour noir pendant le scroll.
 - Le nom de l’ami sélectionné apparaît à gauche comme dans la référence.
+- Un Liquid Glass natif sans teinte porte le pseudo sans former une carte
+  opaque sur la carte.
 - Le pseudo reste aligné verticalement avec son avatar pendant le scroll.
 - L’avatar focusé s’aimante au centre sans modifier la position de la carte.
 - Seul un tap explicite sur l’avatar déjà focusé centre la carte.
