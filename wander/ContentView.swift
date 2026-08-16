@@ -18,7 +18,7 @@ private enum RootTab: Hashable {
     case profile
 }
 
-private struct FriendMapSummary: Identifiable, Hashable {
+struct FriendMapSummary: Identifiable, Hashable {
     let userID: String
     let displayName: String
     let avatarID: String
@@ -313,130 +313,138 @@ struct ContentView: View {
             outingPlans[$0]
         }
 
-        return ZStack(alignment: .topTrailing) {
-            MapWithFogView(
-                locationTracker: locationTracker,
-                discoveredCellIDs: locationTracker.discoveredCellIDs,
-                cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
-                friendLocations: friendSyncService.friendLocations,
-                freshFriendLocationUserIDs:
-                    friendSyncService.freshFriendLocationUserIDs,
-                outingPlans: outingPlans,
-                friendExplorations: visibleFriendExplorations,
-                allFriendExplorations: allFriendExplorations,
-                userExplorationProgress: cityProgress,
-                friendExplorationProgress: friendExplorationProgress,
-                loadedFriendExplorationUserIDs:
-                    friendSyncService.loadedFriendExplorationUserIDs,
-                userDisplayName: displayName,
-                userAvatarID: avatarID,
-                centerOnUser: $centerOnUser,
-                resetMapOrientation: $resetMapOrientation,
-                centerOnFriendUserID: $centerOnFriendUserID,
-                centerOnOutingPlanOwnerID: $centerOnOutingPlanOwnerID,
-                selectedOutingPlanOwnerID: selectedOutingPlanOwnerID,
-                showsHeatMap: heatMapEnabled,
-                heatMapCellData: locationTracker.heatMapCellData,
-                heatMapRevision: locationTracker.heatMapRevision,
-                onJoinFriend: presentNavigationOptions,
-                onViewFriendProfile: presentFriendProfile,
-                onSelectOutingPlan: { ownerID in
-                    selectedOutingPlanOwnerID = ownerID
-                },
-                onDeselectOutingPlan: { ownerID in
-                    guard selectedOutingPlanOwnerID == ownerID else { return }
-                    selectedOutingPlanOwnerID = nil
-                }
-            )
-            .ignoresSafeArea()
-
-            ownExplorationStatusOverlay
-
-            if let selectedOutingPlan {
-                OutingPlanDetailCardView(
-                    outing: selectedOutingPlan,
-                    onDismiss: {
-                        selectedOutingPlanOwnerID = nil
+        return FriendEdgeRailView(
+            friends: friendSummaries,
+            onSelect: { friend in
+                guard friend.canShowOnMap else { return }
+                showFriendOnMap(friend)
+            }
+        ) {
+            ZStack(alignment: .topTrailing) {
+                MapWithFogView(
+                    locationTracker: locationTracker,
+                    discoveredCellIDs: locationTracker.discoveredCellIDs,
+                    cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
+                    friendLocations: friendSyncService.friendLocations,
+                    freshFriendLocationUserIDs:
+                        friendSyncService.freshFriendLocationUserIDs,
+                    outingPlans: outingPlans,
+                    friendExplorations: visibleFriendExplorations,
+                    allFriendExplorations: allFriendExplorations,
+                    userExplorationProgress: cityProgress,
+                    friendExplorationProgress: friendExplorationProgress,
+                    loadedFriendExplorationUserIDs:
+                        friendSyncService.loadedFriendExplorationUserIDs,
+                    userDisplayName: displayName,
+                    userAvatarID: avatarID,
+                    centerOnUser: $centerOnUser,
+                    resetMapOrientation: $resetMapOrientation,
+                    centerOnFriendUserID: $centerOnFriendUserID,
+                    centerOnOutingPlanOwnerID: $centerOnOutingPlanOwnerID,
+                    selectedOutingPlanOwnerID: selectedOutingPlanOwnerID,
+                    showsHeatMap: heatMapEnabled,
+                    heatMapCellData: locationTracker.heatMapCellData,
+                    heatMapRevision: locationTracker.heatMapRevision,
+                    onJoinFriend: presentNavigationOptions,
+                    onViewFriendProfile: presentFriendProfile,
+                    onSelectOutingPlan: { ownerID in
+                        selectedOutingPlanOwnerID = ownerID
                     },
-                    onToggleAttendance: {
-                        toggleOutingAttendance(
-                            for: selectedOutingPlan.plan.ownerID
-                        )
+                    onDeselectOutingPlan: { ownerID in
+                        guard selectedOutingPlanOwnerID == ownerID else { return }
+                        selectedOutingPlanOwnerID = nil
                     }
                 )
-                .frame(maxWidth: 600)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, alignment: .top)
-                .transition(
-                    accessibilityReduceMotion
-                        ? .identity
-                        : .move(edge: .top).combined(with: .opacity)
-                )
-                .zIndex(1)
-            } else {
-                Button {
-                    filterSheetVisible = true
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease")
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.large)
-                .accessibilityLabel("Filtres de la carte")
-                .accessibilityHint("Choisir les informations visibles sur la carte")
-                .padding(.top, 8)
-                .padding(.trailing, 16)
-                .transition(.opacity)
-            }
-        }
-        .animation(
-            accessibilityReduceMotion
-                ? nil
-                : .spring(response: 0.42, dampingFraction: 0.86),
-            value: selectedOutingPlanOwnerID
-        )
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack(alignment: .bottom) {
-                Button {
-                    outingComposerVisible = true
-                } label: {
-                    Image(systemName: "mappin.and.ellipse")
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.large)
-                .accessibilityLabel("Dire où je vais")
-                .accessibilityHint(
-                    "Rechercher un lieu et publier l’heure de ta sortie"
-                )
+                .ignoresSafeArea()
 
-                Spacer()
+                ownExplorationStatusOverlay
 
-                VStack(spacing: 10) {
+                if let selectedOutingPlan {
+                    OutingPlanDetailCardView(
+                        outing: selectedOutingPlan,
+                        onDismiss: {
+                            selectedOutingPlanOwnerID = nil
+                        },
+                        onToggleAttendance: {
+                            toggleOutingAttendance(
+                                for: selectedOutingPlan.plan.ownerID
+                            )
+                        }
+                    )
+                    .frame(maxWidth: 600)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .transition(
+                        accessibilityReduceMotion
+                            ? .identity
+                            : .move(edge: .top).combined(with: .opacity)
+                    )
+                    .zIndex(1)
+                } else {
                     Button {
-                        resetMapOrientation = true
+                        filterSheetVisible = true
                     } label: {
-                        Image(systemName: "safari")
+                        Image(systemName: "line.3.horizontal.decrease")
                     }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .controlSize(.large)
-                    .accessibilityLabel("Orienter la carte vers le nord")
-
+                    .accessibilityLabel("Filtres de la carte")
+                    .accessibilityHint("Choisir les informations visibles sur la carte")
+                    .padding(.top, 8)
+                    .padding(.trailing, 16)
+                    .transition(.opacity)
+                }
+            }
+            .animation(
+                accessibilityReduceMotion
+                    ? nil
+                    : .spring(response: 0.42, dampingFraction: 0.86),
+                value: selectedOutingPlanOwnerID
+            )
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack(alignment: .bottom) {
                     Button {
-                        centerOnUser = true
+                        outingComposerVisible = true
                     } label: {
-                        Image(systemName: "scope")
+                        Image(systemName: "mappin.and.ellipse")
                     }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .controlSize(.large)
-                    .accessibilityLabel("Recentrer la carte sur ma position")
+                    .accessibilityLabel("Dire où je vais")
+                    .accessibilityHint(
+                        "Rechercher un lieu et publier l’heure de ta sortie"
+                    )
+
+                    Spacer()
+
+                    VStack(spacing: 10) {
+                        Button {
+                            resetMapOrientation = true
+                        } label: {
+                            Image(systemName: "safari")
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.large)
+                        .accessibilityLabel("Orienter la carte vers le nord")
+
+                        Button {
+                            centerOnUser = true
+                        } label: {
+                            Image(systemName: "scope")
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.large)
+                        .accessibilityLabel("Recentrer la carte sur ma position")
+                    }
                 }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal)
-            .padding(.bottom, 8)
         }
         .sheet(isPresented: $filterSheetVisible) {
             MapFiltersSheet(
@@ -777,6 +785,10 @@ struct ContentView: View {
             .map { friend in
                 let location = locations[friend.userID]
                 let exploration = explorations[friend.userID]
+                let isLocationFresh =
+                    friendSyncService.freshFriendLocationUserIDs.contains(
+                        friend.userID
+                    )
 
                 return FriendMapSummary(
                     userID: friend.userID,
@@ -791,10 +803,7 @@ struct ContentView: View {
                     ) ?? ProfileColor.generatedHex(seed: friend.userID),
                     locationSampledAt: location?.sampledAt,
                     spotEnteredAt: location?.spotEnteredAt,
-                    isLocationFresh:
-                        friendSyncService.freshFriendLocationUserIDs.contains(
-                            friend.userID
-                        ),
+                    isLocationFresh: isLocationFresh,
                     cellCount: exploration?.cellIDs.count ?? 0
                 )
             }

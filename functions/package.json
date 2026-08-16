@@ -8,7 +8,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test lib/*.test.js"
+    "test": "npm run build && node --test lib/*.test.js",
+    "seed:test-friends": "npm run build --silent && node lib/testFriendFixturesCli.js seed",
+    "refresh:test-friend-locations": "npm run build --silent && node lib/testFriendFixturesCli.js refresh",
+    "cleanup:test-friends": "npm run build --silent && node lib/testFriendFixturesCli.js cleanup"
   },
   "dependencies": {
     "firebase-admin": "14.2.0",

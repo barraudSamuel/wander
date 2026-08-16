@@ -54,6 +54,7 @@ fastlane/test_output
 *.p8
 *.mobileprovision
 GoogleService-Info*.plist
+wander-1954f-firebase-adminsdk-fbsvc-479a7caa8f.json
 
 # Archives
 *.ipa
