@@ -9,11 +9,12 @@ import Foundation
 
 struct OutingPlan: Identifiable, Equatable {
     static let maximumPlanningInterval: TimeInterval = 24 * 60 * 60
-    static let activeInterval: TimeInterval = 2 * 60 * 60
     static let maximumDisplayNameLength = 50
     static let maximumPlaceNameLength = 120
     static let maximumAddressLength = 200
 
+    let eventID: UUID
+    let eventIDValue: String
     let ownerID: String
     let publicationID: UUID
     let publicationIDValue: String
@@ -22,19 +23,16 @@ struct OutingPlan: Identifiable, Equatable {
     let address: String?
     let coordinate: CLLocationCoordinate2D
     let plannedAt: Date
-    let expiresAt: Date
     let publishedAt: Date
     let updatedAt: Date
     let timeZoneIdentifier: String
 
-    var id: String { ownerID }
-
-    func isActive(at referenceDate: Date = Date()) -> Bool {
-        referenceDate < expiresAt
-    }
+    var id: String { eventIDValue }
 
     static func == (lhs: OutingPlan, rhs: OutingPlan) -> Bool {
-        lhs.ownerID == rhs.ownerID
+        lhs.eventID == rhs.eventID
+            && lhs.eventIDValue == rhs.eventIDValue
+            && lhs.ownerID == rhs.ownerID
             && lhs.publicationID == rhs.publicationID
             && lhs.publicationIDValue == rhs.publicationIDValue
             && lhs.displayName == rhs.displayName
@@ -43,7 +41,6 @@ struct OutingPlan: Identifiable, Equatable {
             && lhs.coordinate.latitude == rhs.coordinate.latitude
             && lhs.coordinate.longitude == rhs.coordinate.longitude
             && lhs.plannedAt == rhs.plannedAt
-            && lhs.expiresAt == rhs.expiresAt
             && lhs.publishedAt == rhs.publishedAt
             && lhs.updatedAt == rhs.updatedAt
             && lhs.timeZoneIdentifier == rhs.timeZoneIdentifier
@@ -76,7 +73,7 @@ enum OutingPlanValidationError: LocalizedError, Equatable {
     case invalidAddress
     case invalidCoordinate
     case invalidPlannedDate
-    case invalidExpirationDate
+    case invalidEventID
     case invalidTimeZone
     case invalidPublicationID
     case invalidAuditDates
@@ -95,8 +92,8 @@ enum OutingPlanValidationError: LocalizedError, Equatable {
             return "La position du lieu est invalide."
         case .invalidPlannedDate:
             return "Choisis une heure dans les prochaines 24 heures."
-        case .invalidExpirationDate:
-            return "La date d’expiration de la sortie est invalide."
+        case .invalidEventID:
+            return "L’identifiant de l’événement est invalide."
         case .invalidTimeZone:
             return "Le fuseau horaire est invalide."
         case .invalidPublicationID:
@@ -157,10 +154,16 @@ extension OutingPlan {
 
     init(document: DocumentSnapshot) throws {
         guard let data = document.data(),
-              let ownerID = data["ownerId"] as? String,
-              ownerID == document.documentID,
+              let eventIDValue = data["eventId"] as? String,
+              eventIDValue == document.documentID,
+              let eventID = UUID(uuidString: eventIDValue) else {
+            throw OutingPlanValidationError.invalidEventID
+        }
+
+        guard let ownerID = data["ownerId"] as? String,
               !ownerID.isEmpty,
-              ownerID.count <= 128 else {
+              ownerID.count <= 128,
+              !ownerID.contains("__") else {
             throw OutingPlanValidationError.invalidOwner
         }
 
@@ -219,17 +222,13 @@ extension OutingPlan {
             throw OutingPlanValidationError.invalidPlannedDate
         }
 
-        guard let expiresAt = (data["expiresAt"] as? Timestamp)?.dateValue(),
-              expiresAt > plannedAt,
-              expiresAt.timeIntervalSince(plannedAt) <= Self.activeInterval else {
-            throw OutingPlanValidationError.invalidExpirationDate
-        }
-
         guard let timeZoneIdentifier = data["timeZoneIdentifier"] as? String,
               Self.isValidTimeZoneIdentifier(timeZoneIdentifier) else {
             throw OutingPlanValidationError.invalidTimeZone
         }
 
+        self.eventID = eventID
+        self.eventIDValue = eventIDValue
         self.ownerID = ownerID
         self.publicationID = publicationID
         self.publicationIDValue = publicationIDValue
@@ -238,7 +237,6 @@ extension OutingPlan {
         self.address = address
         self.coordinate = coordinate
         self.plannedAt = plannedAt
-        self.expiresAt = expiresAt
         self.publishedAt = publishedAt
         self.updatedAt = updatedAt
         self.timeZoneIdentifier = timeZoneIdentifier

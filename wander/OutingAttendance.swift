@@ -10,6 +10,8 @@ struct OutingAttendance: Identifiable, Equatable {
     static let maximumUserIDLength = 128
 
     let id: String
+    let eventID: UUID
+    let eventIDValue: String
     let ownerID: String
     let participantID: String
     let publicationID: UUID
@@ -17,11 +19,6 @@ struct OutingAttendance: Identifiable, Equatable {
     let displayName: String
     let avatarID: String
     let joinedAt: Date
-    let expiresAt: Date
-
-    func isActive(at referenceDate: Date = Date()) -> Bool {
-        referenceDate < expiresAt
-    }
 
     static func documentID(
         publicationIDValue: String,
@@ -39,13 +36,18 @@ struct OutingAttendance: Identifiable, Equatable {
     init(
         document: DocumentSnapshot,
         ownerID: String,
+        eventIDValue: String,
         expectedParticipantID: String? = nil
     ) throws {
         guard Self.isValidUserID(ownerID) else {
             throw OutingAttendanceValidationError.invalidOwner
         }
-        guard let data = document.data(),
-              let participantID = data["participantId"] as? String,
+        guard let eventID = UUID(uuidString: eventIDValue),
+              let data = document.data(),
+              data["eventId"] as? String == eventIDValue else {
+            throw OutingAttendanceValidationError.invalidEvent
+        }
+        guard let participantID = data["participantId"] as? String,
               Self.isValidUserID(participantID),
               expectedParticipantID == nil
                 || participantID == expectedParticipantID else {
@@ -63,13 +65,13 @@ struct OutingAttendance: Identifiable, Equatable {
               ProfileAvatar.normalizedID(avatarID) == avatarID else {
             throw OutingAttendanceValidationError.invalidProfile
         }
-        guard let joinedAt = (data["joinedAt"] as? Timestamp)?.dateValue(),
-              let expiresAt = (data["expiresAt"] as? Timestamp)?.dateValue(),
-              joinedAt < expiresAt else {
+        guard let joinedAt = (data["joinedAt"] as? Timestamp)?.dateValue() else {
             throw OutingAttendanceValidationError.invalidDates
         }
 
         self.id = document.documentID
+        self.eventID = eventID
+        self.eventIDValue = eventIDValue
         self.ownerID = ownerID
         self.participantID = participantID
         self.publicationID = publicationID
@@ -77,7 +79,6 @@ struct OutingAttendance: Identifiable, Equatable {
         self.displayName = displayName
         self.avatarID = avatarID
         self.joinedAt = joinedAt
-        self.expiresAt = expiresAt
     }
 
     private static func isValidUserID(_ value: String) -> Bool {
@@ -98,6 +99,7 @@ struct OutingAttendance: Identifiable, Equatable {
 
 enum OutingAttendanceValidationError: Error, Equatable {
     case invalidOwner
+    case invalidEvent
     case invalidParticipant
     case invalidPublication
     case invalidProfile

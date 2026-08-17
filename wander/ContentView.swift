@@ -65,11 +65,13 @@ struct ContentView: View {
     @State private var selectedTab: RootTab = .explore
     @State private var filterSheetVisible = false
     @State private var outingComposerVisible = false
+    @State private var editingOutingEvent: OutingPlan?
+    @State private var pendingOutingCoordinate: CLLocationCoordinate2D?
     @State private var centerOnUser = false
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
-    @State private var centerOnOutingPlanOwnerID: String?
-    @State private var selectedOutingPlanOwnerID: String?
+    @State private var centerOnOutingPlanEventID: String?
+    @State private var selectedOutingPlanEventID: String?
     @State private var heatMapEnabled = false
     @State private var selectedFriendExplorationUserIDs: Set<String> = []
     @State private var knownFriendUserIDs: Set<String> = []
@@ -233,7 +235,7 @@ struct ContentView: View {
             reconcileSelectedOutingPlan()
             openPendingNotificationRouteIfPossible()
         }
-        .onChange(of: outingPlanService.activePlans) {
+        .onChange(of: outingPlanService.events) {
             synchronizeOutingAttendanceObservation()
             reconcileSelectedOutingPlan()
         }
@@ -309,7 +311,7 @@ struct ContentView: View {
             selectedFriendExplorationUserIDs.contains($0.key)
         }
         let outingPlans = mapOutingPlans
-        let selectedOutingPlan = selectedOutingPlanOwnerID.flatMap {
+        let selectedOutingPlan = selectedOutingPlanEventID.flatMap {
             outingPlans[$0]
         }
 
@@ -340,19 +342,29 @@ struct ContentView: View {
                     centerOnUser: $centerOnUser,
                     resetMapOrientation: $resetMapOrientation,
                     centerOnFriendUserID: $centerOnFriendUserID,
-                    centerOnOutingPlanOwnerID: $centerOnOutingPlanOwnerID,
-                    selectedOutingPlanOwnerID: selectedOutingPlanOwnerID,
+                    centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
+                    selectedOutingPlanEventID: selectedOutingPlanEventID,
                     showsHeatMap: heatMapEnabled,
                     heatMapCellData: locationTracker.heatMapCellData,
                     heatMapRevision: locationTracker.heatMapRevision,
                     onJoinFriend: presentNavigationOptions,
                     onViewFriendProfile: presentFriendProfile,
-                    onSelectOutingPlan: { ownerID in
-                        selectedOutingPlanOwnerID = ownerID
+                    onSelectOutingPlan: { eventID in
+                        selectedOutingPlanEventID = eventID
                     },
-                    onDeselectOutingPlan: { ownerID in
-                        guard selectedOutingPlanOwnerID == ownerID else { return }
-                        selectedOutingPlanOwnerID = nil
+                    onDeselectOutingPlan: { eventID in
+                        guard selectedOutingPlanEventID == eventID else { return }
+                        selectedOutingPlanEventID = nil
+                    },
+                    onCreateEvent: { coordinate in
+                        guard CLLocationCoordinate2DIsValid(coordinate),
+                              !outingComposerVisible else {
+                            return
+                        }
+                        selectedOutingPlanEventID = nil
+                        editingOutingEvent = nil
+                        pendingOutingCoordinate = coordinate
+                        outingComposerVisible = true
                     }
                 )
                 .ignoresSafeArea()
@@ -363,11 +375,16 @@ struct ContentView: View {
                     OutingPlanDetailCardView(
                         outing: selectedOutingPlan,
                         onDismiss: {
-                            selectedOutingPlanOwnerID = nil
+                            selectedOutingPlanEventID = nil
+                        },
+                        onEdit: {
+                            pendingOutingCoordinate = nil
+                            editingOutingEvent = selectedOutingPlan.plan
+                            outingComposerVisible = true
                         },
                         onToggleAttendance: {
                             toggleOutingAttendance(
-                                for: selectedOutingPlan.plan.ownerID
+                                eventID: selectedOutingPlan.plan.eventIDValue
                             )
                         }
                     )
@@ -401,23 +418,10 @@ struct ContentView: View {
                 accessibilityReduceMotion
                     ? nil
                     : .spring(response: 0.42, dampingFraction: 0.86),
-                value: selectedOutingPlanOwnerID
+                value: selectedOutingPlanEventID
             )
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 HStack(alignment: .bottom) {
-                    Button {
-                        outingComposerVisible = true
-                    } label: {
-                        Image(systemName: "mappin.and.ellipse")
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.large)
-                    .accessibilityLabel("Dire où je vais")
-                    .accessibilityHint(
-                        "Rechercher un lieu et publier l’heure de ta sortie"
-                    )
-
                     Spacer()
 
                     VStack(spacing: 10) {
@@ -455,10 +459,17 @@ struct ContentView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $outingComposerVisible) {
+        .sheet(
+            isPresented: $outingComposerVisible,
+            onDismiss: {
+                editingOutingEvent = nil
+                pendingOutingCoordinate = nil
+            }
+        ) {
             OutingPlanComposerView(
                 displayName: displayName.isEmpty ? "Explorer" : displayName,
-                initialCoordinate: outingComposerInitialCoordinate
+                initialCoordinate: pendingOutingCoordinate,
+                editingEvent: editingOutingEvent
             )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
@@ -561,48 +572,6 @@ struct ContentView: View {
     private func presentNavigationOptions(_ userID: String) {
         guard currentNavigationDestination(for: userID) != nil else { return }
         friendNavigationSelection = FriendSelection(userID: userID)
-    }
-
-    private var outingComposerInitialCoordinate: CLLocationCoordinate2D? {
-        if let coordinate = locationTracker.lastLocation?.coordinate,
-           CLLocationCoordinate2DIsValid(coordinate) {
-            return coordinate
-        }
-
-        guard let first = cityBoundary.boundaryCoordinates.first else {
-            return nil
-        }
-
-        let bounds = cityBoundary.boundaryCoordinates.dropFirst().reduce(
-            into: (
-                minimumLatitude: first.latitude,
-                maximumLatitude: first.latitude,
-                minimumLongitude: first.longitude,
-                maximumLongitude: first.longitude
-            )
-        ) { bounds, coordinate in
-            bounds.minimumLatitude = min(
-                bounds.minimumLatitude,
-                coordinate.latitude
-            )
-            bounds.maximumLatitude = max(
-                bounds.maximumLatitude,
-                coordinate.latitude
-            )
-            bounds.minimumLongitude = min(
-                bounds.minimumLongitude,
-                coordinate.longitude
-            )
-            bounds.maximumLongitude = max(
-                bounds.maximumLongitude,
-                coordinate.longitude
-            )
-        }
-
-        return CLLocationCoordinate2D(
-            latitude: (bounds.minimumLatitude + bounds.maximumLatitude) / 2,
-            longitude: (bounds.minimumLongitude + bounds.maximumLongitude) / 2
-        )
     }
 
     private func presentFriendProfile(_ userID: String) {
@@ -834,10 +803,7 @@ struct ContentView: View {
             result[friend.userID] = friend
         }
         func attendees(for plan: OutingPlan) -> [MapOutingAttendee] {
-            outingAttendanceService.visibleAttendances(
-                ownerID: plan.ownerID,
-                publicationIDValue: plan.publicationIDValue
-            )
+            outingAttendanceService.visibleAttendances(for: plan)
             .filter {
                 plan.ownerID != currentUserID
                     || acceptedFriendUserIDs.contains($0.participantID)
@@ -860,12 +826,13 @@ struct ContentView: View {
             }
         }
 
-        return outingPlanService.activePlans.reduce(
+        return outingPlanService.events.reduce(
             into: [String: MapOutingPlan]()
         ) { result, entry in
-            let (ownerID, plan) = entry
+            let (eventID, plan) = entry
+            let ownerID = plan.ownerID
             if ownerID == currentUserID {
-                result[ownerID] = MapOutingPlan(
+                result[eventID] = MapOutingPlan(
                     plan: plan,
                     displayName: displayName,
                     profileColorHex:
@@ -882,7 +849,7 @@ struct ContentView: View {
             guard let friend = acceptedFriendsByUserID[ownerID] else {
                 return
             }
-            result[ownerID] = MapOutingPlan(
+            result[eventID] = MapOutingPlan(
                 plan: plan,
                 displayName: friend.displayName,
                 profileColorHex:
@@ -891,21 +858,21 @@ struct ContentView: View {
                 isCurrentUser: false,
                 attendees: attendees(for: plan),
                 isCurrentUserAttending: outingAttendanceService.isAttending(
-                    ownerID: ownerID,
+                    eventIDValue: eventID,
                     publicationIDValue: plan.publicationIDValue
                 ),
                 isAttendanceUpdating:
-                    outingAttendanceService.updatingOwnerIDs.contains(ownerID)
+                    outingAttendanceService.updatingEventIDs.contains(eventID)
             )
         }
     }
 
     private func reconcileSelectedOutingPlan() {
-        guard let selectedOutingPlanOwnerID,
-              mapOutingPlans[selectedOutingPlanOwnerID] == nil else {
+        guard let selectedOutingPlanEventID,
+              mapOutingPlans[selectedOutingPlanEventID] == nil else {
             return
         }
-        self.selectedOutingPlanOwnerID = nil
+        self.selectedOutingPlanEventID = nil
     }
 
     private func synchronizeOutingPlanObservation() {
@@ -913,7 +880,7 @@ struct ContentView: View {
             outingPlanService.stopObserving()
             return
         }
-        outingPlanService.observePlans(
+        outingPlanService.observeEvents(
             forAcceptedFriendUserIDs: acceptedFriendUserIDs
         )
     }
@@ -924,28 +891,27 @@ struct ContentView: View {
             return
         }
         outingAttendanceService.observe(
-            plans: outingPlanService.activePlans,
+            events: outingPlanService.events,
             acceptedFriendUserIDs: acceptedFriendUserIDs
         )
     }
 
-    private func toggleOutingAttendance(for ownerID: String) {
-        guard acceptedFriendUserIDs.contains(ownerID),
-              let plan = outingPlanService.activePlans[ownerID],
-              plan.isActive() else {
-            outingAttendanceErrorMessage = "Cette sortie n’est plus disponible."
+    private func toggleOutingAttendance(eventID: String) {
+        guard let event = outingPlanService.events[eventID],
+              acceptedFriendUserIDs.contains(event.ownerID) else {
+            outingAttendanceErrorMessage = "Cet événement n’est plus disponible."
             return
         }
 
         let shouldAttend = !outingAttendanceService.isAttending(
-            ownerID: ownerID,
-            publicationIDValue: plan.publicationIDValue
+            eventIDValue: eventID,
+            publicationIDValue: event.publicationIDValue
         )
         Task {
             do {
                 try await outingAttendanceService.setAttending(
                     shouldAttend,
-                    plan: plan
+                    event: event
                 )
             } catch let error as OutingAttendanceServiceError {
                 outingAttendanceErrorMessage = error.errorDescription
@@ -965,8 +931,9 @@ struct ContentView: View {
 
         Task {
             do {
-                _ = try await outingPlanService.refreshPlanFromNotification(
+                _ = try await outingPlanService.refreshEventFromNotification(
                     ownerID: route.ownerID,
+                    eventIDValue: route.eventIDValue,
                     publicationID: route.publicationID
                 )
 
@@ -980,7 +947,7 @@ struct ContentView: View {
                 }
 
                 selectedTab = .explore
-                centerOnOutingPlanOwnerID = route.ownerID
+                centerOnOutingPlanEventID = route.eventIDValue
                 notificationService.consume(route)
             } catch is OutingPlanServiceError {
                 notificationService.consume(route)

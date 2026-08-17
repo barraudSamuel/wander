@@ -769,17 +769,12 @@ final class FriendSyncService: ObservableObject {
             from: db.collectionGroup("attendees")
                 .whereField("participantId", isEqualTo: userID)
         )
-        try await deleteDocumentsInBatches(
-            from: db.collection("plans")
-                .document(userID)
-                .collection("attendees")
-        )
+        try await deleteOwnedEvents(for: userID)
         try await deleteDocumentsInBatches(
             from: db.collection("friendships")
                 .whereField("participants", arrayContains: userID)
         )
         try await db.collection("locations").document(userID).delete()
-        try await db.collection("plans").document(userID).delete()
 
         guard profileSnapshot.exists else { return }
         guard let friendCode, Self.isValidFriendCode(friendCode) else {
@@ -2184,6 +2179,26 @@ final class FriendSyncService: ObservableObject {
                 batch.deleteDocument(document.reference)
             }
             try await batch.commit()
+        }
+    }
+
+    private func deleteOwnedEvents(for userID: String) async throws {
+        let events = db.collection("users")
+            .document(userID)
+            .collection("events")
+
+        while true {
+            let snapshot = try await events
+                .limit(to: 100)
+                .getDocuments(source: .server)
+            guard !snapshot.documents.isEmpty else { return }
+
+            for event in snapshot.documents {
+                try await deleteDocumentsInBatches(
+                    from: event.reference.collection("attendees")
+                )
+                try await event.reference.delete()
+            }
         }
     }
 

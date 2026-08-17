@@ -9,25 +9,29 @@ import { getMessaging } from "firebase-admin/messaging";
 import { logger } from "firebase-functions";
 import {
   onDocumentCreated,
+  onDocumentDeleted,
+  onDocumentUpdated,
   onDocumentWritten,
 } from "firebase-functions/v2/firestore";
 import {
   DeviceTargetCandidate,
   acceptedRecipientIDs,
+  buildEventAttendanceNotificationContent,
+  buildEventNotificationContent,
   buildFriendRequestNotificationContent,
-  buildNotificationContent,
-  buildOutingAttendanceNotificationContent,
   deduplicateTargetsByToken,
+  eventAttendanceDispatchID,
+  eventAttendanceNotificationData,
+  eventAttendanceRecipientIDs,
+  eventDispatchID,
+  eventNotificationData,
   friendRequestDispatchID,
   friendRequestNotificationData,
   friendRequestRecipientID,
   isPermanentMessagingError,
+  isValidEventID,
   isValidPublicationID,
   isValidUserID,
-  notificationData,
-  outingAttendanceDispatchID,
-  outingAttendanceNotificationData,
-  outingAttendanceRecipientIDs,
 } from "./notificationLogic.js";
 
 initializeApp();
@@ -43,53 +47,61 @@ interface ClaimedTarget extends DeviceTarget {
   claimReference: DocumentReference;
 }
 
-export const notifyAcceptedFriendsOfOuting = onDocumentWritten(
+export const notifyAcceptedFriendsOfEvent = onDocumentWritten(
   {
-    document: "plans/{ownerId}",
+    document: "users/{ownerId}/events/{eventId}",
     region: "asia-northeast3",
     maxInstances: 10,
   },
   async (event) => {
     const ownerID = event.params.ownerId;
+    const eventID = event.params.eventId;
     const after = event.data?.after;
-    if (!after?.exists || !isValidUserID(ownerID)) {
+    if (
+      !after?.exists ||
+      !isValidUserID(ownerID) ||
+      !isValidEventID(eventID)
+    ) {
       return;
     }
 
-    const plan = after.data();
-    if (!plan) {
+    const userEvent = after.data();
+    if (!userEvent) {
       return;
     }
-    const publicationID = plan.publicationId;
+    const publicationID = userEvent.publicationId;
     const previousPublicationID = event.data?.before.exists
       ? event.data.before.data()?.publicationId
       : undefined;
 
     if (
+      userEvent.ownerId !== ownerID ||
+      userEvent.eventId !== eventID ||
       typeof publicationID !== "string" ||
       !isValidPublicationID(publicationID) ||
       publicationID === previousPublicationID ||
-      plan.ownerId !== ownerID ||
-      typeof plan.displayName !== "string" ||
-      typeof plan.placeName !== "string" ||
-      !(plan.plannedAt instanceof Timestamp) ||
-      !(plan.expiresAt instanceof Timestamp) ||
-      plan.expiresAt.toMillis() <= Date.now() ||
-      typeof plan.timeZoneIdentifier !== "string"
+      typeof userEvent.displayName !== "string" ||
+      typeof userEvent.placeName !== "string" ||
+      !(userEvent.plannedAt instanceof Timestamp) ||
+      typeof userEvent.timeZoneIdentifier !== "string"
     ) {
       return;
     }
 
-    const content = buildNotificationContent({
-      displayName: plan.displayName,
-      placeName: plan.placeName,
-      plannedAt: plan.plannedAt.toDate(),
-      timeZoneIdentifier: plan.timeZoneIdentifier,
+    const content = buildEventNotificationContent({
+      displayName: userEvent.displayName,
+      placeName: userEvent.placeName,
+      plannedAt: userEvent.plannedAt.toDate(),
+      timeZoneIdentifier: userEvent.timeZoneIdentifier,
     });
-    const data = notificationData(ownerID, publicationID);
+    const data = eventNotificationData(
+      ownerID,
+      eventID,
+      publicationID,
+    );
     const dispatchReference = database
       .collection("notificationDispatches")
-      .doc(`${ownerID}__${publicationID}`);
+      .doc(eventDispatchID(ownerID, eventID, publicationID));
 
     const friendshipSnapshot = await database
       .collection("friendships")
@@ -105,6 +117,8 @@ export const notifyAcceptedFriendsOfOuting = onDocumentWritten(
       content,
       data,
       {
+        type: "eventPublished",
+        eventId: eventID,
         ownerId: ownerID,
         publicationId: publicationID,
       },
@@ -195,18 +209,24 @@ export const notifyRecipientOfFriendRequest = onDocumentCreated(
   },
 );
 
-export const notifyOutingParticipantsOfAttendance = onDocumentCreated(
+export const notifyEventParticipantsOfAttendance = onDocumentCreated(
   {
-    document: "plans/{ownerId}/attendees/{attendanceId}",
+    document: "users/{ownerId}/events/{eventId}/attendees/{attendanceId}",
     region: "asia-northeast3",
     maxInstances: 10,
   },
   async (event) => {
     const ownerID = event.params.ownerId;
+    const eventID = event.params.eventId;
     const attendanceID = event.params.attendanceId;
     const createdSnapshot = event.data;
     const createdAttendance = createdSnapshot?.data();
-    if (!createdSnapshot || !createdAttendance || !isValidUserID(ownerID)) {
+    if (
+      !createdSnapshot ||
+      !createdAttendance ||
+      !isValidUserID(ownerID) ||
+      !isValidEventID(eventID)
+    ) {
       return;
     }
 
@@ -215,55 +235,51 @@ export const notifyOutingParticipantsOfAttendance = onDocumentCreated(
     const displayName = createdAttendance.displayName;
     const avatarID = createdAttendance.avatarID;
     const joinedAt = createdAttendance.joinedAt;
-    const expiresAt = createdAttendance.expiresAt;
     if (
+      createdAttendance.eventId !== eventID ||
       typeof participantID !== "string" ||
       !isValidUserID(participantID) ||
-      participantID === ownerID ||
       typeof publicationID !== "string" ||
       !isValidPublicationID(publicationID) ||
       attendanceID !== `${publicationID}__${participantID}` ||
       typeof displayName !== "string" ||
       typeof avatarID !== "string" ||
-      !(joinedAt instanceof Timestamp) ||
-      !(expiresAt instanceof Timestamp) ||
-      joinedAt.toMillis() >= expiresAt.toMillis() ||
-      expiresAt.toMillis() <= Date.now()
+      !(joinedAt instanceof Timestamp)
     ) {
       return;
     }
 
-    const planReference = database.collection("plans").doc(ownerID);
+    const eventReference = database
+      .collection("users")
+      .doc(ownerID)
+      .collection("events")
+      .doc(eventID);
     const profileReference = database.collection("users").doc(participantID);
-    const [currentAttendanceSnapshot, planSnapshot, profileSnapshot] =
+    const [currentAttendanceSnapshot, eventSnapshot, profileSnapshot] =
       await Promise.all([
         createdSnapshot.ref.get(),
-        planReference.get(),
+        eventReference.get(),
         profileReference.get(),
       ]);
     const currentAttendance = currentAttendanceSnapshot.data();
     const currentJoinedAt = currentAttendance?.joinedAt;
-    const currentExpiresAt = currentAttendance?.expiresAt;
-    const plan = planSnapshot.data();
-    const planExpiresAt = plan?.expiresAt;
+    const userEvent = eventSnapshot.data();
     const profile = profileSnapshot.data();
     if (
       !currentAttendanceSnapshot.exists ||
+      currentAttendance?.eventId !== eventID ||
       currentAttendance?.participantId !== participantID ||
       currentAttendance?.publicationId !== publicationID ||
       currentAttendance?.displayName !== displayName ||
       currentAttendance?.avatarID !== avatarID ||
       !(currentJoinedAt instanceof Timestamp) ||
       !currentJoinedAt.isEqual(joinedAt) ||
-      !(currentExpiresAt instanceof Timestamp) ||
-      !currentExpiresAt.isEqual(expiresAt) ||
-      !planSnapshot.exists ||
-      plan?.ownerId !== ownerID ||
-      plan?.publicationId !== publicationID ||
-      typeof plan?.placeName !== "string" ||
-      !(planExpiresAt instanceof Timestamp) ||
-      !planExpiresAt.isEqual(expiresAt) ||
-      planExpiresAt.toMillis() <= Date.now() ||
+      !eventSnapshot.exists ||
+      userEvent?.eventId !== eventID ||
+      userEvent?.ownerId !== ownerID ||
+      participantID === ownerID ||
+      userEvent?.publicationId !== publicationID ||
+      typeof userEvent?.placeName !== "string" ||
       !profileSnapshot.exists ||
       profile?.displayName !== displayName ||
       profile?.avatarID !== avatarID
@@ -283,21 +299,19 @@ export const notifyOutingParticipantsOfAttendance = onDocumentCreated(
       return;
     }
 
-    const attendanceSnapshot = await planReference
+    const attendanceSnapshot = await eventReference
       .collection("attendees")
       .where("publicationId", "==", publicationID)
       .get();
     const validAttendances = attendanceSnapshot.docs.flatMap((document) => {
       const attendance = document.data();
       const candidateParticipantID = attendance.participantId;
-      const candidateExpiresAt = attendance.expiresAt;
       if (
+        attendance.eventId !== eventID ||
         typeof candidateParticipantID !== "string" ||
         !isValidUserID(candidateParticipantID) ||
         document.id !== `${publicationID}__${candidateParticipantID}` ||
-        attendance.publicationId !== publicationID ||
-        !(candidateExpiresAt instanceof Timestamp) ||
-        !candidateExpiresAt.isEqual(planExpiresAt)
+        attendance.publicationId !== publicationID
       ) {
         return [];
       }
@@ -309,27 +323,34 @@ export const notifyOutingParticipantsOfAttendance = onDocumentCreated(
 
     let content;
     try {
-      content = buildOutingAttendanceNotificationContent(
+      content = buildEventAttendanceNotificationContent(
         displayName,
-        plan.placeName,
+        userEvent.placeName,
       );
     } catch {
-      logger.warn("Attendance notification skipped for invalid visible text.");
+      logger.warn(
+        "Event attendance notification skipped for invalid visible text.",
+      );
       return;
     }
 
-    const recipientIDs = outingAttendanceRecipientIDs(
+    const recipientIDs = eventAttendanceRecipientIDs(
       ownerID,
       participantID,
       publicationID,
       acceptedFriendIDs,
       validAttendances,
     );
-    const data = outingAttendanceNotificationData(ownerID, publicationID);
+    const data = eventAttendanceNotificationData(
+      ownerID,
+      eventID,
+      publicationID,
+    );
     const dispatchReference = database
       .collection("notificationDispatches")
-      .doc(outingAttendanceDispatchID(
+      .doc(eventAttendanceDispatchID(
         ownerID,
+        eventID,
         publicationID,
         participantID,
         joinedAt.seconds,
@@ -342,7 +363,8 @@ export const notifyOutingParticipantsOfAttendance = onDocumentCreated(
       content,
       data,
       {
-        type: "outingAttendanceCreated",
+        type: "eventAttendanceCreated",
+        eventId: eventID,
         ownerId: ownerID,
         publicationId: publicationID,
         participantId: participantID,
@@ -351,6 +373,76 @@ export const notifyOutingParticipantsOfAttendance = onDocumentCreated(
     );
   },
 );
+
+export const cleanupEventAttendances = onDocumentDeleted(
+  {
+    document: "users/{ownerId}/events/{eventId}",
+    region: "asia-northeast3",
+    maxInstances: 10,
+  },
+  async (event) => {
+    const deletedEvent = event.data;
+    if (!deletedEvent) {
+      return;
+    }
+
+    await deleteEventAttendances(deletedEvent.ref);
+  },
+);
+
+export const cleanupReplacedEventAttendances = onDocumentUpdated(
+  {
+    document: "users/{ownerId}/events/{eventId}",
+    region: "asia-northeast3",
+    maxInstances: 10,
+  },
+  async (event) => {
+    const change = event.data;
+    if (!change) {
+      return;
+    }
+
+    const beforePublicationID = change.before.data().publicationId;
+    const afterPublicationID = change.after.data().publicationId;
+    if (
+      typeof beforePublicationID !== "string" ||
+      !isValidPublicationID(beforePublicationID) ||
+      typeof afterPublicationID !== "string" ||
+      !isValidPublicationID(afterPublicationID) ||
+      beforePublicationID === afterPublicationID
+    ) {
+      return;
+    }
+
+    await deleteEventAttendances(
+      change.after.ref,
+      beforePublicationID,
+    );
+  },
+);
+
+async function deleteEventAttendances(
+  eventReference: DocumentReference,
+  publicationID?: string,
+): Promise<void> {
+  const attendees = eventReference.collection("attendees");
+  const attendanceQuery = publicationID
+    ? attendees.where("publicationId", "==", publicationID)
+    : attendees;
+
+  while (true) {
+    const snapshot = await attendanceQuery.limit(maximumBatchSize).get();
+    if (snapshot.empty) {
+      return;
+    }
+
+    const batch = database.batch();
+    for (const document of snapshot.docs) {
+      batch.delete(document.ref);
+    }
+    await batch.commit();
+  }
+}
 
 async function dispatchNotification(
   dispatchReference: DocumentReference,

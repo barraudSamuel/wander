@@ -10,21 +10,6 @@ import UIKit
 
 @MainActor
 struct OutingPlanComposerView: View {
-    private static let maximumSearchResultCount = 6
-    private static let defaultCoordinate = CLLocationCoordinate2D(
-        latitude: 10.7769,
-        longitude: 106.7009
-    )
-    private static let defaultSpan = MKCoordinateSpan(
-        latitudeDelta: 0.025,
-        longitudeDelta: 0.025
-    )
-
-    private struct SearchResult: Identifiable {
-        let id = UUID()
-        let mapItem: MKMapItem
-    }
-
     private enum LoadingState {
         case loading
         case loaded
@@ -38,47 +23,47 @@ struct OutingPlanComposerView: View {
 
     @State private var loadingState: LoadingState = .loading
     @State private var existingPlan: OutingPlan?
-    @State private var searchQuery = ""
-    @State private var searchResults: [SearchResult] = []
-    @State private var searchErrorMessage: String?
     @State private var selectedCoordinate: CLLocationCoordinate2D?
     @State private var placeName = ""
     @State private var address: String?
     @State private var plannedAt: Date
-    @State private var mapPosition: MapCameraPosition
-    @State private var visibleRegion: MKCoordinateRegion
-    @State private var isSearching = false
     @State private var isResolvingAddress = false
     @State private var isWriting = false
     @State private var writeErrorMessage: String?
     @State private var cancellationConfirmationVisible = false
-    @State private var activeSearch: MKLocalSearch?
     @State private var activeReverseGeocoding: MKReverseGeocodingRequest?
-    @State private var searchRequestID: UUID?
     @State private var reverseGeocodingRequestID: UUID?
 
     private let planningWindowStart: Date
     private let service: OutingPlanService
+    private let eventIDToLoad: String?
 
     init(
         displayName: String,
-        initialCoordinate: CLLocationCoordinate2D?
+        initialCoordinate: CLLocationCoordinate2D?,
+        editingEvent: OutingPlan? = nil
     ) {
         let referenceDate = Date()
-        let coordinate = initialCoordinate ?? Self.defaultCoordinate
-        let region = MKCoordinateRegion(
-            center: coordinate,
-            span: Self.defaultSpan
-        )
+        let coordinate = editingEvent?.coordinate ?? initialCoordinate
 
         self.displayName = displayName
         self.planningWindowStart = referenceDate
         self.service = OutingPlanService.shared
-        _plannedAt = State(
-            initialValue: referenceDate.addingTimeInterval(60 * 60)
+        self.eventIDToLoad = editingEvent?.eventIDValue
+        _loadingState = State(
+            initialValue: editingEvent == nil ? .loaded : .loading
         )
-        _mapPosition = State(initialValue: .region(region))
-        _visibleRegion = State(initialValue: region)
+        _existingPlan = State(initialValue: editingEvent)
+        _selectedCoordinate = State(initialValue: coordinate)
+        _placeName = State(
+            initialValue: editingEvent?.placeName
+                ?? (coordinate == nil ? "" : "Lieu sélectionné")
+        )
+        _address = State(initialValue: editingEvent?.address)
+        _plannedAt = State(
+            initialValue: editingEvent?.plannedAt
+                ?? referenceDate.addingTimeInterval(60 * 60)
+        )
     }
 
     var body: some View {
@@ -86,14 +71,14 @@ struct OutingPlanComposerView: View {
             Group {
                 switch loadingState {
                 case .loading:
-                    ProgressView("Chargement de ta sortie…")
+                    ProgressView("Chargement de ton événement…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .loaded:
                     composerForm
                 case .failed(let message):
                     ContentUnavailableView {
                         Label(
-                            "Sortie indisponible",
+                            "Événement indisponible",
                             systemImage: "icloud.slash"
                         )
                     } description: {
@@ -101,7 +86,7 @@ struct OutingPlanComposerView: View {
                     } actions: {
                         Button("Réessayer") {
                             Task {
-                                await loadCurrentPlan()
+                                await loadEvent()
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -109,7 +94,7 @@ struct OutingPlanComposerView: View {
                 }
             }
             .navigationTitle(
-                existingPlan == nil ? "Dire où je vais" : "Modifier ma sortie"
+                existingPlan == nil ? "Nouvel événement" : "Modifier l’événement"
             )
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -132,115 +117,28 @@ struct OutingPlanComposerView: View {
         }
         .interactiveDismissDisabled(isWriting)
         .task {
-            await loadCurrentPlan()
+            await loadEvent()
         }
         .onDisappear {
-            cancelOutstandingMapRequests()
+            cancelReverseGeocoding()
         }
         .confirmationDialog(
-            "Annuler cette sortie ?",
+            "Annuler cet événement ?",
             isPresented: $cancellationConfirmationVisible,
             titleVisibility: .visible
         ) {
-            Button("Annuler la sortie", role: .destructive) {
+            Button("Annuler l’événement", role: .destructive) {
                 cancelPlan()
             }
-            Button("Garder la sortie", role: .cancel) {}
+            Button("Garder l’événement", role: .cancel) {}
         } message: {
-            Text("La sortie publiée sera supprimée.")
+            Text("L’événement publié sera supprimé.")
         }
     }
 
     private var composerForm: some View {
         Form {
             Section {
-                HStack {
-                    TextField(
-                        "Établissement ou adresse",
-                        text: $searchQuery
-                    )
-                    .textInputAutocapitalization(.words)
-                    .submitLabel(.search)
-                    .onSubmit {
-                        startSearch()
-                    }
-
-                    if isSearching {
-                        ProgressView()
-                    } else {
-                        Button("Rechercher") {
-                            startSearch()
-                        }
-                        .disabled(trimmedSearchQuery.isEmpty)
-                    }
-                }
-
-                if let searchErrorMessage {
-                    Label(
-                        searchErrorMessage,
-                        systemImage: "exclamationmark.triangle"
-                    )
-                    .foregroundStyle(.secondary)
-                }
-
-                ForEach(searchResults) { result in
-                    Button {
-                        select(result.mapItem)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(resultTitle(for: result.mapItem))
-                                .foregroundStyle(.primary)
-
-                            if let resultAddress = formattedAddress(
-                                for: result.mapItem
-                            ) {
-                                Text(resultAddress)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-                }
-            } header: {
-                Text("Rechercher un lieu")
-            } footer: {
-                Text("La recherche utilise uniquement la zone visible sur la carte.")
-            }
-
-            Section("Choisir sur la carte") {
-                MapReader { proxy in
-                    Map(position: $mapPosition) {
-                        if let selectedCoordinate {
-                            Marker(
-                                placeName.isEmpty
-                                    ? "Lieu sélectionné"
-                                    : placeName,
-                                coordinate: selectedCoordinate
-                            )
-                        }
-                    }
-                    .mapStyle(.standard)
-                    .onMapCameraChange(frequency: .onEnd) { context in
-                        visibleRegion = context.region
-                    }
-                    .simultaneousGesture(
-                        SpatialTapGesture()
-                            .onEnded { event in
-                                guard let coordinate = proxy.convert(
-                                    event.location,
-                                    from: .local
-                                ) else {
-                                    return
-                                }
-                                select(coordinate)
-                            }
-                    )
-                }
-                .frame(height: 260)
-                .listRowInsets(EdgeInsets())
-
                 if let selectedCoordinate {
                     LabeledContent("Lieu") {
                         VStack(alignment: .trailing, spacing: 3) {
@@ -267,11 +165,13 @@ struct OutingPlanComposerView: View {
                     }
                 } else {
                     Label(
-                        "Recherche un lieu ou touche la carte.",
-                        systemImage: "hand.tap"
+                        "Le point sélectionné n’est plus disponible.",
+                        systemImage: "mappin.slash"
                     )
                     .foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("Lieu")
             }
 
             Section {
@@ -312,7 +212,7 @@ struct OutingPlanComposerView: View {
                 Text("Notifications")
             } footer: {
                 Text(
-                    "Ce réglage ne bloque jamais la publication. Il permet de recevoir les demandes d’amis et les prochaines sorties de tes amis acceptés."
+                    "Ce réglage ne bloque jamais la publication. Il permet de recevoir les demandes d’amis et les prochains événements de tes amis acceptés."
                 )
             }
 
@@ -328,7 +228,7 @@ struct OutingPlanComposerView: View {
 
             if existingPlan != nil {
                 Section {
-                    Button("Annuler cette sortie", role: .destructive) {
+                    Button("Annuler cet événement", role: .destructive) {
                         cancellationConfirmationVisible = true
                     }
                     .disabled(isWriting)
@@ -345,10 +245,6 @@ struct OutingPlanComposerView: View {
                 }
             }
         }
-    }
-
-    private var trimmedSearchQuery: String {
-        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var planningDateRange: ClosedRange<Date> {
@@ -387,21 +283,30 @@ struct OutingPlanComposerView: View {
         )
     }
 
-    private func loadCurrentPlan() async {
+    private func loadEvent() async {
+        guard let eventIDToLoad else {
+            loadingState = .loaded
+            if let selectedCoordinate {
+                resolveAddress(for: selectedCoordinate)
+            }
+            return
+        }
         loadingState = .loading
         writeErrorMessage = nil
 
         do {
-            let plan = try await service.fetchCurrentPlan()
+            guard let plan = try await service.fetchEvent(
+                eventIDValue: eventIDToLoad
+            ) else {
+                loadingState = .failed("Cet événement n’existe plus.")
+                return
+            }
             existingPlan = plan
 
-            if let plan {
-                selectedCoordinate = plan.coordinate
-                placeName = plan.placeName
-                address = plan.address
-                plannedAt = validPlanningDate(plan.plannedAt)
-                centerMap(on: plan.coordinate)
-            }
+            selectedCoordinate = plan.coordinate
+            placeName = plan.placeName
+            address = plan.address
+            plannedAt = validPlanningDate(plan.plannedAt)
 
             loadingState = .loaded
         } catch {
@@ -417,112 +322,6 @@ struct OutingPlanComposerView: View {
             )
         }
         return date
-    }
-
-    private func startSearch() {
-        let query = trimmedSearchQuery
-        guard !query.isEmpty else { return }
-
-        activeSearch?.cancel()
-        let requestID = UUID()
-        searchRequestID = requestID
-        searchErrorMessage = nil
-        searchResults = []
-        isSearching = true
-
-        let request = MKLocalSearch.Request(
-            naturalLanguageQuery: query,
-            region: visibleRegion
-        )
-        request.regionPriority = .required
-        request.resultTypes = [.address, .pointOfInterest]
-
-        let search = MKLocalSearch(request: request)
-        activeSearch = search
-        search.start { response, error in
-            guard searchRequestID == requestID else { return }
-
-            isSearching = false
-            activeSearch = nil
-            searchRequestID = nil
-
-            if let error {
-                searchErrorMessage = messageForSearchError(error)
-                return
-            }
-
-            let mapItems = response?.mapItems ?? []
-            searchResults = mapItems
-                .prefix(Self.maximumSearchResultCount)
-                .map(SearchResult.init(mapItem:))
-
-            if searchResults.isEmpty {
-                searchErrorMessage = "Aucun lieu trouvé dans cette zone."
-            }
-        }
-    }
-
-    private func messageForSearchError(_ error: Error) -> String {
-        if let networkMessage = networkSearchErrorMessage(for: error) {
-            return networkMessage
-        }
-
-        if let mapError = error as? MKError {
-            switch mapError.code {
-            case .placemarkNotFound:
-                return "Aucun lieu trouvé dans cette zone. Déplace la carte ou précise l’adresse."
-            case .loadingThrottled:
-                return "Trop de recherches ont été lancées. Patiente un instant puis réessaie."
-            case .unknown, .serverFailure, .directionsNotFound, .decodingFailed:
-                return "Apple Maps est momentanément indisponible. Réessaie."
-            @unknown default:
-                break
-            }
-        }
-
-        return "La recherche a échoué. Réessaie."
-    }
-
-    private func networkSearchErrorMessage(for error: Error) -> String? {
-        let nsError = error as NSError
-
-        if nsError.domain == NSURLErrorDomain {
-            switch nsError.code {
-            case NSURLErrorNotConnectedToInternet:
-                return "La recherche nécessite une connexion internet."
-            case NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut:
-                return "La connexion a été interrompue. Réessaie."
-            default:
-                break
-            }
-        }
-
-        guard let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error else {
-            return nil
-        }
-        return networkSearchErrorMessage(for: underlyingError)
-    }
-
-    private func select(_ mapItem: MKMapItem) {
-        cancelReverseGeocoding()
-
-        let coordinate = mapItem.location.coordinate
-        selectedCoordinate = coordinate
-        placeName = resultTitle(for: mapItem)
-        address = formattedAddress(for: mapItem)
-        writeErrorMessage = nil
-        centerMap(on: coordinate)
-    }
-
-    private func select(_ coordinate: CLLocationCoordinate2D) {
-        guard CLLocationCoordinate2DIsValid(coordinate) else { return }
-
-        cancelReverseGeocoding()
-        selectedCoordinate = coordinate
-        placeName = "Lieu sélectionné"
-        address = nil
-        writeErrorMessage = nil
-        resolveAddress(for: coordinate)
     }
 
     private func resolveAddress(for coordinate: CLLocationCoordinate2D) {
@@ -557,7 +356,7 @@ struct OutingPlanComposerView: View {
 
         isWriting = true
         writeErrorMessage = nil
-        cancelOutstandingMapRequests()
+        cancelReverseGeocoding()
 
         let draft = OutingPlanDraft(
             displayName: publicationDisplayName,
@@ -570,7 +369,10 @@ struct OutingPlanComposerView: View {
 
         Task {
             do {
-                _ = try await service.publish(draft)
+                _ = try await service.publish(
+                    draft,
+                    eventIDValue: existingPlan?.eventIDValue
+                )
                 dismiss()
             } catch {
                 isWriting = false
@@ -582,34 +384,18 @@ struct OutingPlanComposerView: View {
     private func cancelPlan() {
         isWriting = true
         writeErrorMessage = nil
-        cancelOutstandingMapRequests()
+        cancelReverseGeocoding()
 
         Task {
             do {
-                try await service.cancelCurrentPlan()
+                guard let eventID = existingPlan?.eventIDValue else { return }
+                try await service.cancel(eventIDValue: eventID)
                 dismiss()
             } catch {
                 isWriting = false
                 writeErrorMessage = error.localizedDescription
             }
         }
-    }
-
-    private func centerMap(on coordinate: CLLocationCoordinate2D) {
-        let region = MKCoordinateRegion(
-            center: coordinate,
-            span: Self.defaultSpan
-        )
-        mapPosition = .region(region)
-        visibleRegion = region
-    }
-
-    private func cancelOutstandingMapRequests() {
-        activeSearch?.cancel()
-        activeSearch = nil
-        searchRequestID = nil
-        isSearching = false
-        cancelReverseGeocoding()
     }
 
     private func openSettings() {

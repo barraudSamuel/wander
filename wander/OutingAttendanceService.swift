@@ -13,25 +13,30 @@ final class OutingAttendanceService: ObservableObject {
 
     @Published private(set) var currentUserAttendances:
         [String: OutingAttendance] = [:]
-    @Published private(set) var ownPlanAttendances: [OutingAttendance] = []
-    @Published private(set) var joinedPlanAttendances:
+    @Published private(set) var ownEventAttendances:
         [String: [OutingAttendance]] = [:]
-    @Published private(set) var updatingOwnerIDs: Set<String> = []
+    @Published private(set) var joinedEventAttendances:
+        [String: [OutingAttendance]] = [:]
+    @Published private(set) var updatingEventIDs: Set<String> = []
 
     private let database: Firestore
     private let currentUserID: @MainActor () -> String?
     private var observedCurrentUserID: String?
     private var acceptedFriendUserIDs: Set<String> = []
+
     private var attendanceListeners: [String: ListenerRegistration] = [:]
     private var attendanceListenerTokens: [String: UUID] = [:]
     private var observedPublicationIDs: [String: String] = [:]
-    private var joinedPlanListeners: [String: ListenerRegistration] = [:]
-    private var joinedPlanListenerTokens: [String: UUID] = [:]
-    private var joinedPlanPublicationIDs: [String: String] = [:]
+
+    private var joinedEventListeners: [String: ListenerRegistration] = [:]
+    private var joinedEventListenerTokens: [String: UUID] = [:]
+    private var joinedEventPublicationIDs: [String: String] = [:]
+
+    private var ownEventListeners: [String: ListenerRegistration] = [:]
+    private var ownEventListenerTokens: [String: UUID] = [:]
+    private var ownEventPublicationIDs: [String: String] = [:]
+
     private var updateTokens: [String: UUID] = [:]
-    private var ownPlanListener: ListenerRegistration?
-    private var ownPlanListenerToken: UUID?
-    private var ownPlanPublicationID: String?
 
     init(
         database: Firestore = Firestore.firestore(),
@@ -45,14 +50,14 @@ final class OutingAttendanceService: ObservableObject {
 
     deinit {
         attendanceListeners.values.forEach { $0.remove() }
-        joinedPlanListeners.values.forEach { $0.remove() }
-        ownPlanListener?.remove()
+        joinedEventListeners.values.forEach { $0.remove() }
+        ownEventListeners.values.forEach { $0.remove() }
     }
 
     // MARK: - Observation
 
     func observe(
-        plans: [String: OutingPlan],
+        events: [String: OutingPlan],
         acceptedFriendUserIDs: Set<String>
     ) {
         guard let authenticatedUserID = currentUserID(),
@@ -67,39 +72,23 @@ final class OutingAttendanceService: ObservableObject {
         }
         self.acceptedFriendUserIDs = acceptedFriendUserIDs
 
-        let friendPlans = plans.filter { ownerID, plan in
-            ownerID != authenticatedUserID
-                && acceptedFriendUserIDs.contains(ownerID)
-                && plan.isActive()
+        let friendEvents = events.filter { _, event in
+            event.ownerID != authenticatedUserID
+                && acceptedFriendUserIDs.contains(event.ownerID)
         }
-        let desiredOwnerIDs = Set(friendPlans.keys)
-        let removedOwnerIDs = Set(attendanceListeners.keys)
-            .subtracting(desiredOwnerIDs)
+        reconcileFriendEventListeners(
+            with: friendEvents,
+            participantID: authenticatedUserID
+        )
 
-        for ownerID in removedOwnerIDs {
-            removeAttendanceListener(for: ownerID)
+        let ownEvents = events.filter { _, event in
+            event.ownerID == authenticatedUserID
         }
-
-        for ownerID in desiredOwnerIDs.sorted() {
-            guard let plan = friendPlans[ownerID] else { continue }
-            if observedPublicationIDs[ownerID] != plan.publicationIDValue {
-                removeAttendanceListener(for: ownerID)
-                addAttendanceListener(
-                    for: plan,
-                    participantID: authenticatedUserID
-                )
-            }
-            reconcileJoinedPlanListener(
-                for: plan,
-                participantID: authenticatedUserID
-            )
-        }
-
-        reconcileOwnPlanListener(
-            with: plans[authenticatedUserID],
+        reconcileOwnEventListeners(
+            with: ownEvents,
             ownerID: authenticatedUserID
         )
-        filterPublishedState()
+        filterPublishedState(validEvents: events)
     }
 
     func stopObserving() {
@@ -107,56 +96,53 @@ final class OutingAttendanceService: ObservableObject {
         observedCurrentUserID = nil
         acceptedFriendUserIDs = []
         updateTokens = [:]
-        updatingOwnerIDs = []
+        updatingEventIDs = []
     }
 
     func isAttending(
-        ownerID: String,
+        eventIDValue: String,
         publicationIDValue: String
     ) -> Bool {
-        guard let attendance = currentUserAttendances[ownerID] else {
+        guard let attendance = currentUserAttendances[eventIDValue] else {
             return false
         }
-        return attendance.publicationIDValue == publicationIDValue
-            && attendance.isActive()
+        return attendance.eventIDValue == eventIDValue
+            && attendance.publicationIDValue == publicationIDValue
     }
 
-    func visibleAttendances(
-        ownerID: String,
-        publicationIDValue: String
-    ) -> [OutingAttendance] {
-        let attendances = ownerID == currentUserID()
-            ? ownPlanAttendances
-            : joinedPlanAttendances[ownerID] ?? []
+    func visibleAttendances(for event: OutingPlan) -> [OutingAttendance] {
+        let attendances = event.ownerID == currentUserID()
+            ? ownEventAttendances[event.eventIDValue] ?? []
+            : joinedEventAttendances[event.eventIDValue] ?? []
         return attendances.filter {
-            $0.publicationIDValue == publicationIDValue && $0.isActive()
+            $0.eventID == event.eventID
+                && $0.publicationID == event.publicationID
         }
     }
 
     // MARK: - Mutation
 
-    func setAttending(_ shouldAttend: Bool, plan: OutingPlan) async throws {
+    func setAttending(_ shouldAttend: Bool, event: OutingPlan) async throws {
         let participantID = try authenticatedUserID()
-        guard plan.ownerID != participantID,
-              acceptedFriendUserIDs.contains(plan.ownerID),
-              plan.isActive() else {
-            throw OutingAttendanceServiceError.planUnavailable
+        let eventIDValue = event.eventIDValue
+        guard event.ownerID != participantID,
+              acceptedFriendUserIDs.contains(event.ownerID) else {
+            throw OutingAttendanceServiceError.eventUnavailable
         }
-        guard !updatingOwnerIDs.contains(plan.ownerID) else { return }
+        guard !updatingEventIDs.contains(eventIDValue) else { return }
 
         let updateToken = UUID()
-        updateTokens[plan.ownerID] = updateToken
-        updatingOwnerIDs.insert(plan.ownerID)
+        updateTokens[eventIDValue] = updateToken
+        updatingEventIDs.insert(eventIDValue)
         defer {
-            if updateTokens[plan.ownerID] == updateToken {
-                updateTokens.removeValue(forKey: plan.ownerID)
-                updatingOwnerIDs.remove(plan.ownerID)
+            if updateTokens[eventIDValue] == updateToken {
+                updateTokens.removeValue(forKey: eventIDValue)
+                updatingEventIDs.remove(eventIDValue)
             }
         }
 
         let reference = try attendanceReference(
-            ownerID: plan.ownerID,
-            publicationIDValue: plan.publicationIDValue,
+            for: event,
             participantID: participantID
         )
 
@@ -166,41 +152,44 @@ final class OutingAttendanceService: ObservableObject {
             )
             try await reference.setData(
                 [
+                    "eventId": eventIDValue,
                     "participantId": participantID,
-                    "publicationId": plan.publicationIDValue,
+                    "publicationId": event.publicationIDValue,
                     "displayName": profile.displayName,
                     "avatarID": profile.avatarID,
-                    "joinedAt": FieldValue.serverTimestamp(),
-                    "expiresAt": Timestamp(date: plan.expiresAt)
+                    "joinedAt": FieldValue.serverTimestamp()
                 ]
             )
             let document = try await reference.getDocument(source: .server)
             let attendance = try OutingAttendance(
                 document: document,
-                ownerID: plan.ownerID,
+                ownerID: event.ownerID,
+                eventIDValue: eventIDValue,
                 expectedParticipantID: participantID
             )
-            guard attendance.publicationID == plan.publicationID,
-                  attendance.publicationIDValue == plan.publicationIDValue,
-                  attendance.isActive() else {
+            guard attendance.publicationID == event.publicationID else {
                 throw OutingAttendanceServiceError.invalidAttendance
             }
             guard currentUserID() == participantID,
-                  observedCurrentUserID == participantID else {
+                  observedCurrentUserID == participantID,
+                  acceptedFriendUserIDs.contains(event.ownerID),
+                  attendanceListeners[eventIDValue] != nil,
+                  observedPublicationIDs[eventIDValue]
+                    == event.publicationIDValue else {
                 return
             }
-            currentUserAttendances[plan.ownerID] = attendance
-            reconcileJoinedPlanListener(
-                for: plan,
+            currentUserAttendances[eventIDValue] = attendance
+            reconcileJoinedEventListener(
+                for: event,
                 participantID: participantID
             )
         } else {
-            removeJoinedPlanListener(for: plan.ownerID)
+            removeJoinedEventListener(for: eventIDValue)
             do {
                 try await reference.delete()
             } catch {
-                reconcileJoinedPlanListener(
-                    for: plan,
+                reconcileJoinedEventListener(
+                    for: event,
                     participantID: participantID
                 )
                 throw error
@@ -209,37 +198,62 @@ final class OutingAttendanceService: ObservableObject {
                   observedCurrentUserID == participantID else {
                 return
             }
-            currentUserAttendances.removeValue(forKey: plan.ownerID)
+            currentUserAttendances.removeValue(forKey: eventIDValue)
         }
     }
 
-    // MARK: - Listener reconciliation
+    // MARK: - Friend event listeners
 
-    private func addAttendanceListener(
-        for plan: OutingPlan,
+    private func reconcileFriendEventListeners(
+        with events: [String: OutingPlan],
         participantID: String
     ) {
-        let ownerID = plan.ownerID
+        let desiredEventIDs = Set(events.keys)
+        for eventID in Set(attendanceListeners.keys)
+            .subtracting(desiredEventIDs) {
+            removeAttendanceListener(for: eventID)
+        }
+
+        for eventID in desiredEventIDs.sorted() {
+            guard let event = events[eventID] else { continue }
+            if observedPublicationIDs[eventID] != event.publicationIDValue {
+                removeAttendanceListener(for: eventID)
+                addAttendanceListener(
+                    for: event,
+                    participantID: participantID
+                )
+            }
+            reconcileJoinedEventListener(
+                for: event,
+                participantID: participantID
+            )
+        }
+    }
+
+    private func addAttendanceListener(
+        for event: OutingPlan,
+        participantID: String
+    ) {
+        let eventID = event.eventIDValue
         guard let reference = try? attendanceReference(
-            ownerID: ownerID,
-            publicationIDValue: plan.publicationIDValue,
+            for: event,
             participantID: participantID
         ) else { return }
 
         let token = UUID()
-        attendanceListenerTokens[ownerID] = token
-        observedPublicationIDs[ownerID] = plan.publicationIDValue
-        attendanceListeners[ownerID] = reference.addSnapshotListener {
+        attendanceListenerTokens[eventID] = token
+        observedPublicationIDs[eventID] = event.publicationIDValue
+        attendanceListeners[eventID] = reference.addSnapshotListener {
             [weak self] snapshot, error in
             DispatchQueue.main.async {
                 guard let self,
-                      self.attendanceListenerTokens[ownerID] == token else {
+                      self.attendanceListenerTokens[eventID] == token else {
                     return
                 }
                 self.handleAttendanceSnapshot(
                     snapshot,
                     error: error,
-                    plan: plan,
+                    event: event,
                     participantID: participantID
                 )
             }
@@ -249,154 +263,193 @@ final class OutingAttendanceService: ObservableObject {
     private func handleAttendanceSnapshot(
         _ snapshot: DocumentSnapshot?,
         error: Error?,
-        plan: OutingPlan,
+        event: OutingPlan,
         participantID: String
     ) {
+        let eventID = event.eventIDValue
         guard error == nil,
               let snapshot,
               snapshot.exists,
               let attendance = try? OutingAttendance(
                 document: snapshot,
-                ownerID: plan.ownerID,
+                ownerID: event.ownerID,
+                eventIDValue: eventID,
                 expectedParticipantID: participantID
               ),
-              attendance.publicationID == plan.publicationID,
-              attendance.publicationIDValue == plan.publicationIDValue,
-              attendance.expiresAt == plan.expiresAt,
-              attendance.isActive() else {
-            currentUserAttendances.removeValue(forKey: plan.ownerID)
-            removeJoinedPlanListener(for: plan.ownerID)
+              attendance.publicationID == event.publicationID else {
+            currentUserAttendances.removeValue(forKey: eventID)
+            removeJoinedEventListener(for: eventID)
             return
         }
-        currentUserAttendances[plan.ownerID] = attendance
-        reconcileJoinedPlanListener(
-            for: plan,
+        currentUserAttendances[eventID] = attendance
+        reconcileJoinedEventListener(
+            for: event,
             participantID: participantID
         )
     }
 
-    private func reconcileJoinedPlanListener(
-        for plan: OutingPlan,
+    private func removeAttendanceListener(for eventID: String) {
+        attendanceListenerTokens.removeValue(forKey: eventID)
+        observedPublicationIDs.removeValue(forKey: eventID)
+        attendanceListeners.removeValue(forKey: eventID)?.remove()
+        currentUserAttendances.removeValue(forKey: eventID)
+        removeJoinedEventListener(for: eventID)
+    }
+
+    // MARK: - Joined event listeners
+
+    private func reconcileJoinedEventListener(
+        for event: OutingPlan,
         participantID: String
     ) {
-        guard plan.ownerID != participantID,
-              acceptedFriendUserIDs.contains(plan.ownerID),
+        let eventID = event.eventIDValue
+        guard event.ownerID != participantID,
+              acceptedFriendUserIDs.contains(event.ownerID),
               isAttending(
-                ownerID: plan.ownerID,
-                publicationIDValue: plan.publicationIDValue
+                eventIDValue: eventID,
+                publicationIDValue: event.publicationIDValue
               ) else {
-            removeJoinedPlanListener(for: plan.ownerID)
+            removeJoinedEventListener(for: eventID)
             return
         }
-        guard joinedPlanPublicationIDs[plan.ownerID]
-            != plan.publicationIDValue else {
+        guard joinedEventPublicationIDs[eventID]
+            != event.publicationIDValue else {
             return
         }
 
-        removeJoinedPlanListener(for: plan.ownerID)
+        removeJoinedEventListener(for: eventID)
         let token = UUID()
-        joinedPlanListenerTokens[plan.ownerID] = token
-        joinedPlanPublicationIDs[plan.ownerID] = plan.publicationIDValue
-        joinedPlanListeners[plan.ownerID] = attendeesCollection(
-            ownerID: plan.ownerID
-        )
-        .whereField("publicationId", isEqualTo: plan.publicationIDValue)
-        .addSnapshotListener { [weak self] snapshot, error in
-            DispatchQueue.main.async {
-                guard let self,
-                      self.joinedPlanListenerTokens[plan.ownerID] == token else {
-                    return
-                }
-                self.handleJoinedPlanSnapshot(
-                    snapshot,
-                    error: error,
-                    plan: plan,
-                    participantID: participantID
-                )
-            }
-        }
-    }
-
-    private func handleJoinedPlanSnapshot(
-        _ snapshot: QuerySnapshot?,
-        error: Error?,
-        plan: OutingPlan,
-        participantID: String
-    ) {
-        guard error == nil, let snapshot else {
-            joinedPlanAttendances.removeValue(forKey: plan.ownerID)
-            return
-        }
-
-        let attendances = validAttendances(in: snapshot, for: plan)
-        guard attendances.contains(where: {
-            $0.participantID == participantID
-        }) else {
-            joinedPlanAttendances.removeValue(forKey: plan.ownerID)
-            return
-        }
-        joinedPlanAttendances[plan.ownerID] = attendances
-    }
-
-    private func reconcileOwnPlanListener(
-        with plan: OutingPlan?,
-        ownerID: String
-    ) {
-        guard let plan,
-              plan.ownerID == ownerID,
-              plan.isActive() else {
-            removeOwnPlanListener()
-            return
-        }
-        guard ownPlanPublicationID != plan.publicationIDValue else { return }
-
-        removeOwnPlanListener()
-        let token = UUID()
-        ownPlanListenerToken = token
-        ownPlanPublicationID = plan.publicationIDValue
-        ownPlanListener = attendeesCollection(ownerID: ownerID)
-            .whereField("publicationId", isEqualTo: plan.publicationIDValue)
+        joinedEventListenerTokens[eventID] = token
+        joinedEventPublicationIDs[eventID] = event.publicationIDValue
+        joinedEventListeners[eventID] = attendeesCollection(for: event)
+            .whereField("publicationId", isEqualTo: event.publicationIDValue)
             .addSnapshotListener { [weak self] snapshot, error in
                 DispatchQueue.main.async {
                     guard let self,
-                          self.ownPlanListenerToken == token else {
+                          self.joinedEventListenerTokens[eventID] == token else {
                         return
                     }
-                    self.handleOwnPlanSnapshot(
+                    self.handleJoinedEventSnapshot(
                         snapshot,
                         error: error,
-                        plan: plan
+                        event: event,
+                        participantID: participantID
                     )
                 }
             }
     }
 
-    private func handleOwnPlanSnapshot(
+    private func handleJoinedEventSnapshot(
         _ snapshot: QuerySnapshot?,
         error: Error?,
-        plan: OutingPlan
+        event: OutingPlan,
+        participantID: String
     ) {
+        let eventID = event.eventIDValue
         guard error == nil, let snapshot else {
-            ownPlanAttendances = []
+            joinedEventAttendances.removeValue(forKey: eventID)
             return
         }
 
-        ownPlanAttendances = validAttendances(in: snapshot, for: plan)
+        let attendances = validAttendances(in: snapshot, for: event)
+        guard attendances.contains(where: {
+            $0.participantID == participantID
+        }) else {
+            joinedEventAttendances.removeValue(forKey: eventID)
+            return
+        }
+        joinedEventAttendances[eventID] = attendances
     }
+
+    private func removeJoinedEventListener(for eventID: String) {
+        joinedEventListenerTokens.removeValue(forKey: eventID)
+        joinedEventPublicationIDs.removeValue(forKey: eventID)
+        joinedEventListeners.removeValue(forKey: eventID)?.remove()
+        joinedEventAttendances.removeValue(forKey: eventID)
+    }
+
+    // MARK: - Owned event listeners
+
+    private func reconcileOwnEventListeners(
+        with events: [String: OutingPlan],
+        ownerID: String
+    ) {
+        let desiredEventIDs = Set(events.keys)
+        for eventID in Set(ownEventListeners.keys)
+            .subtracting(desiredEventIDs) {
+            removeOwnEventListener(for: eventID)
+        }
+
+        for eventID in desiredEventIDs.sorted() {
+            guard let event = events[eventID],
+                  event.ownerID == ownerID else {
+                continue
+            }
+            guard ownEventPublicationIDs[eventID]
+                != event.publicationIDValue else {
+                continue
+            }
+
+            removeOwnEventListener(for: eventID)
+            let token = UUID()
+            ownEventListenerTokens[eventID] = token
+            ownEventPublicationIDs[eventID] = event.publicationIDValue
+            ownEventListeners[eventID] = attendeesCollection(for: event)
+                .whereField(
+                    "publicationId",
+                    isEqualTo: event.publicationIDValue
+                )
+                .addSnapshotListener { [weak self] snapshot, error in
+                    DispatchQueue.main.async {
+                        guard let self,
+                              self.ownEventListenerTokens[eventID] == token else {
+                            return
+                        }
+                        self.handleOwnEventSnapshot(
+                            snapshot,
+                            error: error,
+                            event: event
+                        )
+                    }
+                }
+        }
+    }
+
+    private func handleOwnEventSnapshot(
+        _ snapshot: QuerySnapshot?,
+        error: Error?,
+        event: OutingPlan
+    ) {
+        guard error == nil, let snapshot else {
+            ownEventAttendances.removeValue(forKey: event.eventIDValue)
+            return
+        }
+        ownEventAttendances[event.eventIDValue] = validAttendances(
+            in: snapshot,
+            for: event
+        )
+    }
+
+    private func removeOwnEventListener(for eventID: String) {
+        ownEventListenerTokens.removeValue(forKey: eventID)
+        ownEventPublicationIDs.removeValue(forKey: eventID)
+        ownEventListeners.removeValue(forKey: eventID)?.remove()
+        ownEventAttendances.removeValue(forKey: eventID)
+    }
+
+    // MARK: - Shared validation and reset
 
     private func validAttendances(
         in snapshot: QuerySnapshot,
-        for plan: OutingPlan
+        for event: OutingPlan
     ) -> [OutingAttendance] {
         snapshot.documents.compactMap { document in
             guard let attendance = try? OutingAttendance(
                 document: document,
-                ownerID: plan.ownerID
+                ownerID: event.ownerID,
+                eventIDValue: event.eventIDValue
             ),
-                  attendance.publicationID == plan.publicationID,
-                  attendance.publicationIDValue == plan.publicationIDValue,
-                  attendance.expiresAt == plan.expiresAt,
-                  attendance.isActive() else {
+                  attendance.publicationID == event.publicationID else {
                 return nil
             }
             return attendance
@@ -409,44 +462,21 @@ final class OutingAttendanceService: ObservableObject {
         }
     }
 
-    private func removeAttendanceListener(for ownerID: String) {
-        attendanceListenerTokens.removeValue(forKey: ownerID)
-        observedPublicationIDs.removeValue(forKey: ownerID)
-        attendanceListeners.removeValue(forKey: ownerID)?.remove()
-        currentUserAttendances.removeValue(forKey: ownerID)
-        removeJoinedPlanListener(for: ownerID)
-    }
-
-    private func removeJoinedPlanListener(for ownerID: String) {
-        joinedPlanListenerTokens.removeValue(forKey: ownerID)
-        joinedPlanPublicationIDs.removeValue(forKey: ownerID)
-        joinedPlanListeners.removeValue(forKey: ownerID)?.remove()
-        joinedPlanAttendances.removeValue(forKey: ownerID)
-    }
-
-    private func removeOwnPlanListener() {
-        ownPlanListenerToken = nil
-        ownPlanPublicationID = nil
-        ownPlanListener?.remove()
-        ownPlanListener = nil
-        ownPlanAttendances = []
-    }
-
-    private func filterPublishedState() {
-        let validOwnerIDs = Set(attendanceListeners.keys)
+    private func filterPublishedState(validEvents: [String: OutingPlan]) {
+        let validEventIDs = Set(validEvents.keys)
         currentUserAttendances = currentUserAttendances.filter {
-            ownerID, attendance in
-            validOwnerIDs.contains(ownerID)
-                && acceptedFriendUserIDs.contains(ownerID)
-                && attendance.isActive()
+            eventID, attendance in
+            validEventIDs.contains(eventID)
+                && acceptedFriendUserIDs.contains(attendance.ownerID)
+                && attendanceListeners[eventID] != nil
         }
-        ownPlanAttendances = ownPlanAttendances.filter { $0.isActive() }
-        joinedPlanAttendances = joinedPlanAttendances.filter {
-            ownerID, attendances in
-            validOwnerIDs.contains(ownerID)
-                && acceptedFriendUserIDs.contains(ownerID)
-                && joinedPlanListeners[ownerID] != nil
-                && attendances.allSatisfy { $0.isActive() }
+        ownEventAttendances = ownEventAttendances.filter {
+            eventID, _ in validEventIDs.contains(eventID)
+        }
+        joinedEventAttendances = joinedEventAttendances.filter {
+            eventID, _ in
+            validEventIDs.contains(eventID)
+                && joinedEventListeners[eventID] != nil
         }
     }
 
@@ -455,32 +485,44 @@ final class OutingAttendanceService: ObservableObject {
         observedPublicationIDs.removeAll()
         attendanceListeners.values.forEach { $0.remove() }
         attendanceListeners.removeAll()
-        joinedPlanListenerTokens.removeAll()
-        joinedPlanPublicationIDs.removeAll()
-        joinedPlanListeners.values.forEach { $0.remove() }
-        joinedPlanListeners.removeAll()
-        joinedPlanAttendances = [:]
+
+        joinedEventListenerTokens.removeAll()
+        joinedEventPublicationIDs.removeAll()
+        joinedEventListeners.values.forEach { $0.remove() }
+        joinedEventListeners.removeAll()
+
+        ownEventListenerTokens.removeAll()
+        ownEventPublicationIDs.removeAll()
+        ownEventListeners.values.forEach { $0.remove() }
+        ownEventListeners.removeAll()
+
+        joinedEventAttendances = [:]
+        ownEventAttendances = [:]
         currentUserAttendances = [:]
-        removeOwnPlanListener()
+        updateTokens = [:]
+        updatingEventIDs = []
     }
 
     // MARK: - Firestore paths
 
     private func attendanceReference(
-        ownerID: String,
-        publicationIDValue: String,
+        for event: OutingPlan,
         participantID: String
     ) throws -> DocumentReference {
         let documentID = try OutingAttendance.documentID(
-            publicationIDValue: publicationIDValue,
+            publicationIDValue: event.publicationIDValue,
             participantID: participantID
         )
-        return attendeesCollection(ownerID: ownerID).document(documentID)
+        return attendeesCollection(for: event).document(documentID)
     }
 
-    private func attendeesCollection(ownerID: String) -> CollectionReference {
-        database.collection("plans")
-            .document(ownerID)
+    private func attendeesCollection(
+        for event: OutingPlan
+    ) -> CollectionReference {
+        database.collection("users")
+            .document(event.ownerID)
+            .collection("events")
+            .document(event.eventIDValue)
             .collection("attendees")
     }
 
@@ -514,16 +556,16 @@ final class OutingAttendanceService: ObservableObject {
 
 enum OutingAttendanceServiceError: LocalizedError, Equatable {
     case noAuthenticatedUser
-    case planUnavailable
+    case eventUnavailable
     case invalidProfile
     case invalidAttendance
 
     var errorDescription: String? {
         switch self {
         case .noAuthenticatedUser:
-            return "Connecte-toi pour participer à cette sortie."
-        case .planUnavailable:
-            return "Cette sortie n’est plus disponible."
+            return "Connecte-toi pour participer à cet événement."
+        case .eventUnavailable:
+            return "Cet événement n’est plus disponible."
         case .invalidProfile:
             return "Ton profil doit être synchronisé avant de participer."
         case .invalidAttendance:

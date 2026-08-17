@@ -302,20 +302,21 @@ service cloud.firestore {
         && data.sharedAt == request.time;
     }
 
-    function hasExactPlanFields(data) {
+    function hasExactEventFields(data) {
       return data.keys().hasAll([
+          'eventId',
           'ownerId',
           'publicationId',
           'displayName',
           'placeName',
           'location',
           'plannedAt',
-          'expiresAt',
           'publishedAt',
           'updatedAt',
           'timeZoneIdentifier'
         ])
         && data.keys().hasOnly([
+          'eventId',
           'ownerId',
           'publicationId',
           'displayName',
@@ -323,7 +324,6 @@ service cloud.firestore {
           'address',
           'location',
           'plannedAt',
-          'expiresAt',
           'publishedAt',
           'updatedAt',
           'timeZoneIdentifier'
@@ -337,24 +337,24 @@ service cloud.firestore {
         );
     }
 
-    function isNormalizedPlanText(value) {
+    function isNormalizedEventText(value) {
       return value is string
         && value.matches('^[^\\s]+( [^\\s]+)*$');
     }
 
     function isValidPlaceName(placeName) {
-      return isNormalizedPlanText(placeName)
+      return isNormalizedEventText(placeName)
         && placeName.size() >= 1
         && placeName.size() <= 120;
     }
 
-    function isValidPlanAddress(data) {
+    function isValidEventAddress(data) {
       return !data.keys().hasAny(['address'])
         || (
           data.address is string
           && data.address.size() >= 1
           && data.address.size() <= 200
-          && isNormalizedPlanText(data.address)
+          && isNormalizedEventText(data.address)
         );
     }
 
@@ -369,15 +369,17 @@ service cloud.firestore {
         );
     }
 
-    function isValidPlan(data, uid) {
-      return hasExactPlanFields(data)
-        && data.ownerId == uid
-        && isValidUid(data.ownerId)
+    function isValidEvent(data, ownerId, eventId) {
+      return hasExactEventFields(data)
+        && isValidPublicationId(eventId)
+        && data.eventId == eventId
+        && isValidUid(ownerId)
+        && data.ownerId == ownerId
         && isValidPublicationId(data.publicationId)
         && isValidDisplayName(data.displayName)
-        && isNormalizedPlanText(data.displayName)
+        && isNormalizedEventText(data.displayName)
         && isValidPlaceName(data.placeName)
-        && isValidPlanAddress(data)
+        && isValidEventAddress(data)
         && data.location is latlng
         && data.location.latitude() >= -90
         && data.location.latitude() <= 90
@@ -386,9 +388,6 @@ service cloud.firestore {
         && data.plannedAt is timestamp
         && data.plannedAt > request.time
         && data.plannedAt <= request.time + duration.value(24, 'h')
-        && data.expiresAt is timestamp
-        && data.expiresAt > data.plannedAt
-        && data.expiresAt <= data.plannedAt + duration.value(2, 'h')
         && data.publishedAt is timestamp
         && data.publishedAt == request.time
         && data.updatedAt is timestamp
@@ -396,73 +395,91 @@ service cloud.firestore {
         && isValidTimeZoneIdentifier(data.timeZoneIdentifier);
     }
 
-    function hasExactAttendanceFields(data) {
+    function hasExactEventAttendanceFields(data) {
       return data.keys().hasAll([
+          'eventId',
           'participantId',
           'publicationId',
           'displayName',
           'avatarID',
-          'joinedAt',
-          'expiresAt'
+          'joinedAt'
         ])
         && data.keys().hasOnly([
+          'eventId',
           'participantId',
           'publicationId',
           'displayName',
           'avatarID',
-          'joinedAt',
-          'expiresAt'
+          'joinedAt'
         ]);
     }
 
-    function attendanceIdentityIsValid(data, attendanceId) {
-      return hasExactAttendanceFields(data)
+    function eventAttendanceIdentityIsValid(
+      data,
+      eventId,
+      attendanceId
+    ) {
+      return hasExactEventAttendanceFields(data)
+        && isValidPublicationId(eventId)
+        && data.eventId == eventId
         && isValidUid(data.participantId)
         && isValidPublicationId(data.publicationId)
         && isValidDisplayName(data.displayName)
-        && isNormalizedPlanText(data.displayName)
+        && isNormalizedEventText(data.displayName)
         && isValidAvatarID(data.avatarID)
         && attendanceId
           == data.publicationId + '__' + data.participantId
-        && data.joinedAt is timestamp
-        && data.expiresAt is timestamp
-        && data.joinedAt < data.expiresAt;
+        && data.joinedAt is timestamp;
     }
 
-    function isValidAttendanceCreate(data, ownerId, attendanceId) {
-      let planPath = /databases/$(database)/documents/plans/$(ownerId);
-      let plan = get(planPath);
+    function isValidEventAttendanceCreate(
+      data,
+      ownerId,
+      eventId,
+      attendanceId
+    ) {
+      let eventPath =
+        /databases/$(database)/documents/users/$(ownerId)/events/$(eventId);
+      let userEvent = get(eventPath);
       let profilePath =
         /databases/$(database)/documents/users/$(data.participantId);
       let profile = get(profilePath);
 
-      return attendanceIdentityIsValid(data, attendanceId)
-        && exists(planPath)
+      return eventAttendanceIdentityIsValid(
+          data,
+          eventId,
+          attendanceId
+        )
+        && exists(eventPath)
         && exists(profilePath)
         && profile.data.displayName == data.displayName
         && profile.data.avatarID == data.avatarID
-        && plan.data.ownerId == ownerId
-        && plan.data.publicationId == data.publicationId
-        && plan.data.expiresAt is timestamp
-        && plan.data.expiresAt > request.time
-        && data.expiresAt == plan.data.expiresAt
+        && userEvent.data.eventId == eventId
+        && userEvent.data.ownerId == ownerId
+        && userEvent.data.publicationId == data.publicationId
         && data.joinedAt == request.time;
     }
 
-    function requesterIsCurrentPlanParticipant(ownerId) {
-      let planPath = /databases/$(database)/documents/plans/$(ownerId);
-      let plan = get(planPath);
-      let attendanceId = plan.data.publicationId + '__' + request.auth.uid;
+    function requesterIsCurrentEventParticipant(ownerId, eventId) {
+      let eventPath =
+        /databases/$(database)/documents/users/$(ownerId)/events/$(eventId);
+      let userEvent = get(eventPath);
+      let attendanceId =
+        userEvent.data.publicationId + '__' + request.auth.uid;
       let attendancePath =
-        /databases/$(database)/documents/plans/$(ownerId)/attendees/$(attendanceId);
+        /databases/$(database)/documents/users/$(ownerId)/events/$(eventId)/attendees/$(attendanceId);
 
-      return request.auth.uid != ownerId
-        && exists(planPath)
-        && plan.data.ownerId == ownerId
-        && isValidPublicationId(plan.data.publicationId)
-        && plan.data.expiresAt is timestamp
-        && plan.data.expiresAt > request.time
-        && usersAreLinked(request.auth.uid, ownerId, ['accepted'])
+      return exists(eventPath)
+        && userEvent.data.eventId == eventId
+        && userEvent.data.ownerId == ownerId
+        && isValidUid(ownerId)
+        && request.auth.uid != ownerId
+        && isValidPublicationId(userEvent.data.publicationId)
+        && usersAreLinked(
+          request.auth.uid,
+          ownerId,
+          ['accepted']
+        )
         && exists(attendancePath);
     }
 
@@ -704,78 +721,108 @@ service cloud.firestore {
         && request.auth.uid == uid;
     }
 
-    match /plans/{uid} {
+    match /users/{ownerId}/events/{eventId} {
       allow get: if isSignedIn()
+        && resource.data.eventId == eventId
+        && resource.data.ownerId == ownerId
+        && isValidUid(ownerId)
         && (
-          request.auth.uid == uid
-          || (
-            resource.data.expiresAt is timestamp
-            && resource.data.expiresAt > request.time
-            && usersAreLinked(
-              request.auth.uid,
-              uid,
-              ['accepted']
-            )
+          request.auth.uid == ownerId
+          || usersAreLinked(
+            request.auth.uid,
+            ownerId,
+            ['accepted']
           )
         );
-      allow list: if false;
+
+      allow list: if isSignedIn()
+        && isValidUid(ownerId)
+        && (
+          request.auth.uid == ownerId
+          || usersAreLinked(
+            request.auth.uid,
+            ownerId,
+            ['accepted']
+          )
+        );
 
       allow create: if isSignedIn()
-        && request.auth.uid == uid
-        && !accountDeletionIsPending(uid)
-        && isValidPlan(request.resource.data, uid);
+        && request.auth.uid == ownerId
+        && exists(/databases/$(database)/documents/users/$(ownerId))
+        && !accountDeletionIsPending(request.auth.uid)
+        && isValidEvent(request.resource.data, ownerId, eventId);
 
       allow update: if isSignedIn()
-        && request.auth.uid == uid
-        && !accountDeletionIsPending(uid)
-        && isValidPlan(request.resource.data, uid)
-        && request.resource.data.publicationId != resource.data.publicationId;
+        && request.auth.uid == ownerId
+        && resource.data.ownerId == ownerId
+        && request.resource.data.ownerId == ownerId
+        && exists(/databases/$(database)/documents/users/$(ownerId))
+        && !accountDeletionIsPending(request.auth.uid)
+        && request.resource.data.eventId == resource.data.eventId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.publicationId
+          != resource.data.publicationId
+        && isValidEvent(request.resource.data, ownerId, eventId);
 
       allow delete: if isSignedIn()
-        && request.auth.uid == uid;
+        && request.auth.uid == ownerId
+        && resource.data.ownerId == ownerId;
 
       match /attendees/{attendanceId} {
         allow get: if isSignedIn()
-          && attendanceIdentityIsValid(resource.data, attendanceId)
+          && eventAttendanceIdentityIsValid(
+            resource.data,
+            eventId,
+            attendanceId
+          )
           && (
-            request.auth.uid == uid
+            request.auth.uid == ownerId
             || request.auth.uid == resource.data.participantId
           );
 
         allow list: if isSignedIn()
           && (
-            request.auth.uid == uid
+            request.auth.uid == ownerId
             || (
-              requesterIsCurrentPlanParticipant(uid)
+              requesterIsCurrentEventParticipant(ownerId, eventId)
               && resource.data.publicationId
                 == get(
-                  /databases/$(database)/documents/plans/$(uid)
+                  /databases/$(database)/documents/users/$(ownerId)/events/$(eventId)
                 ).data.publicationId
             )
           );
 
         allow create: if isSignedIn()
-          && request.auth.uid != uid
           && request.auth.uid == request.resource.data.participantId
-          && !accountDeletionIsPending(uid)
+          && request.auth.uid != ownerId
+          && exists(/databases/$(database)/documents/users/$(ownerId))
+          && exists(
+            /databases/$(database)/documents/users/$(ownerId)/events/$(eventId)
+          )
           && !accountDeletionIsPending(request.auth.uid)
+          && !accountDeletionIsPending(ownerId)
           && usersAreLinked(
             request.auth.uid,
-            uid,
+            ownerId,
             ['accepted']
           )
-          && isValidAttendanceCreate(
+          && isValidEventAttendanceCreate(
             request.resource.data,
-            uid,
+            ownerId,
+            eventId,
             attendanceId
           );
 
         allow update: if false;
 
         allow delete: if isSignedIn()
-          && attendanceIdentityIsValid(resource.data, attendanceId)
+          && eventAttendanceIdentityIsValid(
+            resource.data,
+            eventId,
+            attendanceId
+          )
           && (
-            request.auth.uid == uid
+            request.auth.uid == ownerId
             || request.auth.uid == resource.data.participantId
           );
       }

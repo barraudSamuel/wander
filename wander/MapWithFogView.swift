@@ -106,7 +106,7 @@ final class FriendLocationAnnotation: MKPointAnnotation {
 }
 
 fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
-    var ownerID = ""
+    var eventID = ""
     var profileColorHex = ""
     var isCurrentUser = false
 }
@@ -1221,7 +1221,7 @@ struct MapWithFogView: UIViewRepresentable {
     /// Friends whose last known location is still recent.
     var freshFriendLocationUserIDs: Set<String> = []
 
-    /// Active future destinations belonging to the account and accepted friends.
+    /// Events belonging to the account and accepted friends, keyed by event ID.
     var outingPlans: [String: MapOutingPlan] = [:]
 
     /// Selected friends whose explored cells are visible on the map.
@@ -1250,11 +1250,11 @@ struct MapWithFogView: UIViewRepresentable {
     /// When set, centers the map on the selected friend once.
     @Binding var centerOnFriendUserID: String?
 
-    /// When set, centers and selects the owner's active outing once.
-    @Binding var centerOnOutingPlanOwnerID: String?
+    /// When set, centers and selects one event once.
+    @Binding var centerOnOutingPlanEventID: String?
 
-    /// Owner of the outing whose detail card is currently visible.
-    var selectedOutingPlanOwnerID: String?
+    /// Event whose detail card is currently visible.
+    var selectedOutingPlanEventID: String?
 
     var showsHeatMap = false
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
@@ -1273,6 +1273,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// Hides the detail card when MapKit clears that outing's selection.
     var onDeselectOutingPlan: (String) -> Void = { _ in }
 
+    /// Creates a new event from a long press on an empty point of the map.
+    var onCreateEvent: (CLLocationCoordinate2D) -> Void = { _ in }
+
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
@@ -1283,6 +1286,10 @@ struct MapWithFogView: UIViewRepresentable {
         mapView.showsUserLocation = true
         mapView.showsCompass = true
         mapView.userTrackingMode = .none
+        mapView.accessibilityHint =
+            "Maintenez un doigt sur un endroit vide pour créer un événement."
+
+        context.coordinator.installLongPressRecognizer(on: mapView)
 
         // Failsafe initial view over Ho Chi Minh City before the boundary loads.
         mapView.region = MKCoordinateRegion(
@@ -1303,6 +1310,7 @@ struct MapWithFogView: UIViewRepresentable {
         context.coordinator.onViewFriendProfile = onViewFriendProfile
         context.coordinator.onSelectOutingPlan = onSelectOutingPlan
         context.coordinator.onDeselectOutingPlan = onDeselectOutingPlan
+        context.coordinator.onCreateEvent = onCreateEvent
 
         let visibleCellIDs = visibleDiscoveredCellIDs
         let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
@@ -1370,10 +1378,10 @@ struct MapWithFogView: UIViewRepresentable {
             )
         }
 
-        if let outingOwnerID = centerOnOutingPlanOwnerID {
-            DispatchQueue.main.async { centerOnOutingPlanOwnerID = nil }
+        if let outingEventID = centerOnOutingPlanEventID {
+            DispatchQueue.main.async { centerOnOutingPlanEventID = nil }
             centerMap(
-                onOutingPlanOwnedBy: outingOwnerID,
+                onOutingPlan: outingEventID,
                 on: uiView,
                 context: context
             )
@@ -1386,8 +1394,13 @@ struct MapWithFogView: UIViewRepresentable {
             onJoinFriend: onJoinFriend,
             onViewFriendProfile: onViewFriendProfile,
             onSelectOutingPlan: onSelectOutingPlan,
-            onDeselectOutingPlan: onDeselectOutingPlan
+            onDeselectOutingPlan: onDeselectOutingPlan,
+            onCreateEvent: onCreateEvent
         )
+    }
+
+    static func dismantleUIView(_ uiView: MKMapView, coordinator: Coordinator) {
+        coordinator.removeLongPressRecognizer(from: uiView)
     }
 
     private var visibleDiscoveredCellIDs: Set<String> {
@@ -1536,29 +1549,26 @@ struct MapWithFogView: UIViewRepresentable {
         context: Context
     ) {
         let coordinator = context.coordinator
-        let activeOutingPlans = outingPlans.filter { _, presentation in
-            presentation.plan.isActive()
-        }
-        let currentOwnerIDs = Set(activeOutingPlans.keys)
-        let removedOwnerIDs = coordinator.outingPlanAnnotations.keys
-            .filter { !currentOwnerIDs.contains($0) }
+        let currentEventIDs = Set(outingPlans.keys)
+        let removedEventIDs = coordinator.outingPlanAnnotations.keys
+            .filter { !currentEventIDs.contains($0) }
             .sorted()
 
-        for ownerID in removedOwnerIDs {
+        for eventID in removedEventIDs {
             if let annotation = coordinator.outingPlanAnnotations.removeValue(
-                forKey: ownerID
+                forKey: eventID
             ) {
                 mapView.removeAnnotation(annotation)
             }
         }
 
-        for ownerID in activeOutingPlans.keys.sorted() {
-            guard let presentation = activeOutingPlans[ownerID] else { continue }
+        for eventID in outingPlans.keys.sorted() {
+            guard let presentation = outingPlans[eventID] else { continue }
             let plan = presentation.plan
 
             let annotation: OutingPlanAnnotation
             let isNewAnnotation: Bool
-            if let existing = coordinator.outingPlanAnnotations[ownerID] {
+            if let existing = coordinator.outingPlanAnnotations[eventID] {
                 annotation = existing
                 isNewAnnotation = false
                 if annotation.coordinate.latitude != plan.coordinate.latitude
@@ -1569,10 +1579,10 @@ struct MapWithFogView: UIViewRepresentable {
                 }
             } else {
                 annotation = OutingPlanAnnotation()
-                annotation.ownerID = ownerID
+                annotation.eventID = eventID
                 annotation.coordinate = plan.coordinate
                 isNewAnnotation = true
-                coordinator.outingPlanAnnotations[ownerID] = annotation
+                coordinator.outingPlanAnnotations[eventID] = annotation
             }
 
             annotation.title = plan.placeName
@@ -1663,15 +1673,15 @@ struct MapWithFogView: UIViewRepresentable {
     ) {
         for annotation in mapView.selectedAnnotations {
             guard let outingAnnotation = annotation as? OutingPlanAnnotation,
-                  outingAnnotation.ownerID != selectedOutingPlanOwnerID else {
+                  outingAnnotation.eventID != selectedOutingPlanEventID else {
                 continue
             }
             mapView.deselectAnnotation(outingAnnotation, animated: true)
         }
 
-        guard let selectedOutingPlanOwnerID,
+        guard let selectedOutingPlanEventID,
               let annotation = context.coordinator
-                .outingPlanAnnotations[selectedOutingPlanOwnerID],
+                .outingPlanAnnotations[selectedOutingPlanEventID],
               !mapView.selectedAnnotations.contains(where: {
                   ($0 as AnyObject) === annotation
               }) else {
@@ -1703,12 +1713,12 @@ struct MapWithFogView: UIViewRepresentable {
     }
 
     private func centerMap(
-        onOutingPlanOwnedBy ownerID: String,
+        onOutingPlan eventID: String,
         on mapView: MKMapView,
         context: Context
     ) {
         guard let annotation = context.coordinator
-            .outingPlanAnnotations[ownerID] else {
+            .outingPlanAnnotations[eventID] else {
             return
         }
 
@@ -1896,7 +1906,7 @@ struct MapWithFogView: UIViewRepresentable {
 
     // MARK: - Coordinator
 
-    final class Coordinator: NSObject, MKMapViewDelegate {
+    final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         let explorationEngine = ExplorationEngine()
         let fogColor: UIColor
         var fogOverlay: FogOfWarOverlay?
@@ -1921,19 +1931,89 @@ struct MapWithFogView: UIViewRepresentable {
         var onViewFriendProfile: (String) -> Void
         var onSelectOutingPlan: (String) -> Void
         var onDeselectOutingPlan: (String) -> Void
+        var onCreateEvent: (CLLocationCoordinate2D) -> Void
+        private weak var longPressRecognizer: UILongPressGestureRecognizer?
+        private let eventCreationFeedback = UIImpactFeedbackGenerator(
+            style: .medium
+        )
 
         init(
             fogColor: UIColor,
             onJoinFriend: @escaping (String) -> Void,
             onViewFriendProfile: @escaping (String) -> Void,
             onSelectOutingPlan: @escaping (String) -> Void,
-            onDeselectOutingPlan: @escaping (String) -> Void
+            onDeselectOutingPlan: @escaping (String) -> Void,
+            onCreateEvent: @escaping (CLLocationCoordinate2D) -> Void
         ) {
             self.fogColor = fogColor
             self.onJoinFriend = onJoinFriend
             self.onViewFriendProfile = onViewFriendProfile
             self.onSelectOutingPlan = onSelectOutingPlan
             self.onDeselectOutingPlan = onDeselectOutingPlan
+            self.onCreateEvent = onCreateEvent
+        }
+
+        func installLongPressRecognizer(on mapView: MKMapView) {
+            guard longPressRecognizer == nil else { return }
+
+            let recognizer = UILongPressGestureRecognizer(
+                target: self,
+                action: #selector(handleLongPress(_:))
+            )
+            recognizer.minimumPressDuration = 0.5
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            mapView.addGestureRecognizer(recognizer)
+            longPressRecognizer = recognizer
+        }
+
+        func removeLongPressRecognizer(from mapView: MKMapView) {
+            guard let longPressRecognizer else { return }
+            mapView.removeGestureRecognizer(longPressRecognizer)
+            self.longPressRecognizer = nil
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldReceive touch: UITouch
+        ) -> Bool {
+            var touchedView = touch.view
+
+            while let view = touchedView {
+                if view is MKAnnotationView || view is UIControl {
+                    return false
+                }
+                if view === gestureRecognizer.view {
+                    break
+                }
+                touchedView = view.superview
+            }
+
+            eventCreationFeedback.prepare()
+            return true
+        }
+
+        @objc private func handleLongPress(
+            _ recognizer: UILongPressGestureRecognizer
+        ) {
+            guard recognizer.state == .began,
+                  let mapView = recognizer.view as? MKMapView else {
+                return
+            }
+
+            let point = recognizer.location(in: mapView)
+            let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+            guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+
+            eventCreationFeedback.impactOccurred()
+            onCreateEvent(coordinate)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -2051,14 +2131,14 @@ struct MapWithFogView: UIViewRepresentable {
                 mapView.setUserTrackingMode(.none, animated: false)
             }
             mapView.setCenter(annotation.coordinate, animated: true)
-            onSelectOutingPlan(annotation.ownerID)
+            onSelectOutingPlan(annotation.eventID)
         }
 
         func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
             guard let annotation = view.annotation as? OutingPlanAnnotation else {
                 return
             }
-            onDeselectOutingPlan(annotation.ownerID)
+            onDeselectOutingPlan(annotation.eventID)
         }
 
         func mapView(

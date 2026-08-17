@@ -12,6 +12,7 @@ import UserNotifications
 
 struct OutingNotificationRoute: Equatable {
     let ownerID: String
+    let eventIDValue: String
     let publicationID: UUID
 }
 
@@ -180,9 +181,11 @@ final class NotificationService: ObservableObject {
         }
 
         switch type {
-        case "outingPublished", "outingAttendanceCreated":
-            guard let ownerID = userInfo["outingOwnerId"] as? String,
+        case "eventPublished", "eventAttendanceCreated":
+            guard let ownerID = userInfo["eventOwnerId"] as? String,
                   Self.isValidUserID(ownerID),
+                  let eventIDValue = userInfo["eventId"] as? String,
+                  UUID(uuidString: eventIDValue) != nil,
                   let publicationIDValue = userInfo["publicationId"] as? String,
                   let publicationID = UUID(uuidString: publicationIDValue) else {
                 return
@@ -191,6 +194,7 @@ final class NotificationService: ObservableObject {
             pendingFriendRequestRoute = nil
             pendingRoute = OutingNotificationRoute(
                 ownerID: ownerID,
+                eventIDValue: eventIDValue,
                 publicationID: publicationID
             )
         case "friendRequestCreated":

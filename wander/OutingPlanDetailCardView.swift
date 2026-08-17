@@ -8,6 +8,7 @@ import SwiftUI
 struct OutingPlanDetailCardView: View {
     let outing: MapOutingPlan
     let onDismiss: () -> Void
+    let onEdit: () -> Void
     let onToggleAttendance: () -> Void
 
     var body: some View {
@@ -16,7 +17,9 @@ struct OutingPlanDetailCardView: View {
             outingDetails
             participationSummary
 
-            if !outing.isCurrentUser {
+            if outing.isCurrentUser {
+                editButton
+            } else {
                 attendanceButton
             }
         }
@@ -120,6 +123,16 @@ struct OutingPlanDetailCardView: View {
         .controlSize(.large)
         .disabled(outing.isAttendanceUpdating)
         .accessibilityHint("Modifie ta participation à cette sortie")
+    }
+
+    private var editButton: some View {
+        Button(action: onEdit) {
+            Label("Modifier l’événement", systemImage: "pencil")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .accessibilityHint("Modifie ou annule cet événement")
     }
 
     private var organizerText: String {

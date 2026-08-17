@@ -1,4 +1,4 @@
-export interface OutingNotificationInput {
+export interface EventNotificationInput {
   displayName: string;
   placeName: string;
   plannedAt: Date;
@@ -65,8 +65,8 @@ export function acceptedRecipientIDs(
   return [...recipients].sort();
 }
 
-export function buildNotificationContent(
-  input: OutingNotificationInput,
+export function buildEventNotificationContent(
+  input: EventNotificationInput,
 ): NotificationContent {
   const displayName = normalizedRequiredText(input.displayName, 50);
   const placeName = normalizedRequiredText(input.placeName, 120);
@@ -74,7 +74,7 @@ export function buildNotificationContent(
     Number.isNaN(input.plannedAt.getTime()) ||
     !isSupportedTimeZone(input.timeZoneIdentifier)
   ) {
-    throw new Error("Invalid outing notification input");
+    throw new Error("Invalid event notification input");
   }
 
   const time = new Intl.DateTimeFormat("fr-FR", {
@@ -85,7 +85,7 @@ export function buildNotificationContent(
   }).format(input.plannedAt);
 
   return {
-    title: "Sortie prévue",
+    title: "Événement prévu",
     body: `${displayName} prévoit ${placeName} à ${time}`,
   };
 }
@@ -128,7 +128,7 @@ export function buildFriendRequestNotificationContent(
   };
 }
 
-export function outingAttendanceRecipientIDs(
+export function eventAttendanceRecipientIDs(
   ownerID: string,
   joiningParticipantID: string,
   publicationID: string,
@@ -141,7 +141,7 @@ export function outingAttendanceRecipientIDs(
     ownerID === joiningParticipantID ||
     !isValidPublicationID(publicationID)
   ) {
-    throw new Error("Invalid outing attendance recipients");
+    throw new Error("Invalid event attendance recipients");
   }
 
   const accepted = new Set(
@@ -164,7 +164,7 @@ export function outingAttendanceRecipientIDs(
   return [...recipients].sort();
 }
 
-export function buildOutingAttendanceNotificationContent(
+export function buildEventAttendanceNotificationContent(
   displayName: string,
   placeName: string,
 ): NotificationContent {
@@ -176,23 +176,30 @@ export function buildOutingAttendanceNotificationContent(
   };
 }
 
-export function outingAttendanceNotificationData(
+export function eventAttendanceNotificationData(
   ownerID: string,
+  eventID: string,
   publicationID: string,
 ): Record<string, string> {
-  if (!isValidUserID(ownerID) || !isValidPublicationID(publicationID)) {
-    throw new Error("Invalid outing attendance notification route");
+  if (
+    !isValidUserID(ownerID) ||
+    !isValidEventID(eventID) ||
+    !isValidPublicationID(publicationID)
+  ) {
+    throw new Error("Invalid event attendance notification route");
   }
 
   return {
-    type: "outingAttendanceCreated",
-    outingOwnerId: ownerID,
+    type: "eventAttendanceCreated",
+    eventOwnerId: ownerID,
+    eventId: eventID,
     publicationId: publicationID,
   };
 }
 
-export function outingAttendanceDispatchID(
+export function eventAttendanceDispatchID(
   ownerID: string,
+  eventID: string,
   publicationID: string,
   participantID: string,
   joinedAtSeconds: number,
@@ -200,6 +207,7 @@ export function outingAttendanceDispatchID(
 ): string {
   if (
     !isValidUserID(ownerID) ||
+    !isValidEventID(eventID) ||
     !isValidPublicationID(publicationID) ||
     !isValidUserID(participantID) ||
     ownerID === participantID ||
@@ -208,10 +216,10 @@ export function outingAttendanceDispatchID(
     joinedAtNanoseconds < 0 ||
     joinedAtNanoseconds > 999_999_999
   ) {
-    throw new Error("Invalid outing attendance dispatch identity");
+    throw new Error("Invalid event attendance dispatch identity");
   }
 
-  return `outingAttendance__${ownerID}__${publicationID}__${participantID}__${joinedAtSeconds}_${joinedAtNanoseconds}`;
+  return `eventAttendance__${ownerID}__${eventID}__${publicationID}__${participantID}__${joinedAtSeconds}_${joinedAtNanoseconds}`;
 }
 
 export function friendRequestNotificationData(
@@ -245,19 +253,41 @@ export function friendRequestDispatchID(
   return `friendRequest__${pairID}__${createdAtSeconds}_${createdAtNanoseconds}`;
 }
 
-export function notificationData(
+export function eventNotificationData(
   ownerID: string,
+  eventID: string,
   publicationID: string,
 ): Record<string, string> {
-  if (!isValidUserID(ownerID) || !isValidPublicationID(publicationID)) {
-    throw new Error("Invalid outing notification route");
+  if (
+    !isValidUserID(ownerID) ||
+    !isValidEventID(eventID) ||
+    !isValidPublicationID(publicationID)
+  ) {
+    throw new Error("Invalid event notification route");
   }
 
   return {
-    type: "outingPublished",
-    outingOwnerId: ownerID,
+    type: "eventPublished",
+    eventOwnerId: ownerID,
+    eventId: eventID,
     publicationId: publicationID,
   };
+}
+
+export function eventDispatchID(
+  ownerID: string,
+  eventID: string,
+  publicationID: string,
+): string {
+  if (
+    !isValidUserID(ownerID) ||
+    !isValidEventID(eventID) ||
+    !isValidPublicationID(publicationID)
+  ) {
+    throw new Error("Invalid event dispatch identity");
+  }
+
+  return `event__${ownerID}__${eventID}__${publicationID}`;
 }
 
 export function deduplicateTargetsByToken<T extends DeviceTargetCandidate>(
@@ -297,6 +327,10 @@ export function isValidPublicationID(value: string): boolean {
     .test(value);
 }
 
+export function isValidEventID(value: string): boolean {
+  return isValidPublicationID(value);
+}
+
 function isValidPairID(value: string): boolean {
   const participants = value.split("__");
   return participants.length === 2 &&
@@ -308,7 +342,7 @@ function isValidPairID(value: string): boolean {
 function normalizedRequiredText(value: string, maximumLength: number): string {
   const normalized = value.trim().split(/\s+/u).join(" ");
   if (!normalized || normalized !== value || normalized.length > maximumLength) {
-    throw new Error("Invalid outing notification text");
+    throw new Error("Invalid event notification text");
   }
   return normalized;
 }
