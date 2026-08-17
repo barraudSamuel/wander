@@ -56,6 +56,11 @@ struct OutingPlanDetailCardView: View {
     private var outingDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(
+                outing.plan.category.title,
+                systemImage: outing.plan.category.systemImageName
+            )
+
+            Label(
                 outing.plan.plannedAt.formatted(
                     date: .abbreviated,
                     time: .shortened

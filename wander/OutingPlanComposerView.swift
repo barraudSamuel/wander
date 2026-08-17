@@ -26,6 +26,7 @@ struct OutingPlanComposerView: View {
     @State private var selectedCoordinate: CLLocationCoordinate2D?
     @State private var placeName = ""
     @State private var address: String?
+    @State private var category: OutingCategory?
     @State private var plannedAt: Date
     @State private var isResolvingAddress = false
     @State private var isWriting = false
@@ -60,6 +61,7 @@ struct OutingPlanComposerView: View {
                 ?? (coordinate == nil ? "" : "Lieu sélectionné")
         )
         _address = State(initialValue: editingEvent?.address)
+        _category = State(initialValue: editingEvent?.category)
         _plannedAt = State(
             initialValue: editingEvent?.plannedAt
                 ?? referenceDate.addingTimeInterval(60 * 60)
@@ -175,6 +177,32 @@ struct OutingPlanComposerView: View {
             }
 
             Section {
+                if existingPlan == nil {
+                    Picker("Catégorie", selection: $category) {
+                        Text("Choisir…")
+                            .tag(nil as OutingCategory?)
+
+                        ForEach(OutingCategory.allCases) { category in
+                            Label(
+                                category.title,
+                                systemImage: category.systemImageName
+                            )
+                            .tag(category as OutingCategory?)
+                        }
+                    }
+                } else if let category {
+                    LabeledContent("Catégorie") {
+                        Label(
+                            category.title,
+                            systemImage: category.systemImageName
+                        )
+                    }
+                }
+            } header: {
+                Text("Type de sortie")
+            }
+
+            Section {
                 DatePicker(
                     "Heure prévue",
                     selection: $plannedAt,
@@ -261,6 +289,7 @@ struct OutingPlanComposerView: View {
     private var canPublish: Bool {
         let referenceDate = Date()
         return selectedCoordinate != nil
+            && category != nil
             && !placeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && plannedAt > referenceDate
             && plannedAt.timeIntervalSince(referenceDate)
@@ -306,6 +335,7 @@ struct OutingPlanComposerView: View {
             selectedCoordinate = plan.coordinate
             placeName = plan.placeName
             address = plan.address
+            category = plan.category
             plannedAt = validPlanningDate(plan.plannedAt)
 
             loadingState = .loaded
@@ -352,7 +382,7 @@ struct OutingPlanComposerView: View {
     }
 
     private func publishPlan() {
-        guard let selectedCoordinate else { return }
+        guard let selectedCoordinate, let category else { return }
 
         isWriting = true
         writeErrorMessage = nil
@@ -362,6 +392,7 @@ struct OutingPlanComposerView: View {
             displayName: publicationDisplayName,
             placeName: placeName,
             address: address,
+            category: category,
             coordinate: selectedCoordinate,
             plannedAt: plannedAt,
             timeZoneIdentifier: TimeZone.current.identifier

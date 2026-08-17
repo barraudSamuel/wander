@@ -98,6 +98,7 @@ final class OutingPlanService: ObservableObject {
             "publicationId": UUID().uuidString,
             "displayName": validatedDraft.displayName,
             "placeName": validatedDraft.placeName,
+            "category": validatedDraft.category.rawValue,
             "location": GeoPoint(
                 latitude: validatedDraft.coordinate.latitude,
                 longitude: validatedDraft.coordinate.longitude

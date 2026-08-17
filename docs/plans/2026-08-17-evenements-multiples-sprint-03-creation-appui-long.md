@@ -7,6 +7,9 @@ approved_at: "2026-08-17T10:36:34+09:00"
 started_at: "2026-08-17T10:37:00+09:00"
 haptic_revision_approved_at: "2026-08-17T11:01:33+09:00"
 location_footer_removal_approved_at: "2026-08-17T12:28:21+09:00"
+category_revision_approved_at: "2026-08-17T12:38:25+09:00"
+category_revision_started_at: "2026-08-17T12:38:25+09:00"
+strict_category_revision_approved_at: "2026-08-17T12:48:25+09:00"
 tags: [plan, sprint, ios, swiftui, mapkit, ux]
 ---
 
@@ -37,6 +40,12 @@ appui long crée un événement indépendant.
   juste avant l’ouverture du compositeur.
 - Ne présenter aucun texte d’aide sous la section « Lieu », en création comme
   en modification.
+- Exiger à la création une catégorie parmi Café, Repas, Verre, Balade,
+  Culture, Sport et Autre, sans choix présélectionné.
+- Afficher la catégorie dans la fiche de l’événement et la conserver en lecture
+  seule lors d’une modification.
+- Persister un identifiant de catégorie stable et obligatoire dans Firestore ;
+  tout document sans catégorie ou avec une valeur inconnue est rejeté.
 
 ## Non-goals
 
@@ -44,7 +53,13 @@ appui long crée un événement indépendant.
 - Aucun ajustement du point dans le compositeur.
 - Aucune recherche manuelle de lieu ou d’adresse.
 - Aucune expiration, règle TTL ou migration de données.
-- Aucun changement du contrat Firestore livré aux Sprints 1 et 2.
+- Aucune suppression distante par Codex ; le propriétaire supprimera lui-même
+  les anciens événements en ligne avant d’utiliser le nouveau contrat strict.
+- Aucun changement des identités, chemins, dates d’audit ou durées de vie du
+  contrat Firestore livré aux Sprints 1 et 2.
+- Aucun changement visuel des marqueurs de la carte selon la catégorie.
+- Aucun changement du contenu des notifications selon la catégorie.
+- Aucune modification de la catégorie après publication dans ce sprint.
 - Aucun déploiement Firebase, commit ou nettoyage distant.
 
 ## Dependencies
@@ -57,6 +72,11 @@ appui long crée un événement indépendant.
 - `wander/MapWithFogView.swift`
 - `wander/ContentView.swift`
 - `wander/OutingPlanComposerView.swift`
+- `wander/OutingPlan.swift`
+- `wander/OutingPlanService.swift`
+- `wander/OutingPlanDetailCardView.swift`
+- `firestore.rules`
+- `firebase-tests/tests/outing-events.rules.test.mjs`
 - `docs/plans/2026-08-17-evenements-multiples-sprint-03-creation-appui-long.md`
 - `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Backlog features.md`
 - `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Documentation technique.md`
@@ -73,10 +93,17 @@ appui long crée un événement indépendant.
 - [x] Retirer la mini-carte et rendre le lieu non modifiable dans le formulaire.
 - [x] Conserver le géocodage inverse automatique et un repli publiable.
 - [x] Conserver l’édition de l’heure et l’annulation d’un événement précis.
-- [x] Mettre à jour la documentation Obsidian concernée.
+- [ ] Mettre à jour la documentation Obsidian concernée pour la révision
+  des catégories.
 - [x] Simplifier et revoir le diff.
 - [x] Ajouter le retour haptique unique à la reconnaissance de l’appui long.
 - [x] Supprimer complètement le pied de texte de la section « Lieu ».
+- [x] Ajouter les catégories persistées et leur présentation native.
+- [x] Exiger un choix explicite dans le compositeur de création.
+- [x] Rejeter les événements sans catégorie, sans valeur de repli.
+- [x] Afficher la catégorie dans la fiche et en lecture seule à l’édition.
+- [x] Exiger le champ dans les règles Firestore.
+- [x] Couvrir les catégories autorisées, absentes et invalides par les tests.
 
 ## Risks
 
@@ -94,6 +121,9 @@ appui long crée un événement indépendant.
 - Sans bouton alternatif, l’action est moins découvrable et moins accessible ;
   la carte recevra un libellé et une indication d’accessibilité, sans rétablir
   un autre parcours de création.
+- Le contrat strict rend incompatibles les anciens documents et les anciennes
+  versions de l’application qui n’écrivent pas `category` ; ce choix est accepté
+  et les événements distants existants seront supprimés manuellement.
 
 ## Validation
 
@@ -112,6 +142,13 @@ appui long crée un événement indépendant.
   de simulateur supplémentaire.
 - [x] Les quatre notes Wander sont vérifiées dans la vue de lecture d’Obsidian.
 - [x] Aucun déploiement Firebase, commit ou nettoyage distant n’est exécuté.
+- [x] La publication reste désactivée tant qu’aucune catégorie n’est choisie.
+- [x] Les sept catégories sont publiables et exposées dans la fiche.
+- [x] Un événement sans `category` est refusé sans valeur de repli.
+- [x] Une catégorie inconnue ou d’un type invalide est refusée par les règles.
+- [x] Les tests complets des règles Firestore réussissent.
+- [ ] Dynamic Type, VoiceOver et les modes clair/sombre sont vérifiés pour le
+  sélecteur et le libellé de catégorie.
 
 ### Résultats exacts au 17 août 2026
 
@@ -144,6 +181,30 @@ appui long crée un événement indépendant.
   création et en modification. Les deux anciens textes sont absents du code,
   `git diff --check` réussit et le build Debug suivant la révision se termine
   avec le code de sortie `0`.
+- Révision des catégories — le build Debug sur la destination iPhone 17
+  réussit avec le code de sortie `0`, sans nouvelle erreur ni nouvel
+  avertissement Swift ; seul le message Xcode existant sur les plateformes du
+  scheme est émis.
+- `npm --prefix firebase-tests run test:rules` avec OpenJDK 21 — 29 tests
+  réussis, aucun échec ; les sept valeurs sont acceptées, tandis que l’absence,
+  les valeurs inconnues et les types invalides sont refusés.
+- `npm --prefix functions test` — compilation TypeScript réussie, 26 tests
+  réussis, aucun échec et un test d’intégration émulateur ignoré comme prévu.
+- Revue manuelle — les deux constructions de `OutingPlanDraft` propagent la
+  catégorie, tout nouvel événement l’écrit, le décodeur exige le champ et aucun
+  finding ne justifie un nouveau fichier `todos/`.
+- Révision stricte — le build Debug réussit de nouveau avec le code de sortie
+  `0` ; les 29 tests Firestore et les 26 tests Cloud Functions réussissent après
+  suppression du fallback. Aucun événement distant n’a été supprimé ou modifié.
+- Validation interactive non exécutée : `xcrun simctl list devices booted` ne
+  retourne aucun appareil. Aucun Simulator n’a été démarré sans approbation.
+- Documentation Obsidian non mise à jour : le vault externe n’est pas
+  accessible en écriture dans cette session. Restent à modifier et valider en
+  vue de lecture : `Backlog features.md` (« Permettre plusieurs événements
+  persistants »), `Documentation technique.md` (« Schéma Firestore principal »
+  et « Événements et participations »), `Documentation UX.md` (« Sorties
+  prévues » et « États UX essentiels »), puis `00 - Wander.md` (« État du
+  projet »), avec mise à jour du frontmatter `updated` pour chaque note.
 
 ## Acceptance criteria
 
@@ -151,6 +212,9 @@ appui long crée un événement indépendant.
 - Le point du geste devient le lieu fixe du nouvel événement.
 - Le formulaire ne contient ni recherche textuelle ni carte.
 - Un nouvel appui long crée un nouvel événement, sans remplacer les précédents.
+- Une catégorie explicite est requise à la création et persiste avec
+  l’événement.
+- La fiche expose la catégorie sans modifier le langage visuel natif de l’app.
 - Les interactions ordinaires et les marqueurs de la carte restent utilisables.
 
 ## Review notes
@@ -162,3 +226,9 @@ appui long crée un événement indépendant.
   créer au centre de la carte ; ces solutions contredisent le parcours approuvé.
 - Least certain: la validation gestuelle dépend de la disponibilité du seul
   simulateur iPhone 17 déjà démarré.
+- Category revision: le choix reste volontairement non présélectionné en
+  création et non modifiable ensuite ; les identifiants anglais persistés sont
+  découplés des libellés français.
+- Strict category revision: aucun fallback n’est conservé ; l’absence de
+  `category` invalide le document et la suppression des anciens événements
+  distants reste une action manuelle du propriétaire.

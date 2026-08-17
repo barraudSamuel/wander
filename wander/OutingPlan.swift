@@ -7,6 +7,56 @@ import CoreLocation
 import FirebaseFirestore
 import Foundation
 
+enum OutingCategory: String, CaseIterable, Identifiable {
+    case coffee
+    case meal
+    case drinks
+    case walk
+    case culture
+    case sport
+    case other
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .coffee:
+            "Café"
+        case .meal:
+            "Repas"
+        case .drinks:
+            "Verre"
+        case .walk:
+            "Balade"
+        case .culture:
+            "Culture"
+        case .sport:
+            "Sport"
+        case .other:
+            "Autre"
+        }
+    }
+
+    var systemImageName: String {
+        switch self {
+        case .coffee:
+            "cup.and.saucer.fill"
+        case .meal:
+            "fork.knife"
+        case .drinks:
+            "wineglass"
+        case .walk:
+            "figure.walk"
+        case .culture:
+            "theatermasks"
+        case .sport:
+            "figure.run"
+        case .other:
+            "ellipsis.circle"
+        }
+    }
+}
+
 struct OutingPlan: Identifiable, Equatable {
     static let maximumPlanningInterval: TimeInterval = 24 * 60 * 60
     static let maximumDisplayNameLength = 50
@@ -21,6 +71,7 @@ struct OutingPlan: Identifiable, Equatable {
     let displayName: String
     let placeName: String
     let address: String?
+    let category: OutingCategory
     let coordinate: CLLocationCoordinate2D
     let plannedAt: Date
     let publishedAt: Date
@@ -38,6 +89,7 @@ struct OutingPlan: Identifiable, Equatable {
             && lhs.displayName == rhs.displayName
             && lhs.placeName == rhs.placeName
             && lhs.address == rhs.address
+            && lhs.category == rhs.category
             && lhs.coordinate.latitude == rhs.coordinate.latitude
             && lhs.coordinate.longitude == rhs.coordinate.longitude
             && lhs.plannedAt == rhs.plannedAt
@@ -51,6 +103,7 @@ struct OutingPlanDraft: Equatable {
     let displayName: String
     let placeName: String
     let address: String?
+    let category: OutingCategory
     let coordinate: CLLocationCoordinate2D
     let plannedAt: Date
     let timeZoneIdentifier: String
@@ -59,6 +112,7 @@ struct OutingPlanDraft: Equatable {
         lhs.displayName == rhs.displayName
             && lhs.placeName == rhs.placeName
             && lhs.address == rhs.address
+            && lhs.category == rhs.category
             && lhs.coordinate.latitude == rhs.coordinate.latitude
             && lhs.coordinate.longitude == rhs.coordinate.longitude
             && lhs.plannedAt == rhs.plannedAt
@@ -71,6 +125,7 @@ enum OutingPlanValidationError: LocalizedError, Equatable {
     case invalidDisplayName
     case invalidPlaceName
     case invalidAddress
+    case invalidCategory
     case invalidCoordinate
     case invalidPlannedDate
     case invalidEventID
@@ -88,6 +143,8 @@ enum OutingPlanValidationError: LocalizedError, Equatable {
             return "Le nom du lieu est invalide."
         case .invalidAddress:
             return "L’adresse du lieu est invalide."
+        case .invalidCategory:
+            return "La catégorie de l’événement est invalide."
         case .invalidCoordinate:
             return "La position du lieu est invalide."
         case .invalidPlannedDate:
@@ -146,6 +203,7 @@ extension OutingPlan {
             displayName: displayName,
             placeName: placeName,
             address: address,
+            category: draft.category,
             coordinate: draft.coordinate,
             plannedAt: draft.plannedAt,
             timeZoneIdentifier: draft.timeZoneIdentifier
@@ -198,6 +256,11 @@ extension OutingPlan {
             address = nil
         }
 
+        guard let rawCategory = data["category"] as? String,
+              let category = OutingCategory(rawValue: rawCategory) else {
+            throw OutingPlanValidationError.invalidCategory
+        }
+
         guard let location = data["location"] as? GeoPoint else {
             throw OutingPlanValidationError.invalidCoordinate
         }
@@ -235,6 +298,7 @@ extension OutingPlan {
         self.displayName = displayName
         self.placeName = placeName
         self.address = address
+        self.category = category
         self.coordinate = coordinate
         self.plannedAt = plannedAt
         self.publishedAt = publishedAt

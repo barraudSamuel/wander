@@ -44,6 +44,7 @@ function eventData(eventId, overrides = {}) {
     publicationId: crypto.randomUUID(),
     displayName: "Samuel",
     placeName: "Gyeongbokgung Palace",
+    category: "coffee",
     address: "161 Sajik-ro, Jongno-gu",
     location: new GeoPoint(37.5796, 126.977),
     plannedAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
@@ -161,6 +162,50 @@ describe("users/{ownerID}/events/{eventID}", () => {
     await assertFails(setDoc(
       reference,
       eventData(crypto.randomUUID(), { placeName: "Bukchon" }),
+    ));
+  });
+
+  test("supported categories are accepted", async () => {
+    const database = authenticatedFirestore(ownerId);
+    const categories = [
+      "coffee",
+      "meal",
+      "drinks",
+      "walk",
+      "culture",
+      "sport",
+      "other",
+    ];
+
+    for (const category of categories) {
+      const eventId = crypto.randomUUID();
+      await assertSucceeds(setDoc(
+        eventReference(database, eventId),
+        eventData(eventId, { category }),
+      ));
+    }
+  });
+
+  test("missing, unknown, and non-string categories are rejected", async () => {
+    const database = authenticatedFirestore(ownerId);
+    const missingCategoryEventId = crypto.randomUUID();
+    const unknownCategoryEventId = crypto.randomUUID();
+    const nonStringCategoryEventId = crypto.randomUUID();
+
+    const { category: _category, ...missingCategoryEvent } = eventData(
+      missingCategoryEventId,
+    );
+    await assertFails(setDoc(
+      eventReference(database, missingCategoryEventId),
+      missingCategoryEvent,
+    ));
+    await assertFails(setDoc(
+      eventReference(database, unknownCategoryEventId),
+      eventData(unknownCategoryEventId, { category: "party" }),
+    ));
+    await assertFails(setDoc(
+      eventReference(database, nonStringCategoryEventId),
+      eventData(nonStringCategoryEventId, { category: 42 }),
     ));
   });
 

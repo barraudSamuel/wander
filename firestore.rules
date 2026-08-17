@@ -309,6 +309,7 @@ service cloud.firestore {
           'publicationId',
           'displayName',
           'placeName',
+          'category',
           'location',
           'plannedAt',
           'publishedAt',
@@ -321,6 +322,7 @@ service cloud.firestore {
           'publicationId',
           'displayName',
           'placeName',
+          'category',
           'address',
           'location',
           'plannedAt',
@@ -358,6 +360,19 @@ service cloud.firestore {
         );
     }
 
+    function isValidEventCategory(data) {
+      return data.category is string
+        && data.category in [
+          'coffee',
+          'meal',
+          'drinks',
+          'walk',
+          'culture',
+          'sport',
+          'other'
+        ];
+    }
+
     function isValidTimeZoneIdentifier(identifier) {
       // Full IANA membership is validated by Foundation on the client. Rules
       // still constrain the identifier to the IANA path character set.
@@ -380,6 +395,7 @@ service cloud.firestore {
         && isNormalizedEventText(data.displayName)
         && isValidPlaceName(data.placeName)
         && isValidEventAddress(data)
+        && isValidEventCategory(data)
         && data.location is latlng
         && data.location.latitude() >= -90
         && data.location.latitude() <= 90
