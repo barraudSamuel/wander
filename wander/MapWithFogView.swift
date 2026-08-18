@@ -12,10 +12,6 @@ import SwiftUI
 import MapKit
 import CoreLocation
 
-private func markerForegroundColor(for backgroundColor: UIColor) -> UIColor {
-    ProfileColor.contrastingUIColor(for: backgroundColor)
-}
-
 struct MapUserCalloutInfo: Equatable {
     let displayName: String
     let relationshipText: String
@@ -109,10 +105,16 @@ fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
     var eventID = ""
     var profileColorHex = ""
     var isCurrentUser = false
+    var category = OutingCategory.other
 }
 
-private final class OutingPlanAnnotationView: MKMarkerAnnotationView {
+private final class OutingPlanAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "OutingPlanAnnotation"
+    static let controlSize: CGFloat = 48
+    static let visualSize: CGFloat = 40
+    static let annotationCenterOffset = CGPoint(x: 0, y: -20)
+
+    private let badgeView = OutingCategoryBadgeView()
 
     override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -124,15 +126,24 @@ private final class OutingPlanAnnotationView: MKMarkerAnnotationView {
         configureView()
     }
 
-    func configure(with annotation: OutingPlanAnnotation) {
-        markerTintColor = ProfileColor.uiColor(hex: annotation.profileColorHex)
-        glyphTintColor = markerForegroundColor(for: markerTintColor ?? .systemIndigo)
-        glyphImage = UIImage(
-            systemName: annotation.isCurrentUser
-                ? "calendar.badge.clock"
-                : "clock.fill"
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        badgeView.frame = CGRect(
+            x: (bounds.width - Self.visualSize) / 2,
+            y: (bounds.height - Self.visualSize) / 2,
+            width: Self.visualSize,
+            height: Self.visualSize
         )
-        displayPriority = annotation.isCurrentUser ? .required : .defaultHigh
+    }
+
+    func configure(with annotation: OutingPlanAnnotation) {
+        badgeView.configure(
+            category: annotation.category,
+            profileColorHex: annotation.profileColorHex,
+            isCurrentUser: annotation.isCurrentUser
+        )
+        displayPriority = .required
 
         let placeName = annotation.title ?? "Lieu sans nom"
         accessibilityLabel = annotation.isCurrentUser
@@ -142,12 +153,34 @@ private final class OutingPlanAnnotationView: MKMarkerAnnotationView {
     }
 
     private func configureView() {
+        frame = CGRect(
+            origin: .zero,
+            size: CGSize(width: Self.controlSize, height: Self.controlSize)
+        )
+        bounds = CGRect(
+            origin: .zero,
+            size: CGSize(width: Self.controlSize, height: Self.controlSize)
+        )
+        centerOffset = Self.annotationCenterOffset
+        backgroundColor = .clear
+        clipsToBounds = false
         canShowCallout = false
-        animatesWhenAdded = true
         clusteringIdentifier = nil
         collisionMode = .circle
-        titleVisibility = .adaptive
-        subtitleVisibility = .hidden
+        displayPriority = .required
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        addSubview(badgeView)
+        setNeedsLayout()
+    }
+
+    static func projectedFrame(at anchorPoint: CGPoint) -> CGRect {
+        CGRect(
+            x: anchorPoint.x + annotationCenterOffset.x - controlSize / 2,
+            y: anchorPoint.y + annotationCenterOffset.y - controlSize / 2,
+            width: controlSize,
+            height: controlSize
+        )
     }
 }
 
@@ -1291,7 +1324,7 @@ struct MapWithFogView: UIViewRepresentable {
             "Maintenez un doigt sur un endroit vide pour créer un événement."
 
         context.coordinator.installLongPressRecognizer(on: mapView)
-        context.coordinator.installFriendOffscreenIndicatorContainer(
+        context.coordinator.installMapOffscreenIndicatorContainer(
             on: mapView
         )
 
@@ -1342,9 +1375,9 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         updateFriendAnnotations(on: uiView, context: context)
-        context.coordinator.refreshFriendOffscreenIndicators(on: uiView)
         updateUserLocationAnnotation(on: uiView, context: context)
         updateOutingPlanAnnotations(on: uiView, context: context)
+        context.coordinator.refreshMapOffscreenIndicators(on: uiView)
         synchronizeOutingPlanSelection(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
@@ -1406,7 +1439,7 @@ struct MapWithFogView: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: MKMapView, coordinator: Coordinator) {
         coordinator.removeLongPressRecognizer(from: uiView)
-        coordinator.removeFriendOffscreenIndicatorContainer()
+        coordinator.removeMapOffscreenIndicatorContainer()
     }
 
     private var visibleDiscoveredCellIDs: Set<String> {
@@ -1598,6 +1631,7 @@ struct MapWithFogView: UIViewRepresentable {
             annotation.subtitle = nil
             annotation.profileColorHex = presentation.profileColorHex
             annotation.isCurrentUser = presentation.isCurrentUser
+            annotation.category = plan.category
 
             if isNewAnnotation {
                 mapView.addAnnotation(annotation)
@@ -1943,14 +1977,21 @@ struct MapWithFogView: UIViewRepresentable {
         var onDeselectOutingPlan: (String) -> Void
         var onCreateEvent: (CLLocationCoordinate2D) -> Void
         private weak var longPressRecognizer: UILongPressGestureRecognizer?
-        private weak var friendOffscreenIndicatorContainer:
-            FriendOffscreenIndicatorContainerView?
+        private weak var mapOffscreenIndicatorContainer:
+            MapOffscreenIndicatorContainerView?
         private var friendOffscreenIndicatorViews:
             [String: FriendOffscreenIndicatorView] = [:]
+        private var outingOffscreenIndicatorViews:
+            [String: OutingOffscreenIndicatorView] = [:]
         private let eventCreationFeedback = UIImpactFeedbackGenerator(
             style: .medium
         )
-        private static let friendPinRadius: CGFloat = 44
+        private static let friendPinSize: CGFloat = 88
+
+        private enum OffscreenTarget {
+            case friend(String)
+            case outing(String)
+        }
 
         init(
             fogColor: UIColor,
@@ -1990,113 +2031,172 @@ struct MapWithFogView: UIViewRepresentable {
             self.longPressRecognizer = nil
         }
 
-        func installFriendOffscreenIndicatorContainer(on mapView: MKMapView) {
-            guard friendOffscreenIndicatorContainer == nil else { return }
+        func installMapOffscreenIndicatorContainer(on mapView: MKMapView) {
+            guard mapOffscreenIndicatorContainer == nil else { return }
 
-            let container = FriendOffscreenIndicatorContainerView(
+            let container = MapOffscreenIndicatorContainerView(
                 frame: mapView.bounds
             )
             container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             container.backgroundColor = .clear
             container.isAccessibilityElement = false
             mapView.addSubview(container)
-            friendOffscreenIndicatorContainer = container
+            mapOffscreenIndicatorContainer = container
         }
 
-        func removeFriendOffscreenIndicatorContainer() {
-            friendOffscreenIndicatorContainer?.removeFromSuperview()
+        func removeMapOffscreenIndicatorContainer() {
+            mapOffscreenIndicatorContainer?.removeFromSuperview()
             friendOffscreenIndicatorViews.removeAll()
-            friendOffscreenIndicatorContainer = nil
+            outingOffscreenIndicatorViews.removeAll()
+            mapOffscreenIndicatorContainer = nil
         }
 
-        func refreshFriendOffscreenIndicators(on mapView: MKMapView) {
-            guard let container = friendOffscreenIndicatorContainer else {
+        func refreshMapOffscreenIndicators(on mapView: MKMapView) {
+            guard let container = mapOffscreenIndicatorContainer else {
                 return
             }
 
             container.frame = mapView.bounds
-            guard let indicatorBounds = FriendOffscreenIndicatorLayout
+            guard let indicatorBounds = MapOffscreenIndicatorLayout
                 .indicatorBounds(
                     in: mapView.bounds,
                     safeAreaInsets: mapView.safeAreaInsets
                 ) else {
-                removeAllFriendOffscreenIndicatorViews()
+                removeAllMapOffscreenIndicatorViews()
                 return
             }
 
             let safeBounds = mapView.bounds.inset(by: mapView.safeAreaInsets)
-            let visiblePinCenterBounds = safeBounds.insetBy(
-                dx: -Self.friendPinRadius,
-                dy: -Self.friendPinRadius
-            )
-            guard visiblePinCenterBounds.width > 0,
-                  visiblePinCenterBounds.height > 0 else {
-                removeAllFriendOffscreenIndicatorViews()
+            guard safeBounds.width > 0, safeBounds.height > 0 else {
+                removeAllMapOffscreenIndicatorViews()
                 return
             }
 
-            let candidates = friendAnnotations.keys.sorted().compactMap {
-                userID -> FriendOffscreenIndicatorCandidate? in
+            var candidates: [MapOffscreenIndicatorCandidate] = []
+            var targetByCandidateID: [String: OffscreenTarget] = [:]
+
+            for userID in friendAnnotations.keys.sorted() {
                 guard let annotation = friendAnnotations[userID],
                       let targetPoint = projectedPoint(
                         for: annotation.coordinate,
                         on: mapView
-                      ),
-                      !visiblePinCenterBounds.contains(targetPoint) else {
-                    return nil
-                }
-
-                return FriendOffscreenIndicatorCandidate(
-                    userID: userID,
-                    targetPoint: targetPoint
-                )
-            }
-            let placements = FriendOffscreenIndicatorLayout.placements(
-                for: candidates,
-                in: indicatorBounds
-            )
-            let desiredUserIDs = Set(placements.map(\.userID))
-
-            let obsoleteUserIDs = friendOffscreenIndicatorViews.keys.filter {
-                !desiredUserIDs.contains($0)
-            }
-            for userID in obsoleteUserIDs {
-                friendOffscreenIndicatorViews[userID]?.removeFromSuperview()
-                friendOffscreenIndicatorViews.removeValue(forKey: userID)
-            }
-
-            for placement in placements {
-                guard let calloutInfo = friendCalloutInfoByUserID[
-                    placement.userID
-                ] else {
+                      ) else {
                     continue
                 }
 
-                let indicatorView = friendOffscreenIndicatorView(
-                    for: placement.userID,
-                    in: container,
-                    mapView: mapView
+                let pinFrame = CGRect(
+                    x: targetPoint.x - Self.friendPinSize / 2,
+                    y: targetPoint.y - Self.friendPinSize / 2,
+                    width: Self.friendPinSize,
+                    height: Self.friendPinSize
                 )
-                indicatorView.configure(
-                    displayName: calloutInfo.displayName,
-                    avatarID: friendAvatarIDByUserID[placement.userID]
-                        ?? ProfileAvatar.generatedID(seed: placement.userID),
-                    profileColorHex:
-                        friendProfileColorHexByUserID[placement.userID]
-                        ?? ProfileColor.generatedHex(seed: placement.userID),
-                    isLocationFresh: calloutInfo.isLocationFresh,
-                    directionName: placement.directionName,
-                    edge: placement.edge
+                guard !safeBounds.intersects(pinFrame) else { continue }
+
+                let candidateID = "friend:\(userID)"
+                candidates.append(
+                    MapOffscreenIndicatorCandidate(
+                        id: candidateID,
+                        targetPoint: targetPoint
+                    )
                 )
-                indicatorView.center = placement.center
+                targetByCandidateID[candidateID] = .friend(userID)
             }
 
+            for eventID in outingPlanAnnotations.keys.sorted() {
+                guard let annotation = outingPlanAnnotations[eventID],
+                      let targetPoint = projectedPoint(
+                        for: annotation.coordinate,
+                        on: mapView
+                      ) else {
+                    continue
+                }
+
+                let markerFrame = OutingPlanAnnotationView.projectedFrame(
+                    at: targetPoint
+                )
+                guard !safeBounds.intersects(markerFrame) else { continue }
+
+                let candidateID = "outing:\(eventID)"
+                candidates.append(
+                    MapOffscreenIndicatorCandidate(
+                        id: candidateID,
+                        targetPoint: targetPoint
+                    )
+                )
+                targetByCandidateID[candidateID] = .outing(eventID)
+            }
+
+            let placements = MapOffscreenIndicatorLayout.placements(
+                for: candidates,
+                in: indicatorBounds
+            )
+            var desiredFriendIDs: Set<String> = []
+            var desiredEventIDs: Set<String> = []
+
+            for placement in placements {
+                guard let target = targetByCandidateID[placement.id] else {
+                    continue
+                }
+
+                switch target {
+                case .friend(let userID):
+                    guard let calloutInfo = friendCalloutInfoByUserID[userID]
+                    else {
+                        continue
+                    }
+
+                    desiredFriendIDs.insert(userID)
+                    let indicatorView = friendOffscreenIndicatorView(
+                        for: userID,
+                        in: container,
+                        mapView: mapView
+                    )
+                    indicatorView.configure(
+                        displayName: calloutInfo.displayName,
+                        avatarID: friendAvatarIDByUserID[userID]
+                            ?? ProfileAvatar.generatedID(seed: userID),
+                        profileColorHex: friendProfileColorHexByUserID[userID]
+                            ?? ProfileColor.generatedHex(seed: userID),
+                        isLocationFresh: calloutInfo.isLocationFresh,
+                        directionName: placement.directionName,
+                        edge: placement.edge
+                    )
+                    indicatorView.center = placement.center
+
+                case .outing(let eventID):
+                    guard let annotation = outingPlanAnnotations[eventID]
+                    else {
+                        continue
+                    }
+
+                    desiredEventIDs.insert(eventID)
+                    let indicatorView = outingOffscreenIndicatorView(
+                        for: eventID,
+                        in: container,
+                        mapView: mapView
+                    )
+                    indicatorView.configure(
+                        placeName: annotation.title ?? "Lieu sans nom",
+                        category: annotation.category,
+                        profileColorHex: annotation.profileColorHex,
+                        isCurrentUser: annotation.isCurrentUser,
+                        directionName: placement.directionName,
+                        edge: placement.edge
+                    )
+                    indicatorView.center = placement.center
+                }
+            }
+
+            removeObsoleteOffscreenIndicatorViews(
+                desiredFriendIDs: desiredFriendIDs,
+                desiredEventIDs: desiredEventIDs
+            )
             mapView.bringSubviewToFront(container)
         }
 
         private func friendOffscreenIndicatorView(
             for userID: String,
-            in container: FriendOffscreenIndicatorContainerView,
+            in container: MapOffscreenIndicatorContainerView,
             mapView: MKMapView
         ) -> FriendOffscreenIndicatorView {
             if let existing = friendOffscreenIndicatorViews[userID] {
@@ -2113,11 +2213,56 @@ struct MapWithFogView: UIViewRepresentable {
             return indicatorView
         }
 
-        private func removeAllFriendOffscreenIndicatorViews() {
+        private func outingOffscreenIndicatorView(
+            for eventID: String,
+            in container: MapOffscreenIndicatorContainerView,
+            mapView: MKMapView
+        ) -> OutingOffscreenIndicatorView {
+            if let existing = outingOffscreenIndicatorViews[eventID] {
+                return existing
+            }
+
+            let indicatorView = OutingOffscreenIndicatorView(eventID: eventID)
+            indicatorView.onActivate = { [weak self, weak mapView] eventID in
+                guard let self, let mapView else { return }
+                self.centerMap(onOutingPlan: eventID, on: mapView)
+            }
+            container.addSubview(indicatorView)
+            outingOffscreenIndicatorViews[eventID] = indicatorView
+            return indicatorView
+        }
+
+        private func removeObsoleteOffscreenIndicatorViews(
+            desiredFriendIDs: Set<String>,
+            desiredEventIDs: Set<String>
+        ) {
+            let obsoleteUserIDs = friendOffscreenIndicatorViews.keys.filter {
+                !desiredFriendIDs.contains($0)
+            }
+            for userID in obsoleteUserIDs {
+                friendOffscreenIndicatorViews[userID]?.removeFromSuperview()
+                friendOffscreenIndicatorViews.removeValue(forKey: userID)
+            }
+
+            let obsoleteEventIDs = outingOffscreenIndicatorViews.keys.filter {
+                !desiredEventIDs.contains($0)
+            }
+            for eventID in obsoleteEventIDs {
+                outingOffscreenIndicatorViews[eventID]?.removeFromSuperview()
+                outingOffscreenIndicatorViews.removeValue(forKey: eventID)
+            }
+        }
+
+        private func removeAllMapOffscreenIndicatorViews() {
             for indicatorView in friendOffscreenIndicatorViews.values {
                 indicatorView.removeFromSuperview()
             }
             friendOffscreenIndicatorViews.removeAll()
+
+            for indicatorView in outingOffscreenIndicatorViews.values {
+                indicatorView.removeFromSuperview()
+            }
+            outingOffscreenIndicatorViews.removeAll()
         }
 
         private func projectedPoint(
@@ -2170,6 +2315,24 @@ struct MapWithFogView: UIViewRepresentable {
 
         private func centerMap(onFriend userID: String, on mapView: MKMapView) {
             guard let annotation = friendAnnotations[userID] else { return }
+
+            mapView.setUserTrackingMode(.none, animated: false)
+            let region = MKCoordinateRegion(
+                center: annotation.coordinate,
+                latitudinalMeters: 800,
+                longitudinalMeters: 800
+            )
+            mapView.setRegion(region, animated: true)
+            mapView.selectAnnotation(annotation, animated: true)
+        }
+
+        private func centerMap(
+            onOutingPlan eventID: String,
+            on mapView: MKMapView
+        ) {
+            guard let annotation = outingPlanAnnotations[eventID] else {
+                return
+            }
 
             mapView.setUserTrackingMode(.none, animated: false)
             let region = MKCoordinateRegion(
@@ -2248,7 +2411,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
-            refreshFriendOffscreenIndicators(on: mapView)
+            refreshMapOffscreenIndicators(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {

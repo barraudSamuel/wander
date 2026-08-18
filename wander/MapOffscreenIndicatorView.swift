@@ -1,38 +1,72 @@
 //
-//  FriendOffscreenIndicatorView.swift
+//  MapOffscreenIndicatorView.swift
 //  wander
 //
-//  Edge indicators for accepted friends whose map pins are outside the viewport.
+//  Shared edge indicators for map content outside the viewport.
 //
 
 import UIKit
 
-enum FriendOffscreenIndicatorEdge: Int, CaseIterable {
+enum MapOffscreenIndicatorEdge: Int, CaseIterable {
     case top
     case right
     case bottom
     case left
 }
 
-struct FriendOffscreenIndicatorCandidate {
-    let userID: String
+struct MapOffscreenIndicatorCandidate {
+    let id: String
     let targetPoint: CGPoint
 }
 
-struct FriendOffscreenIndicatorPlacement {
-    let userID: String
+struct MapOffscreenIndicatorPlacement {
+    let id: String
     let center: CGPoint
-    let edge: FriendOffscreenIndicatorEdge
+    let edge: MapOffscreenIndicatorEdge
     let directionName: String
 }
 
-enum FriendOffscreenIndicatorLayout {
+enum MapOffscreenIndicatorLayout {
     static let controlSize: CGFloat = 48
-    static let avatarSize: CGFloat = 28
+    static let visualSize: CGFloat = 28
 
     private static let edgeInset: CGFloat = 0
     private static let cornerClearance: CGFloat = controlSize * 0.72
-    private static let overlappingSeparation: CGFloat = avatarSize / 2
+    private static let overlappingSeparation: CGFloat = visualSize / 2
+
+    static func visualFrame(
+        in bounds: CGRect,
+        edge: MapOffscreenIndicatorEdge
+    ) -> CGRect {
+        let origin: CGPoint
+        switch edge {
+        case .top:
+            origin = CGPoint(
+                x: (bounds.width - visualSize) / 2,
+                y: 0
+            )
+        case .right:
+            origin = CGPoint(
+                x: bounds.width - visualSize,
+                y: (bounds.height - visualSize) / 2
+            )
+        case .bottom:
+            origin = CGPoint(
+                x: (bounds.width - visualSize) / 2,
+                y: bounds.height - visualSize
+            )
+        case .left:
+            origin = CGPoint(
+                x: 0,
+                y: (bounds.height - visualSize) / 2
+            )
+        }
+
+        return CGRect(
+            origin: origin,
+            size: CGSize(width: visualSize, height: visualSize)
+        )
+    }
 
     static func indicatorBounds(
         in bounds: CGRect,
@@ -52,16 +86,16 @@ enum FriendOffscreenIndicatorLayout {
     }
 
     static func placements(
-        for candidates: [FriendOffscreenIndicatorCandidate],
+        for candidates: [MapOffscreenIndicatorCandidate],
         in indicatorBounds: CGRect
-    ) -> [FriendOffscreenIndicatorPlacement] {
+    ) -> [MapOffscreenIndicatorPlacement] {
         let mapCenter = CGPoint(
             x: indicatorBounds.midX,
             y: indicatorBounds.midY
         )
         var rawPlacements: [RawPlacement] = []
 
-        for candidate in candidates.sorted(by: { $0.userID < $1.userID }) {
+        for candidate in candidates.sorted(by: { $0.id < $1.id }) {
             let direction = CGPoint(
                 x: candidate.targetPoint.x - mapCenter.x,
                 y: candidate.targetPoint.y - mapCenter.y
@@ -79,7 +113,7 @@ enum FriendOffscreenIndicatorLayout {
 
             rawPlacements.append(
                 RawPlacement(
-                    userID: candidate.userID,
+                    id: candidate.id,
                     center: intersection.point,
                     edge: intersection.edge,
                     directionName: directionName(for: direction)
@@ -87,28 +121,28 @@ enum FriendOffscreenIndicatorLayout {
             )
         }
 
-        var resolved: [String: FriendOffscreenIndicatorPlacement] = [:]
-        for edge in FriendOffscreenIndicatorEdge.allCases {
+        var resolved: [String: MapOffscreenIndicatorPlacement] = [:]
+        for edge in MapOffscreenIndicatorEdge.allCases {
             let edgePlacements = rawPlacements.filter { $0.edge == edge }
             for placement in resolveCollisions(
                 edgePlacements,
                 on: edge,
                 in: indicatorBounds
             ) {
-                resolved[placement.userID] = placement
+                resolved[placement.id] = placement
             }
         }
 
-        return candidates.compactMap { resolved[$0.userID] }
+        return candidates.compactMap { resolved[$0.id] }
     }
 
     private static func intersection(
         from origin: CGPoint,
         direction: CGPoint,
         with rect: CGRect
-    ) -> (point: CGPoint, edge: FriendOffscreenIndicatorEdge)? {
+    ) -> (point: CGPoint, edge: MapOffscreenIndicatorEdge)? {
         let horizontalScale: CGFloat?
-        let horizontalEdge: FriendOffscreenIndicatorEdge?
+        let horizontalEdge: MapOffscreenIndicatorEdge?
         if direction.x > 0 {
             horizontalScale = (rect.maxX - origin.x) / direction.x
             horizontalEdge = .right
@@ -121,7 +155,7 @@ enum FriendOffscreenIndicatorLayout {
         }
 
         let verticalScale: CGFloat?
-        let verticalEdge: FriendOffscreenIndicatorEdge?
+        let verticalEdge: MapOffscreenIndicatorEdge?
         if direction.y > 0 {
             verticalScale = (rect.maxY - origin.y) / direction.y
             verticalEdge = .bottom
@@ -158,9 +192,9 @@ enum FriendOffscreenIndicatorLayout {
 
     private static func resolveCollisions(
         _ placements: [RawPlacement],
-        on edge: FriendOffscreenIndicatorEdge,
+        on edge: MapOffscreenIndicatorEdge,
         in rect: CGRect
-    ) -> [FriendOffscreenIndicatorPlacement] {
+    ) -> [MapOffscreenIndicatorPlacement] {
         guard !placements.isEmpty else { return [] }
 
         let isHorizontalEdge = edge == .top || edge == .bottom
@@ -187,7 +221,7 @@ enum FriendOffscreenIndicatorLayout {
             if abs(lhsValue - rhsValue) > 0.5 {
                 return lhsValue < rhsValue
             }
-            return lhs.userID < rhs.userID
+            return lhs.id < rhs.id
         }
 
         let availableSpan = maximum - minimum
@@ -239,8 +273,8 @@ enum FriendOffscreenIndicatorLayout {
                 center = CGPoint(x: rect.minX, y: position)
             }
 
-            return FriendOffscreenIndicatorPlacement(
-                userID: placement.userID,
+            return MapOffscreenIndicatorPlacement(
+                id: placement.id,
                 center: center,
                 edge: edge,
                 directionName: placement.directionName
@@ -250,7 +284,7 @@ enum FriendOffscreenIndicatorLayout {
 
     private static func scalarPosition(
         of point: CGPoint,
-        on edge: FriendOffscreenIndicatorEdge
+        on edge: MapOffscreenIndicatorEdge
     ) -> CGFloat {
         switch edge {
         case .top, .bottom:
@@ -288,14 +322,14 @@ enum FriendOffscreenIndicatorLayout {
     }
 
     private struct RawPlacement {
-        let userID: String
+        let id: String
         let center: CGPoint
-        let edge: FriendOffscreenIndicatorEdge
+        let edge: MapOffscreenIndicatorEdge
         let directionName: String
     }
 }
 
-final class FriendOffscreenIndicatorContainerView: UIView {
+final class MapOffscreenIndicatorContainerView: UIView {
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         subviews.contains { subview in
             !subview.isHidden
@@ -308,13 +342,68 @@ final class FriendOffscreenIndicatorContainerView: UIView {
     }
 }
 
+final class OutingCategoryBadgeView: UIView {
+    private let symbolImageView = UIImageView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureView()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        layer.cornerRadius = min(bounds.width, bounds.height) / 2
+        layer.borderColor = UIColor.systemBackground
+            .resolvedColor(with: traitCollection)
+            .cgColor
+        let symbolInset = max(5, min(bounds.width, bounds.height) * 0.25)
+        symbolImageView.frame = bounds.insetBy(
+            dx: symbolInset,
+            dy: symbolInset
+        )
+    }
+
+    func configure(
+        category: OutingCategory,
+        profileColorHex: String,
+        isCurrentUser: Bool
+    ) {
+        let backgroundColor = ProfileColor.uiColor(hex: profileColorHex)
+        self.backgroundColor = backgroundColor
+        layer.borderWidth = isCurrentUser ? 3 : 2
+        symbolImageView.image = UIImage(systemName: category.systemImageName)
+        symbolImageView.tintColor = ProfileColor.contrastingUIColor(
+            for: backgroundColor
+        )
+        setNeedsLayout()
+    }
+
+    private func configureView() {
+        clipsToBounds = true
+        isAccessibilityElement = false
+
+        symbolImageView.contentMode = .scaleAspectFit
+        symbolImageView.isAccessibilityElement = false
+        symbolImageView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(
+            weight: .semibold
+        )
+        addSubview(symbolImageView)
+    }
+}
+
 final class FriendOffscreenIndicatorView: UIControl {
     let userID: String
     var onActivate: ((String) -> Void)?
 
     private let avatarImageView = UIImageView()
     private var baseAlpha: CGFloat = 1
-    private var edge = FriendOffscreenIndicatorEdge.top
+    private var edge = MapOffscreenIndicatorEdge.top
 
     init(userID: String) {
         self.userID = userID
@@ -322,8 +411,8 @@ final class FriendOffscreenIndicatorView: UIControl {
             frame: CGRect(
                 origin: .zero,
                 size: CGSize(
-                    width: FriendOffscreenIndicatorLayout.controlSize,
-                    height: FriendOffscreenIndicatorLayout.controlSize
+                    width: MapOffscreenIndicatorLayout.controlSize,
+                    height: MapOffscreenIndicatorLayout.controlSize
                 )
             )
         )
@@ -348,35 +437,12 @@ final class FriendOffscreenIndicatorView: UIControl {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        let avatarSize = FriendOffscreenIndicatorLayout.avatarSize
-        let origin: CGPoint
-        switch edge {
-        case .top:
-            origin = CGPoint(
-                x: (bounds.width - avatarSize) / 2,
-                y: 0
-            )
-        case .right:
-            origin = CGPoint(
-                x: bounds.width - avatarSize,
-                y: (bounds.height - avatarSize) / 2
-            )
-        case .bottom:
-            origin = CGPoint(
-                x: (bounds.width - avatarSize) / 2,
-                y: bounds.height - avatarSize
-            )
-        case .left:
-            origin = CGPoint(
-                x: 0,
-                y: (bounds.height - avatarSize) / 2
-            )
-        }
-        avatarImageView.frame = CGRect(
-            origin: origin,
-            size: CGSize(width: avatarSize, height: avatarSize)
+        avatarImageView.frame = MapOffscreenIndicatorLayout.visualFrame(
+            in: bounds,
+            edge: edge
         )
-        avatarImageView.layer.cornerRadius = avatarSize / 2
+        avatarImageView.layer.cornerRadius =
+            MapOffscreenIndicatorLayout.visualSize / 2
     }
 
     func configure(
@@ -385,7 +451,7 @@ final class FriendOffscreenIndicatorView: UIControl {
         profileColorHex: String,
         isLocationFresh: Bool,
         directionName: String,
-        edge: FriendOffscreenIndicatorEdge
+        edge: MapOffscreenIndicatorEdge
     ) {
         if self.edge != edge {
             self.edge = edge
@@ -427,5 +493,91 @@ final class FriendOffscreenIndicatorView: UIControl {
 
     @objc private func activate() {
         onActivate?(userID)
+    }
+}
+
+final class OutingOffscreenIndicatorView: UIControl {
+    let eventID: String
+    var onActivate: ((String) -> Void)?
+
+    private let badgeView = OutingCategoryBadgeView()
+    private var edge = MapOffscreenIndicatorEdge.top
+
+    init(eventID: String) {
+        self.eventID = eventID
+        super.init(
+            frame: CGRect(
+                origin: .zero,
+                size: CGSize(
+                    width: MapOffscreenIndicatorLayout.controlSize,
+                    height: MapOffscreenIndicatorLayout.controlSize
+                )
+            )
+        )
+        configureView()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            alpha = isHighlighted ? 0.68 : 1
+        }
+    }
+
+    override func accessibilityActivate() -> Bool {
+        activate()
+        return true
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        badgeView.frame = MapOffscreenIndicatorLayout.visualFrame(
+            in: bounds,
+            edge: edge
+        )
+    }
+
+    func configure(
+        placeName: String,
+        category: OutingCategory,
+        profileColorHex: String,
+        isCurrentUser: Bool,
+        directionName: String,
+        edge: MapOffscreenIndicatorEdge
+    ) {
+        if self.edge != edge {
+            self.edge = edge
+            setNeedsLayout()
+        }
+
+        badgeView.configure(
+            category: category,
+            profileColorHex: profileColorHex,
+            isCurrentUser: isCurrentUser
+        )
+        accessibilityLabel = isCurrentUser
+            ? "Votre sortie prévue, \(placeName), hors de la carte, direction \(directionName)"
+            : "Sortie prévue, \(placeName), hors de la carte, direction \(directionName)"
+        accessibilityValue = category.title
+        accessibilityHint =
+            "Touchez deux fois pour centrer et afficher la fiche de cette sortie"
+    }
+
+    private func configureView() {
+        backgroundColor = .clear
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityIdentifier = "outing-offscreen-indicator-\(eventID)"
+
+        addSubview(badgeView)
+        addTarget(self, action: #selector(activate), for: .touchUpInside)
+    }
+
+    @objc private func activate() {
+        onActivate?(eventID)
     }
 }

@@ -1,5 +1,5 @@
 ---
-title: "Indicateurs d’amis hors champ sur la carte"
+title: "Indicateurs d’amis et d’événements hors champ sur la carte"
 status: in_progress
 date: 2026-08-18
 approved_at: 2026-08-18
@@ -7,13 +7,14 @@ started_at: 2026-08-18
 spacing_reapproved_at: 2026-08-18
 local_overlap_reapproved_at: 2026-08-18
 size_reapproved_at: 2026-08-18
+event_scope_reapproved_at: 2026-08-18
 owner: "Samuel Barraud"
 related:
   - "2026-08-15-rail-amis-carte.md"
-tags: [plan, map, friends, interaction]
+tags: [plan, map, friends, events, interaction]
 ---
 
-# Indicateurs d’amis hors champ sur la carte
+# Indicateurs d’amis et d’événements hors champ sur la carte
 
 ## Outcome
 
@@ -23,6 +24,12 @@ direction. L’indicateur suit le panoramique, le zoom et la rotation, puis
 disparaît dès que le pin normal redevient visible. Un toucher recentre la carte
 sur cet ami.
 
+Les événements restent toujours représentés, quel que soit le niveau de zoom.
+Dans le cadrage, un badge natif personnalisé affiche le SF Symbol de leur
+catégorie dans la couleur de l’organisateur. Hors cadrage, ce badge rejoint le
+même système de bord que les avatars ; un toucher recentre, sélectionne
+l’événement et ouvre sa fiche.
+
 ## Context
 
 La carte affiche déjà les positions des amis sous forme de pins, conserve les
@@ -30,6 +37,10 @@ dernières positions connues et sait centrer un ami. Le rail social du bord
 droit reste une interaction séparée : il permet de parcourir les amis, tandis
 que les nouveaux indicateurs rendent immédiatement visibles les amis situés
 hors du cadrage courant.
+
+La demande approuvée le 2026-08-18 étend ce sprint aux événements. Elle remplace
+l’ancien non-objectif qui les excluait et délègue la validation visuelle et
+interactive au propriétaire du projet.
 
 Les compétences Compound Engineering demandées par le dépôt ne sont pas
 disponibles dans cette session. Le workflow équivalent est appliqué
@@ -52,11 +63,20 @@ simplification, validation, revue et capitalisation si une leçon réutilisable
   - toucher pour centrer et sélectionner l’ami ;
   - libellé et indication VoiceOver ;
   - coexistence avec les pins, contrôles, fiches de sortie et rail d’amis.
+  - priorité MapKit requise pour tous les événements, sans clustering ;
+  - badge d’événement personnalisé à partir de la catégorie et de la couleur
+    existantes, sans nouvel asset bitmap ;
+  - indicateur de bord pour chaque événement hors cadrage ;
+  - résolution commune des chevauchements entre avatars et événements ;
+  - toucher pour recentrer, sélectionner et ouvrir la fiche de l’événement.
 - Not included:
   - distance ou adresse affichée en permanence ;
   - modification de Firebase, des règles Firestore ou du modèle d’amitié ;
   - changement du rail d’amis existant ;
-  - indicateurs pour les sorties ou la position de l’utilisateur ;
+  - indicateur pour la position de l’utilisateur ;
+  - nouvel asset bitmap ou modification des catégories ;
+  - validation interactive ou visuelle, prise en charge manuellement par le
+    propriétaire ;
   - déploiement ou publication TestFlight.
 
 ## Proposed approach
@@ -78,18 +98,29 @@ Le toucher réutilise le flux de sélection cartographique existant : le
 coordinateur centre le pin avec la région déjà utilisée pour un ami et le
 sélectionne, sans nouvelle donnée ni nouvelle navigation.
 
+La géométrie de bord devient générique et reçoit dans une seule passe les amis
+et les événements afin que leurs collisions soient résolues ensemble. Le
+marqueur d’événement devient une `MKAnnotationView` personnalisée, composée de
+vues UIKit et du SF Symbol déjà porté par `OutingCategory`. Sa priorité
+`.required` empêche MapKit de le masquer au dézoom. Le bouton hors champ reprend
+le même badge dans une cible tactile de 48 points et réutilise le flux existant
+de centrage et de sélection par `eventId`.
+
 ## Affected files
 
 - `wander/MapWithFogView.swift` — observation de la caméra, visibilité des pins,
   cycle de vie des indicateurs et centrage au toucher.
-- `wander/FriendOffscreenIndicatorView.swift` — bouton d’avatar, géométrie de
-  bord et résolution des chevauchements.
+- `wander/FriendOffscreenIndicatorView.swift` →
+  `wander/MapOffscreenIndicatorView.swift` — géométrie générique, bouton
+  d’avatar et bouton de catégorie d’événement.
 - `docs/plans/2026-08-18-indicateurs-amis-hors-champ.md` — suivi du sprint et
   validation exacte.
 - `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Backlog features.md`
   — état de la fonctionnalité.
 - `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Documentation UX.md`
   — comportement visible, interaction et accessibilité.
+- `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Documentation technique.md`
+  — architecture générique des indicateurs et priorité des annotations.
 - `docs/solutions/` — note uniquement si une leçon réutilisable émerge.
 - `todos/` — findings de revue uniquement si un défaut reste ouvert.
 
@@ -110,6 +141,16 @@ sélectionne, sans nouvelle donnée ni nouvelle navigation.
 - [x] Réduire les avatars hors champ de 40 à 28 points tout en conservant leur
   cible tactile de 48 points, leur contact avec le bord et 50 % de
   superposition locale.
+- [x] Généraliser la géométrie et le conteneur aux amis et aux événements.
+- [x] Remplacer le marqueur générique par un badge natif propre à la catégorie.
+- [x] Rendre toutes les annotations d’événement obligatoires pour MapKit.
+- [x] Ajouter, mettre à jour et retirer les indicateurs d’événement hors champ.
+- [x] Réutiliser le centrage, la sélection et l’ouverture de fiche au toucher.
+- [x] Mettre à jour le plan de sprint avec le périmètre réapprouvé.
+- [ ] Mettre à jour les trois notes Obsidian concernées ; leur vault est présent
+  mais hors des racines d’écriture autorisées de cette session.
+- [x] Compiler sans nouvel avertissement lié au changement puis effectuer la
+  revue statique.
 
 ## Edge cases and risks
 
@@ -118,8 +159,8 @@ sélectionne, sans nouvelle donnée ni nouvelle navigation.
   à une position invalide.
 - Le cadre du pin peut toucher le bord alors que son centre est encore visible
   — tester le cadre complet afin d’éviter un indicateur prématuré ou un doublon.
-- Plusieurs amis peuvent partager presque la même direction — les espacer le
-  long du bord en conservant leur ordre déterministe.
+- Plusieurs amis et événements peuvent partager presque la même direction — les
+  espacer ensemble le long du bord en conservant leur ordre déterministe.
 - Les contrôles et zones système peuvent masquer un indicateur — utiliser un
   rectangle intérieur avec marges et conserver les contrôles SwiftUI au-dessus.
 - Des mises à jour à chaque image pourraient être coûteuses — garder les vues
@@ -146,6 +187,17 @@ sélectionne, sans nouvelle donnée ni nouvelle navigation.
 - [x] Les propriétés, wikiliens, tableaux et callouts des notes Obsidian restent
   valides et leur rendu est vérifié en mode Lecture.
 - [ ] La revue ne laisse aucun défaut P1/P2 non consigné.
+- [x] Le nouveau build Debug iOS Simulator réussit sans nouvel avertissement
+  lié au changement.
+- [ ] Chaque événement visible conserve son badge à tous les niveaux de zoom.
+- [ ] Un événement hors champ reçoit un indicateur de bord sans doublon avec
+  son annotation normale.
+- [x] Les placements mixtes amis/événements sont déterministes et ne se
+  recouvrent pas entièrement.
+- [x] Le toucher d’un indicateur d’événement réutilise le bon `eventId`.
+- [x] La revue statique du nouveau périmètre ne laisse aucun défaut P1/P2 non
+  consigné.
+- Validation visuelle et interactive : déléguée au propriétaire du projet.
 
 ## Acceptance criteria
 
@@ -159,6 +211,11 @@ sélectionne, sans nouvelle donnée ni nouvelle navigation.
   laissent aucune vue résiduelle.
 - Les interactions cartographiques et sociales existantes continuent de
   fonctionner.
+- Un événement reste affiché dans le cadrage, même au dézoom, sous la forme
+  d’un badge de catégorie distinct d’un avatar.
+- Un événement hors cadrage est représenté sur le bord selon sa direction et
+  son toucher ouvre la bonne fiche après recentrage.
+- Amis et événements partagent une résolution de chevauchements unique.
 
 ## Review notes
 
@@ -200,3 +257,26 @@ sélectionne, sans nouvelle donnée ni nouvelle navigation.
   leur nouveau frontmatter et leur contenu en mode Lecture ; le passage mis à
   jour sur les 28 points visuels et 48 points tactiles est rendu correctement,
   tout comme les wikiliens, le callout du backlog et le tableau UX.
+- Event extension implementation: `OutingPlanAnnotationView` est désormais une
+  annotation UIKit personnalisée de priorité `.required`, alimentée par la
+  catégorie et la couleur déjà présentes. Les amis et événements hors champ
+  passent par une liste commune de candidats et une seule résolution de
+  collisions ; chaque bouton d’événement conserve son `eventId` pour recentrer
+  et sélectionner l’annotation correspondante.
+- Event extension build: `xcodebuild -quiet -project wander.xcodeproj -scheme
+  wander -configuration Debug -destination 'generic/platform=iOS Simulator'
+  -derivedDataPath /tmp/wander-derived-data
+  -disableAutomaticPackageResolution build` réussit le 2026-08-18 après la
+  simplification finale. Un build complet a également signalé l’avertissement
+  préexistant de versions différentes entre l’app (`16`) et l’extension (`15`),
+  sans rapport avec ce changement.
+- Manual validation: conformément à la demande du propriétaire, aucune
+  vérification interactive ou visuelle n’a été effectuée. Les critères de
+  cadrage, toucher et rendu restent à confirmer manuellement avant de passer le
+  plan à `completed`.
+- Obsidian limitation: le vault est lisible mais hors des racines d’écriture de
+  cette session. Restent à mettre à jour `Backlog features.md` (étendre l’item
+  hors champ aux événements), `Documentation UX.md` (badge de catégorie,
+  priorité visuelle et interaction de bord) et `Documentation technique.md`
+  (conteneur générique, priorité `.required` et résolution mixte), avec leur
+  propriété `updated`, puis à vérifier en mode Lecture.
