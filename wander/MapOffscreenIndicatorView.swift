@@ -24,46 +24,23 @@ struct MapOffscreenIndicatorPlacement {
     let center: CGPoint
     let edge: MapOffscreenIndicatorEdge
     let directionName: String
+    let pointerAngle: CGFloat
 }
 
 enum MapOffscreenIndicatorLayout {
     static let controlSize: CGFloat = 48
     static let visualSize: CGFloat = 28
+    static let visualOverlapRatio: CGFloat = 0.30
+    static let centerSeparation = visualSize * (1 - visualOverlapRatio)
 
     private static let edgeInset: CGFloat = 0
-    private static let cornerClearance: CGFloat = controlSize * 0.72
-    private static let overlappingSeparation: CGFloat = visualSize / 2
 
-    static func visualFrame(
-        in bounds: CGRect,
-        edge: MapOffscreenIndicatorEdge
-    ) -> CGRect {
-        let origin: CGPoint
-        switch edge {
-        case .top:
-            origin = CGPoint(
-                x: (bounds.width - visualSize) / 2,
-                y: 0
-            )
-        case .right:
-            origin = CGPoint(
-                x: bounds.width - visualSize,
-                y: (bounds.height - visualSize) / 2
-            )
-        case .bottom:
-            origin = CGPoint(
-                x: (bounds.width - visualSize) / 2,
-                y: bounds.height - visualSize
-            )
-        case .left:
-            origin = CGPoint(
-                x: 0,
-                y: (bounds.height - visualSize) / 2
-            )
-        }
-
+    static func visualFrame(in bounds: CGRect) -> CGRect {
         return CGRect(
-            origin: origin,
+            origin: CGPoint(
+                x: (bounds.width - visualSize) / 2,
+                y: (bounds.height - visualSize) / 2
+            ),
             size: CGSize(width: visualSize, height: visualSize)
         )
     }
@@ -116,22 +93,18 @@ enum MapOffscreenIndicatorLayout {
                     id: candidate.id,
                     center: intersection.point,
                     edge: intersection.edge,
-                    directionName: directionName(for: direction)
+                    directionName: directionName(for: direction),
+                    targetPoint: candidate.targetPoint
                 )
             )
         }
 
-        var resolved: [String: MapOffscreenIndicatorPlacement] = [:]
-        for edge in MapOffscreenIndicatorEdge.allCases {
-            let edgePlacements = rawPlacements.filter { $0.edge == edge }
-            for placement in resolveCollisions(
-                edgePlacements,
-                on: edge,
+        let resolved = Dictionary(
+            uniqueKeysWithValues: resolveCollisions(
+                rawPlacements,
                 in: indicatorBounds
-            ) {
-                resolved[placement.id] = placement
-            }
-        }
+            ).map { ($0.id, $0) }
+        )
 
         return candidates.compactMap { resolved[$0.id] }
     }
@@ -192,54 +165,81 @@ enum MapOffscreenIndicatorLayout {
 
     private static func resolveCollisions(
         _ placements: [RawPlacement],
-        on edge: MapOffscreenIndicatorEdge,
         in rect: CGRect
     ) -> [MapOffscreenIndicatorPlacement] {
         guard !placements.isEmpty else { return [] }
 
-        let isHorizontalEdge = edge == .top || edge == .bottom
-        let rawMinimum = isHorizontalEdge ? rect.minX : rect.minY
-        let rawMaximum = isHorizontalEdge ? rect.maxX : rect.maxY
-        let rawSpan = rawMaximum - rawMinimum
-        let requiredMinimumSpan = overlappingSeparation
-            * CGFloat(max(0, placements.count - 1))
-        let maximumClearanceToFit = max(
-            0,
-            (rawSpan - requiredMinimumSpan) / 2
-        )
-        let resolvedCornerClearance = min(
-            cornerClearance,
-            maximumClearanceToFit
-        )
-        let minimum = rawMinimum + resolvedCornerClearance
-        let maximum = rawMaximum - resolvedCornerClearance
-        guard maximum >= minimum else { return [] }
+        let perimeterLength = 2 * (rect.width + rect.height)
+        guard perimeterLength > 0 else { return [] }
 
-        let sorted = placements.sorted { lhs, rhs in
-            let lhsValue = scalarPosition(of: lhs.center, on: edge)
-            let rhsValue = scalarPosition(of: rhs.center, on: edge)
-            if abs(lhsValue - rhsValue) > 0.5 {
-                return lhsValue < rhsValue
+        let positionedPlacements = placements.map { placement in
+            PerimeterPlacement(
+                rawPlacement: placement,
+                position: perimeterPosition(
+                    of: placement.center,
+                    on: placement.edge,
+                    in: rect
+                )
+            )
+        }.sorted { lhs, rhs in
+            if abs(lhs.position - rhs.position) > 0.5 {
+                return lhs.position < rhs.position
             }
-            return lhs.id < rhs.id
+            return lhs.rawPlacement.id < rhs.rawPlacement.id
         }
 
-        let availableSpan = maximum - minimum
-        let separation: CGFloat
-        if sorted.count > 1 {
-            separation = min(
-                overlappingSeparation,
-                availableSpan / CGFloat(sorted.count - 1)
+        var largestGapStartIndex = 0
+        var largestGap: CGFloat = -1
+        for index in positionedPlacements.indices {
+            let nextIndex = nextCircularIndex(
+                after: index,
+                in: positionedPlacements
             )
-        } else {
-            separation = overlappingSeparation
+            var nextPosition = positionedPlacements[nextIndex].position
+            if nextIndex == positionedPlacements.startIndex {
+                nextPosition += perimeterLength
+            }
+            let gap = nextPosition - positionedPlacements[index].position
+            if gap > largestGap {
+                largestGap = gap
+                largestGapStartIndex = index
+            }
         }
 
-        var positions = sorted.map {
-            min(
-                max(scalarPosition(of: $0.center, on: edge), minimum),
-                maximum
+        let cutPosition = normalizedPerimeterPosition(
+            positionedPlacements[largestGapStartIndex].position
+                + largestGap / 2,
+            perimeterLength: perimeterLength
+        )
+        let orderedPlacements = positionedPlacements.sorted { lhs, rhs in
+            let lhsPosition = normalizedPerimeterPosition(
+                lhs.position - cutPosition,
+                perimeterLength: perimeterLength
             )
+            let rhsPosition = normalizedPerimeterPosition(
+                rhs.position - cutPosition,
+                perimeterLength: perimeterLength
+            )
+            if abs(lhsPosition - rhsPosition) > 0.5 {
+                return lhsPosition < rhsPosition
+            }
+            return lhs.rawPlacement.id < rhs.rawPlacement.id
+        }
+
+        let separation = min(
+            centerSeparation,
+            perimeterLength / CGFloat(orderedPlacements.count)
+        )
+        let minimum = separation / 2
+        let maximum = perimeterLength - separation / 2
+        let preferredPositions = orderedPlacements.map {
+            normalizedPerimeterPosition(
+                $0.position - cutPosition,
+                perimeterLength: perimeterLength
+            )
+        }
+        var positions = preferredPositions.map {
+            min(max($0, minimum), maximum)
         }
 
         for index in positions.indices.dropFirst() {
@@ -260,38 +260,118 @@ enum MapOffscreenIndicatorLayout {
             }
         }
 
-        return zip(sorted, positions).map { placement, position in
-            let center: CGPoint
-            switch edge {
-            case .top:
-                center = CGPoint(x: position, y: rect.minY)
-            case .right:
-                center = CGPoint(x: rect.maxX, y: position)
-            case .bottom:
-                center = CGPoint(x: position, y: rect.maxY)
-            case .left:
-                center = CGPoint(x: rect.minX, y: position)
-            }
+        if let firstPosition = positions.first,
+           let lastPosition = positions.last {
+            let averageCorrection = zip(
+                preferredPositions,
+                positions
+            ).reduce(CGFloat.zero) { partialResult, pair in
+                partialResult + pair.0 - pair.1
+            } / CGFloat(positions.count)
+            let correction = min(
+                max(averageCorrection, minimum - firstPosition),
+                maximum - lastPosition
+            )
+            positions = positions.map { $0 + correction }
+        }
+
+        return zip(orderedPlacements, positions).map {
+            positionedPlacement,
+            position in
+            let resolvedPosition = normalizedPerimeterPosition(
+                cutPosition + position,
+                perimeterLength: perimeterLength
+            )
+            let (center, edge) = pointAndEdge(
+                at: resolvedPosition,
+                in: rect
+            )
+            let targetPoint = positionedPlacement.rawPlacement.targetPoint
+            let pointerAngle = atan2(
+                targetPoint.y - center.y,
+                targetPoint.x - center.x
+            )
 
             return MapOffscreenIndicatorPlacement(
-                id: placement.id,
+                id: positionedPlacement.rawPlacement.id,
                 center: center,
                 edge: edge,
-                directionName: placement.directionName
+                directionName: positionedPlacement.rawPlacement.directionName,
+                pointerAngle: pointerAngle
             )
         }
     }
 
-    private static func scalarPosition(
+    private static func perimeterPosition(
         of point: CGPoint,
-        on edge: MapOffscreenIndicatorEdge
+        on edge: MapOffscreenIndicatorEdge,
+        in rect: CGRect
     ) -> CGFloat {
         switch edge {
-        case .top, .bottom:
-            point.x
-        case .right, .left:
-            point.y
+        case .top:
+            return point.x - rect.minX
+        case .right:
+            return rect.width + point.y - rect.minY
+        case .bottom:
+            return rect.width + rect.height + rect.maxX - point.x
+        case .left:
+            return 2 * rect.width + rect.height + rect.maxY - point.y
         }
+    }
+
+    private static func pointAndEdge(
+        at position: CGFloat,
+        in rect: CGRect
+    ) -> (CGPoint, MapOffscreenIndicatorEdge) {
+        if position <= rect.width {
+            return (
+                CGPoint(x: rect.minX + position, y: rect.minY),
+                .top
+            )
+        }
+
+        let rightPosition = position - rect.width
+        if rightPosition <= rect.height {
+            return (
+                CGPoint(x: rect.maxX, y: rect.minY + rightPosition),
+                .right
+            )
+        }
+
+        let bottomPosition = rightPosition - rect.height
+        if bottomPosition <= rect.width {
+            return (
+                CGPoint(x: rect.maxX - bottomPosition, y: rect.maxY),
+                .bottom
+            )
+        }
+
+        let leftPosition = bottomPosition - rect.width
+        return (
+            CGPoint(x: rect.minX, y: rect.maxY - leftPosition),
+            .left
+        )
+    }
+
+    private static func normalizedPerimeterPosition(
+        _ position: CGFloat,
+        perimeterLength: CGFloat
+    ) -> CGFloat {
+        let remainder = position.truncatingRemainder(
+            dividingBy: perimeterLength
+        )
+        return remainder >= 0 ? remainder : remainder + perimeterLength
+    }
+
+    private static func nextCircularIndex<T>(
+        after index: Array<T>.Index,
+        in array: [T]
+    ) -> Array<T>.Index {
+        let nextIndex = array.index(after: index)
+        if nextIndex == array.endIndex {
+            return array.startIndex
+        }
+        return nextIndex
     }
 
     private static func directionName(for direction: CGPoint) -> String {
@@ -326,6 +406,12 @@ enum MapOffscreenIndicatorLayout {
         let center: CGPoint
         let edge: MapOffscreenIndicatorEdge
         let directionName: String
+        let targetPoint: CGPoint
+    }
+
+    private struct PerimeterPlacement {
+        let rawPlacement: RawPlacement
+        let position: CGFloat
     }
 }
 
@@ -397,13 +483,71 @@ final class OutingCategoryBadgeView: UIView {
     }
 }
 
+private final class MapOffscreenDirectionPointerLayer: CAShapeLayer {
+    func setColor(_ color: UIColor) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillColor = color.cgColor
+        CATransaction.commit()
+    }
+
+    func update(
+        in bounds: CGRect,
+        angle: CGFloat,
+        displayScale: CGFloat
+    ) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
+        guard angle.isFinite else {
+            path = nil
+            return
+        }
+
+        let direction = CGPoint(x: cos(angle), y: sin(angle))
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let baseDistance = MapOffscreenIndicatorLayout.visualSize / 2 - 1.5
+        let tipDistance = baseDistance + 7.5
+        let baseHalfWidth: CGFloat = 5.5
+        let perpendicular = CGPoint(x: -direction.y, y: direction.x)
+        let baseCenter = CGPoint(
+            x: center.x + direction.x * baseDistance,
+            y: center.y + direction.y * baseDistance
+        )
+        let firstBasePoint = CGPoint(
+            x: baseCenter.x + perpendicular.x * baseHalfWidth,
+            y: baseCenter.y + perpendicular.y * baseHalfWidth
+        )
+        let secondBasePoint = CGPoint(
+            x: baseCenter.x - perpendicular.x * baseHalfWidth,
+            y: baseCenter.y - perpendicular.y * baseHalfWidth
+        )
+        let tip = CGPoint(
+            x: center.x + direction.x * tipDistance,
+            y: center.y + direction.y * tipDistance
+        )
+
+        let pointerPath = UIBezierPath()
+        pointerPath.move(to: firstBasePoint)
+        pointerPath.addLine(to: tip)
+        pointerPath.addLine(to: secondBasePoint)
+        pointerPath.close()
+
+        contentsScale = displayScale
+        frame = bounds
+        path = pointerPath.cgPath
+    }
+}
+
 final class FriendOffscreenIndicatorView: UIControl {
     let userID: String
     var onActivate: ((String) -> Void)?
 
+    private let pointerLayer = MapOffscreenDirectionPointerLayer()
     private let avatarImageView = UIImageView()
     private var baseAlpha: CGFloat = 1
-    private var edge = MapOffscreenIndicatorEdge.top
+    private var pointerAngle: CGFloat = 0
 
     init(userID: String) {
         self.userID = userID
@@ -438,11 +582,15 @@ final class FriendOffscreenIndicatorView: UIControl {
         super.layoutSubviews()
 
         avatarImageView.frame = MapOffscreenIndicatorLayout.visualFrame(
-            in: bounds,
-            edge: edge
+            in: bounds
         )
         avatarImageView.layer.cornerRadius =
             MapOffscreenIndicatorLayout.visualSize / 2
+        pointerLayer.update(
+            in: bounds,
+            angle: pointerAngle,
+            displayScale: traitCollection.displayScale
+        )
     }
 
     func configure(
@@ -451,10 +599,10 @@ final class FriendOffscreenIndicatorView: UIControl {
         profileColorHex: String,
         isLocationFresh: Bool,
         directionName: String,
-        edge: MapOffscreenIndicatorEdge
+        pointerAngle: CGFloat
     ) {
-        if self.edge != edge {
-            self.edge = edge
+        if abs(self.pointerAngle - pointerAngle) > 0.001 {
+            self.pointerAngle = pointerAngle
             setNeedsLayout()
         }
 
@@ -462,9 +610,11 @@ final class FriendOffscreenIndicatorView: UIControl {
             ?? ProfileAvatar.cyclopsHorns
         avatarImageView.image = UIImage(named: avatar.assetName)
             ?? UIImage(systemName: "person.crop.circle.fill")
-        avatarImageView.layer.borderColor = ProfileColor.uiColor(
+        let profileColor = ProfileColor.uiColor(
             hex: profileColorHex
-        ).cgColor
+        )
+        avatarImageView.layer.borderColor = profileColor.cgColor
+        pointerLayer.setColor(profileColor)
 
         baseAlpha = isLocationFresh ? 1 : 0.5
         alpha = baseAlpha * (isHighlighted ? 0.68 : 1)
@@ -480,6 +630,8 @@ final class FriendOffscreenIndicatorView: UIControl {
         isAccessibilityElement = true
         accessibilityTraits = .button
         accessibilityIdentifier = "friend-offscreen-indicator-\(userID)"
+
+        layer.addSublayer(pointerLayer)
 
         avatarImageView.backgroundColor = .secondarySystemBackground
         avatarImageView.clipsToBounds = true
@@ -500,8 +652,9 @@ final class OutingOffscreenIndicatorView: UIControl {
     let eventID: String
     var onActivate: ((String) -> Void)?
 
+    private let pointerLayer = MapOffscreenDirectionPointerLayer()
     private let badgeView = OutingCategoryBadgeView()
-    private var edge = MapOffscreenIndicatorEdge.top
+    private var pointerAngle: CGFloat = 0
 
     init(eventID: String) {
         self.eventID = eventID
@@ -535,10 +688,12 @@ final class OutingOffscreenIndicatorView: UIControl {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        badgeView.frame = MapOffscreenIndicatorLayout.visualFrame(
+        pointerLayer.update(
             in: bounds,
-            edge: edge
+            angle: pointerAngle,
+            displayScale: traitCollection.displayScale
         )
+        badgeView.frame = MapOffscreenIndicatorLayout.visualFrame(in: bounds)
     }
 
     func configure(
@@ -547,13 +702,14 @@ final class OutingOffscreenIndicatorView: UIControl {
         profileColorHex: String,
         isCurrentUser: Bool,
         directionName: String,
-        edge: MapOffscreenIndicatorEdge
+        pointerAngle: CGFloat
     ) {
-        if self.edge != edge {
-            self.edge = edge
+        if abs(self.pointerAngle - pointerAngle) > 0.001 {
+            self.pointerAngle = pointerAngle
             setNeedsLayout()
         }
 
+        pointerLayer.setColor(ProfileColor.uiColor(hex: profileColorHex))
         badgeView.configure(
             category: category,
             profileColorHex: profileColorHex,
@@ -573,6 +729,7 @@ final class OutingOffscreenIndicatorView: UIControl {
         accessibilityTraits = .button
         accessibilityIdentifier = "outing-offscreen-indicator-\(eventID)"
 
+        layer.addSublayer(pointerLayer)
         addSubview(badgeView)
         addTarget(self, action: #selector(activate), for: .touchUpInside)
     }

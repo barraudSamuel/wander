@@ -2159,7 +2159,7 @@ struct MapWithFogView: UIViewRepresentable {
                             ?? ProfileColor.generatedHex(seed: userID),
                         isLocationFresh: calloutInfo.isLocationFresh,
                         directionName: placement.directionName,
-                        edge: placement.edge
+                        pointerAngle: placement.pointerAngle
                     )
                     indicatorView.center = placement.center
 
@@ -2181,7 +2181,7 @@ struct MapWithFogView: UIViewRepresentable {
                         profileColorHex: annotation.profileColorHex,
                         isCurrentUser: annotation.isCurrentUser,
                         directionName: placement.directionName,
-                        edge: placement.edge
+                        pointerAngle: placement.pointerAngle
                     )
                     indicatorView.center = placement.center
                 }

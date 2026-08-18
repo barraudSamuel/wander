@@ -8,6 +8,11 @@ spacing_reapproved_at: 2026-08-18
 local_overlap_reapproved_at: 2026-08-18
 size_reapproved_at: 2026-08-18
 event_scope_reapproved_at: 2026-08-18
+direction_arrow_reapproved_at: 2026-08-18
+nonoverlap_pointer_reapproved_at: 2026-08-18
+pointer_geometry_reapproved_at: 2026-08-18
+compact_overlap_reapproved_at: 2026-08-18
+event_pointer_reapproved_at: 2026-08-18
 owner: "Samuel Barraud"
 related:
   - "2026-08-15-rail-amis-carte.md"
@@ -57,8 +62,11 @@ simplification, validation, revue et capitalisation si une leçon réutilisable
     rotation de la carte ;
   - avatar et couleur de profil existants, avec opacité réduite pour une
     position ancienne ;
-  - placement dans une zone sûre de la carte et résolution des chevauchements
-    entre amis proches ;
+  - triangle de la couleur du profil attaché directement à chaque avatar
+    d’ami hors champ, dont la pointe vise la position projetée exacte ;
+  - placement dans une zone sûre de la carte et regroupement compact à environ
+    30 % de superposition lorsque plusieurs directions proches doivent être
+    réparties autour du périmètre ;
   - mise à jour pendant le panoramique et le zoom ;
   - toucher pour centrer et sélectionner l’ami ;
   - libellé et indication VoiceOver ;
@@ -66,6 +74,8 @@ simplification, validation, revue et capitalisation si une leçon réutilisable
   - priorité MapKit requise pour tous les événements, sans clustering ;
   - badge d’événement personnalisé à partir de la catégorie et de la couleur
     existantes, sans nouvel asset bitmap ;
+  - triangle compact de la couleur de l’organisateur attaché au badge hors
+    champ et pointant vers la position projetée exacte de l’événement ;
   - indicateur de bord pour chaque événement hors cadrage ;
   - résolution commune des chevauchements entre avatars et événements ;
   - toucher pour recentrer, sélectionner et ouvrir la fiche de l’événement.
@@ -97,6 +107,29 @@ restent au-dessus de la carte.
 Le toucher réutilise le flux de sélection cartographique existant : le
 coordinateur centre le pin avec la région déjà utilisée pour un ami et le
 sélectionne, sans nouvelle donnée ni nouvelle navigation.
+
+L’avatar compact reste dans une cible tactile de 48 points. Le badge rond et
+son chevron sont remplacés par un triangle plein de la couleur du profil,
+dessiné derrière le cercle et attaché à celui-ci. Sa pointe est calculée depuis
+le centre finalement résolu vers le point projeté réel : elle conserve donc la
+direction exacte de l’ami même si le cercle est décalé pour éviter une
+collision.
+
+La résolution commune distribue les indicateurs le long du périmètre avec 19,6
+points entre leurs centres, soit environ 30 % de superposition pour les visuels
+de 28 points. Elle conserve leur ordre directionnel et peut franchir un coin
+lorsque le bord naturel est saturé. Les cibles tactiles restent à 48 points et
+les badges d’événement participent au même calcul compact.
+
+La retouche réapprouvée réduit la hauteur totale du triangle à 7,5 points,
+dont 1,5 point reste sous l’avatar, et élargit très légèrement sa base de 10 à
+11 points. Elle ne modifie ni son angle, ni sa couleur, ni la géométrie de
+placement.
+
+Le triangle vectoriel devient un composant partagé par les avatars et les
+badges d’événement. Pour une sortie hors champ, il reprend la couleur de
+l’organisateur, reste derrière le cercle de catégorie et reçoit le même angle
+exact calculé après résolution des collisions.
 
 La géométrie de bord devient générique et reçoit dans une seule passe les amis
 et les événements afin que leurs collisions soient résolues ensemble. Le
@@ -132,7 +165,7 @@ de centrage et de sélection par `eventId`.
 - [x] Réutiliser le centrage et la sélection au toucher.
 - [x] Gérer positions anciennes, suppressions, rotation et chevauchements.
 - [x] Ajouter les libellés VoiceOver et respecter Réduire les animations.
-- [x] Mettre à jour les deux notes Obsidian concernées.
+- [x] Mettre à jour les deux notes Obsidian concernées par le périmètre initial.
 - [x] Compiler sans nouvel avertissement.
 - [ ] Vérifier les scénarios accessibles sur l’iPhone 17 Simulator déjà démarré.
 - [x] Simplifier puis effectuer la revue statique.
@@ -146,6 +179,22 @@ de centrage et de sélection par `eventId`.
 - [x] Rendre toutes les annotations d’événement obligatoires pour MapKit.
 - [x] Ajouter, mettre à jour et retirer les indicateurs d’événement hors champ.
 - [x] Réutiliser le centrage, la sélection et l’ouverture de fiche au toucher.
+- [x] Ajouter un premier chevron directionnel aux seuls avatars d’amis hors
+  champ ; essai ensuite remplacé par le pointeur triangulaire approuvé.
+- [x] Remplacer le badge à chevron par un triangle attaché à l’avatar et coloré
+  comme le profil.
+- [x] Pointer vers la position projetée exacte après résolution des collisions.
+- [x] Supprimer la superposition visuelle et répartir les indicateurs autour du
+  périmètre lorsque leur bord naturel est saturé ; essai ensuite remplacé par
+  le regroupement compact réapprouvé.
+- [x] Appliquer environ 30 % de superposition, soit 19,6 points entre les
+  centres des visuels de 28 points.
+- [x] Réduire le triangle à 7,5 points de hauteur et élargir sa base à 11
+  points sans modifier sa direction.
+- [x] Mutualiser le triangle vectoriel entre les indicateurs d’amis et
+  d’événements.
+- [x] Ajouter le triangle coloré aux badges d’événement hors champ et lui
+  transmettre l’angle exact du placement.
 - [x] Mettre à jour le plan de sprint avec le périmètre réapprouvé.
 - [ ] Mettre à jour les trois notes Obsidian concernées ; leur vault est présent
   mais hors des racines d’écriture autorisées de cette session.
@@ -171,9 +220,14 @@ de centrage et de sélection par `eventId`.
 ## Validation
 
 - [x] Le build Debug iOS Simulator réussit sans nouvel avertissement.
-- [x] La géométrie conserve 28 points visuels, 48 points tactiles, un contact
-  avec chacun des quatre bords et 14 points d'écart pour 50 % de
-  superposition locale.
+- [x] La géométrie initiale à 50 % de superposition a été validée statiquement,
+  puis remplacée par la résolution sans chevauchement réapprouvée.
+- [x] Le triangle reste dans la cible de 48 points, est attaché au cercle et sa
+  pointe vise le point projeté exact sur les quatre bords et les diagonales.
+- [x] Le triangle raccourci conserve une base de 11 points, une attache de 1,5
+  point sous l’avatar et le même angle exact.
+- [x] Chaque badge d’événement hors champ possède le même triangle compact,
+  coloré comme l’organisateur et orienté vers la position projetée exacte.
 - [ ] Un ami visible n’a aucun indicateur et un ami hors champ n’a aucun pin
   visible en doublon.
 - [ ] Haut, bas, gauche, droite et diagonales correspondent au cadrage courant.
@@ -186,7 +240,7 @@ de centrage et de sélection par `eventId`.
 - [ ] VoiceOver, clair/sombre et Réduire les animations restent utilisables.
 - [x] Les propriétés, wikiliens, tableaux et callouts des notes Obsidian restent
   valides et leur rendu est vérifié en mode Lecture.
-- [ ] La revue ne laisse aucun défaut P1/P2 non consigné.
+- [x] La revue ne laisse aucun défaut P1/P2 non consigné.
 - [x] Le nouveau build Debug iOS Simulator réussit sans nouvel avertissement
   lié au changement.
 - [ ] Chaque événement visible conserve son badge à tous les niveaux de zoom.
@@ -194,6 +248,10 @@ de centrage et de sélection par `eventId`.
   son annotation normale.
 - [x] Les placements mixtes amis/événements sont déterministes et ne se
   recouvrent pas entièrement.
+- [x] La résolution sans chevauchement a été validée statiquement puis
+  remplacée par le regroupement compact réapprouvé.
+- [x] Les avatars et badges proches se superposent à environ 30 % avec 19,6
+  points entre leurs centres, tout en conservant leur ordre sur le périmètre.
 - [x] Le toucher d’un indicateur d’événement réutilise le bon `eventId`.
 - [x] La revue statique du nouveau périmètre ne laisse aucun défaut P1/P2 non
   consigné.
@@ -277,6 +335,77 @@ de centrage et de sélection par `eventId`.
 - Obsidian limitation: le vault est lisible mais hors des racines d’écriture de
   cette session. Restent à mettre à jour `Backlog features.md` (étendre l’item
   hors champ aux événements), `Documentation UX.md` (badge de catégorie,
-  priorité visuelle et interaction de bord) et `Documentation technique.md`
+  priorité visuelle, interaction de bord, regroupement à 30 % de
+  superposition et triangle compact de 7,5 × 11 points visant la position
+  exacte depuis les avatars et badges d’événement)
+  et `Documentation technique.md`
   (conteneur générique, priorité `.required` et résolution mixte), avec leur
   propriété `updated`, puis à vérifier en mode Lecture.
+  Les sections exactes sont l’item **Afficher les amis hors champ sur le bord
+  de la carte** du backlog, le paragraphe d’indicateurs sous la carte dans
+  `Documentation UX.md` et la section **Carte** de
+  `Documentation technique.md`.
+- First direction-arrow implementation: chaque avatar d’ami hors champ conserve son
+  cercle de 28 points collé au bord. Un badge système de 16 points, placé sur
+  son côté intérieur dans la même cible de 48 points, affiche le chevron du
+  bord courant. L’alpha reste porté par le contrôle parent, donc avatar et
+  chevron s’atténuent ensemble pour une position ancienne. Les indicateurs
+  d’événement ne changent pas.
+- Direction arrow review: les quatre couples de cadres sont contenus dans
+  `48 × 48` (`top`: avatar `10,0,28,28`, chevron `16,28,16,16`; `right`:
+  avatar `20,10,28,28`, chevron `4,16,16,16`; valeurs symétriques pour
+  `bottom` et `left`). Aucun défaut P1/P2 statique n’a été relevé.
+- Direction arrow build: la commande `xcodebuild -quiet -project
+  wander.xcodeproj -scheme wander -configuration Debug -destination
+  'generic/platform=iOS Simulator' -derivedDataPath /tmp/wander-derived-data
+  -disableAutomaticPackageResolution build` réussit le 2026-08-18. Le seul
+  avertissement concerne la divergence préexistante de `CFBundleVersion` entre
+  l’extension (`15`) et l’app (`16`). Tous les simulateurs iOS 26.3, dont
+  l’iPhone 17, sont arrêtés ; aucune validation visuelle n’a donc été lancée.
+- Exact-pointer implementation: le badge rond et le SF Symbol sont supprimés.
+  Un `CAShapeLayer` dessine maintenant derrière l’avatar un triangle plein de
+  la couleur du profil. Sa base entre sous le cercle de 28 points et sa pointe
+  est alignée sur le vecteur qui relie le centre finalement résolu au point
+  MapKit projeté de l’ami ; un déplacement anticollision ne dégrade donc plus
+  l’information directionnelle.
+- Non-overlap implementation: amis et événements sont ordonnés sur un
+  périmètre continu. La résolution préserve cet ordre, peut franchir un coin et
+  emploie un écart renforcé aux coins pour garantir au moins 32 points entre
+  les centres dans la capacité normale du périmètre. Les visuels de 28 points
+  sont centrés dans leurs cibles tactiles inchangées de 48 points.
+- Initial exact-pointer review: la pointe est contenue dans les `48 × 48` et
+  atteignait le
+  bord du contrôle dans l’angle exact ; la base recouvre légèrement le disque
+  mais reste derrière l’avatar, ce qui forme un seul composant visuel. Les
+  changements de chemin désactivent les animations implicites pour suivre la
+  caméra sans retard. Aucun défaut P1/P2 statique n’a été relevé.
+- Exact-pointer build: `xcodebuild -quiet -project wander.xcodeproj -scheme
+  wander -configuration Debug -destination 'generic/platform=iOS Simulator'
+  -derivedDataPath /tmp/wander-derived-data
+  -disableAutomaticPackageResolution build` réussit le 2026-08-18 sans nouvel
+  avertissement.
+- Pointer-geometry refinement: après réapprobation, la hauteur du triangle
+  passe à 7,5 points, soit 6 points visibles au-delà du cercle, et sa base
+  passe de 10 à 11 points. L’angle, la couleur, l’attache sous l’avatar et la
+  cible tactile de 48 points restent inchangés. La revue statique ne relève
+  aucun défaut P1/P2.
+- Pointer-geometry build: la même commande `xcodebuild` réussit le 2026-08-18
+  sans nouvel avertissement.
+- Compact-overlap refinement: après réapprobation, la séparation commune passe
+  à `28 × (1 - 0,30) = 19,6` points. Les avatars et badges proches se
+  superposent donc d’environ 8,4 points, conservent leur ordre sur le périmètre
+  et gardent leurs cibles tactiles de 48 points. Le triangle et son angle exact
+  ne changent pas. Aucun défaut P1/P2 statique n’a été relevé.
+- Compact-overlap build: la commande `xcodebuild` de validation réussit le
+  2026-08-18 sans nouvel avertissement.
+- Event-pointer implementation: le dessin du triangle est centralisé dans
+  `MapOffscreenDirectionPointerLayer` et réutilisé par les deux contrôles hors
+  champ. Le badge d’événement place cette couche derrière son cercle, la colore
+  avec la couleur de l’organisateur et reçoit le `pointerAngle` du placement
+  résolu avant de conserver son flux existant de centrage et d’ouverture.
+- Event-pointer review: les dimensions `7,5 × 11`, l’absence d’animation
+  implicite, la cible tactile de 48 points, le regroupement à 30 % et les
+  libellés VoiceOver restent identiques. Aucun défaut P1/P2 statique n’a été
+  relevé.
+- Event-pointer build: la commande `xcodebuild` de validation réussit le
+  2026-08-18 sans nouvel avertissement.
