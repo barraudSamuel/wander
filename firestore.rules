@@ -776,6 +776,7 @@ service cloud.firestore {
         && !accountDeletionIsPending(request.auth.uid)
         && request.resource.data.eventId == resource.data.eventId
         && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.category == resource.data.category
         && request.resource.data.publicationId
           != resource.data.publicationId
         && isValidEvent(request.resource.data, ownerId, eventId);

@@ -28,6 +28,7 @@ final class FirebaseService: ObservableObject {
     private var currentNonce: String?
     private var accountDeletionNonce: String?
     private var pendingExistingAccountCredential: AuthCredential?
+    private var isConfigurationStarted = false
 
     private init() {}
 
@@ -36,10 +37,26 @@ final class FirebaseService: ObservableObject {
             FirebaseApp.configure()
         }
 
-        observeAppleCredentialRevocation()
+        guard !isConfigurationStarted else { return }
+        isConfigurationStarted = true
 
+        SharedFirebaseAuthConfiguration.configureHost { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+
+                if case .failure = result {
+                    self.authErrorMessage =
+                        "La session Wander n’a pas pu être partagée. Réessaie après avoir relancé l’app."
+                }
+
+                self.observeAppleCredentialRevocation()
+                self.installAuthenticationListener()
+            }
+        }
+    }
+
+    private func installAuthenticationListener() {
         guard authStateHandle == nil else { return }
-
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             DispatchQueue.main.async {
                 self?.resolveAuthenticationState(for: user)

@@ -186,6 +186,18 @@ describe("users/{ownerID}/events/{eventID}", () => {
     }
   });
 
+  test("an update cannot change the category", async () => {
+    const database = authenticatedFirestore(ownerId);
+    const eventId = crypto.randomUUID();
+    const reference = eventReference(database, eventId);
+
+    await assertSucceeds(setDoc(reference, eventData(eventId)));
+    await assertFails(setDoc(
+      reference,
+      eventData(eventId, { category: "meal" }),
+    ));
+  });
+
   test("missing, unknown, and non-string categories are rejected", async () => {
     const database = authenticatedFirestore(ownerId);
     const missingCategoryEventId = crypto.randomUUID();

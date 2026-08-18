@@ -11,10 +11,48 @@
 		3758ECE62FEBBC300082CF8C /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE52FEBBC300082CF8C /* FirebaseAuth */; };
 		37A4A1013000000000000001 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 37A4A1003000000000000001 /* FirebaseMessaging */; };
 		37F8D0E92FE2AAB700AA042A /* H3 in Frameworks */ = {isa = PBXBuildFile; productRef = 37F8D0E82FE2AAB700AA042A /* H3 */; };
+		A10000000000000000000001 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE52FEBBC300082CF8C /* FirebaseAuth */; };
+		A10000000000000000000002 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE32FEBBC270082CF8C /* FirebaseFirestore */; };
+		A10000000000000000000003 /* wander/OutingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* wander/OutingPlan.swift */; };
+		A10000000000000000000004 /* wander/OutingPlanPublishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* wander/OutingPlanPublishing.swift */; };
+		A10000000000000000000005 /* wander/SharedFirebaseAuthConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */; };
+		A10000000000000000000006 /* wander/SharedPlaceImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* wander/SharedPlaceImport.swift */; };
+		A10000000000000000000007 /* wander/GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* wander/GoogleService-Info.plist */; };
+		A10000000000000000000008 /* WanderShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* WanderShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A80000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 37F8D0CD2FE28F0200AA042A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A60000000000000000000001;
+			remoteInfo = WanderShareExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A70000000000000000000003 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A10000000000000000000008 /* WanderShareExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		37F8D0D52FE28F0200AA042A /* wander.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = wander.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000001 /* WanderShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WanderShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000002 /* wander/OutingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/OutingPlan.swift; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000003 /* wander/OutingPlanPublishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/OutingPlanPublishing.swift; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/SharedFirebaseAuthConfiguration.swift; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000005 /* wander/SharedPlaceImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/SharedPlaceImport.swift; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000006 /* wander/GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "wander/GoogleService-Info.plist"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -25,6 +63,13 @@
 			);
 			target = 37F8D0D42FE28F0200AA042A /* wander */;
 		};
+		A30000000000000000000001 /* Exceptions for "WanderShareExtension" folder in "WanderShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A60000000000000000000001 /* WanderShareExtension */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +79,14 @@
 				37F8D0E42FE29FA400AA042A /* Exceptions for "wander" folder in "wander" target */,
 			);
 			path = wander;
+			sourceTree = "<group>";
+		};
+		A30000000000000000000002 /* WanderShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A30000000000000000000001 /* Exceptions for "WanderShareExtension" folder in "WanderShareExtension" target */,
+			);
+			path = WanderShareExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -47,6 +100,15 @@
 				3758ECE62FEBBC300082CF8C /* FirebaseAuth in Frameworks */,
 				3758ECE42FEBBC270082CF8C /* FirebaseFirestore in Frameworks */,
 				37A4A1013000000000000001 /* FirebaseMessaging in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A40000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* FirebaseAuth in Frameworks */,
+				A10000000000000000000002 /* FirebaseFirestore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -64,6 +126,8 @@
 			isa = PBXGroup;
 			children = (
 				37F8D0D72FE28F0200AA042A /* wander */,
+				A30000000000000000000002 /* WanderShareExtension */,
+				A50000000000000000000001 /* Extension Shared Files */,
 				3758ECE22FEBBC270082CF8C /* Frameworks */,
 				37F8D0D62FE28F0200AA042A /* Products */,
 			);
@@ -73,8 +137,21 @@
 			isa = PBXGroup;
 			children = (
 				37F8D0D52FE28F0200AA042A /* wander.app */,
+				A20000000000000000000001 /* WanderShareExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A50000000000000000000001 /* Extension Shared Files */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000002 /* wander/OutingPlan.swift */,
+				A20000000000000000000003 /* wander/OutingPlanPublishing.swift */,
+				A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */,
+				A20000000000000000000005 /* wander/SharedPlaceImport.swift */,
+				A20000000000000000000006 /* wander/GoogleService-Info.plist */,
+			);
+			name = "Extension Shared Files";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -87,10 +164,12 @@
 				37F8D0D12FE28F0200AA042A /* Sources */,
 				37F8D0D22FE28F0200AA042A /* Frameworks */,
 				37F8D0D32FE28F0200AA042A /* Resources */,
+				A70000000000000000000003 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A80000000000000000000002 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				37F8D0D72FE28F0200AA042A /* wander */,
@@ -106,6 +185,30 @@
 			productReference = 37F8D0D52FE28F0200AA042A /* wander.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A60000000000000000000001 /* WanderShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000003 /* Build configuration list for PBXNativeTarget "WanderShareExtension" */;
+			buildPhases = (
+				A70000000000000000000001 /* Sources */,
+				A40000000000000000000001 /* Frameworks */,
+				A70000000000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A30000000000000000000002 /* WanderShareExtension */,
+			);
+			name = WanderShareExtension;
+			packageProductDependencies = (
+				3758ECE32FEBBC270082CF8C /* FirebaseFirestore */,
+				3758ECE52FEBBC300082CF8C /* FirebaseAuth */,
+			);
+			productName = WanderShareExtension;
+			productReference = A20000000000000000000001 /* WanderShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -119,13 +222,30 @@
 					37F8D0D42FE28F0200AA042A = {
 						CreatedOnToolsVersion = 26.3;
 						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
 							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+							com.apple.Keychain = {
 								enabled = 1;
 							};
 							com.apple.Push = {
 								enabled = 1;
 							};
 							com.apple.SignInWithApple = {
+								enabled = 1;
+							};
+						};
+					};
+					A60000000000000000000001 = {
+						CreatedOnToolsVersion = 26.3;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+							com.apple.Keychain = {
 								enabled = 1;
 							};
 						};
@@ -151,6 +271,7 @@
 			projectRoot = "";
 			targets = (
 				37F8D0D42FE28F0200AA042A /* wander */,
+				A60000000000000000000001 /* WanderShareExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -160,6 +281,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A70000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000007 /* wander/GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -173,7 +302,26 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A70000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000003 /* wander/OutingPlan.swift in Sources */,
+				A10000000000000000000004 /* wander/OutingPlanPublishing.swift in Sources */,
+				A10000000000000000000005 /* wander/SharedFirebaseAuthConfiguration.swift in Sources */,
+				A10000000000000000000006 /* wander/SharedPlaceImport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A80000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A60000000000000000000001 /* WanderShareExtension */;
+			targetProxy = A80000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		37F8D0DE2FE28F0400AA042A /* Debug */ = {
@@ -304,7 +452,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -338,7 +486,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -355,6 +503,66 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.iterar.wander.wander;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A90000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = WanderShareExtension/WanderShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 15;
+				DEVELOPMENT_TEAM = MDSH9S69B9;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WanderShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iterar.wander.wander.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A90000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = WanderShareExtension/WanderShareExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 15;
+				DEVELOPMENT_TEAM = MDSH9S69B9;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WanderShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iterar.wander.wander.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -382,6 +590,15 @@
 			buildConfigurations = (
 				37F8D0E12FE28F0400AA042A /* Debug */,
 				37F8D0E22FE28F0400AA042A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A90000000000000000000003 /* Build configuration list for PBXNativeTarget "WanderShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A90000000000000000000001 /* Debug */,
+				A90000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

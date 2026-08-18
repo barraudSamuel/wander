@@ -1286,6 +1286,7 @@ struct MapWithFogView: UIViewRepresentable {
         mapView.showsUserLocation = true
         mapView.showsCompass = true
         mapView.userTrackingMode = .none
+        mapView.accessibilityLabel = "Carte d’exploration"
         mapView.accessibilityHint =
             "Maintenez un doigt sur un endroit vide pour créer un événement."
 
@@ -1961,6 +1962,8 @@ struct MapWithFogView: UIViewRepresentable {
                 action: #selector(handleLongPress(_:))
             )
             recognizer.minimumPressDuration = 0.5
+            recognizer.allowableMovement = 10
+            recognizer.numberOfTouchesRequired = 1
             recognizer.cancelsTouchesInView = false
             recognizer.delegate = self
             mapView.addGestureRecognizer(recognizer)
@@ -1977,7 +1980,21 @@ struct MapWithFogView: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            true
+            guard let longPressRecognizer,
+                  gestureRecognizer === longPressRecognizer
+                    || otherGestureRecognizer === longPressRecognizer else {
+                return true
+            }
+
+            let competingRecognizer = gestureRecognizer === longPressRecognizer
+                ? otherGestureRecognizer
+                : gestureRecognizer
+            if competingRecognizer is UIPanGestureRecognizer
+                || competingRecognizer is UIPinchGestureRecognizer
+                || competingRecognizer is UIRotationGestureRecognizer {
+                return false
+            }
+            return true
         }
 
         func gestureRecognizer(
@@ -1987,7 +2004,7 @@ struct MapWithFogView: UIViewRepresentable {
             var touchedView = touch.view
 
             while let view = touchedView {
-                if view is MKAnnotationView || view is UIControl {
+                if excludesEventCreation(from: view) {
                     return false
                 }
                 if view === gestureRecognizer.view {
@@ -1998,6 +2015,15 @@ struct MapWithFogView: UIViewRepresentable {
 
             eventCreationFeedback.prepare()
             return true
+        }
+
+        private func excludesEventCreation(from view: UIView) -> Bool {
+            view is MKAnnotationView
+                || view is UIControl
+                || view is MKCompassButton
+                || view is MKScaleView
+                || view is MKUserTrackingButton
+                || view.accessibilityTraits.contains(.button)
         }
 
         @objc private func handleLongPress(

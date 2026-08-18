@@ -17,6 +17,7 @@ final class OutingPlanService: ObservableObject {
 
     private let database: Firestore
     private let currentUserID: @MainActor () -> String?
+    private let publisher: OutingPlanPublisher
     private var observedCurrentUserID: String?
     private var eventListeners: [String: ListenerRegistration] = [:]
     private var listenerTokens: [String: UUID] = [:]
@@ -30,6 +31,7 @@ final class OutingPlanService: ObservableObject {
     ) {
         self.database = database
         self.currentUserID = currentUserID
+        self.publisher = OutingPlanPublisher(database: database)
     }
 
     deinit {
@@ -84,40 +86,11 @@ final class OutingPlanService: ObservableObject {
         eventIDValue existingEventIDValue: String? = nil
     ) async throws -> OutingPlan {
         let userID = try authenticatedUserID()
-        let validatedDraft = try OutingPlan.validatedDraft(draft)
-        if let existingEventIDValue,
-           UUID(uuidString: existingEventIDValue) == nil {
-            throw OutingPlanServiceError.invalidEventID
-        }
-        let eventIDValue = existingEventIDValue ?? UUID().uuidString
-        let reference = eventReference(ownerID: userID, eventID: eventIDValue)
-
-        var data: [String: Any] = [
-            "eventId": eventIDValue,
-            "ownerId": userID,
-            "publicationId": UUID().uuidString,
-            "displayName": validatedDraft.displayName,
-            "placeName": validatedDraft.placeName,
-            "category": validatedDraft.category.rawValue,
-            "location": GeoPoint(
-                latitude: validatedDraft.coordinate.latitude,
-                longitude: validatedDraft.coordinate.longitude
-            ),
-            "plannedAt": Timestamp(date: validatedDraft.plannedAt),
-            "publishedAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp(),
-            "timeZoneIdentifier": validatedDraft.timeZoneIdentifier
-        ]
-        if let address = validatedDraft.address {
-            data["address"] = address
-        }
-
-        try await reference.setData(data)
-        let document = try await reference.getDocument(source: .server)
-        guard document.exists else {
-            throw OutingPlanServiceError.missingPublishedEvent
-        }
-        return try OutingPlan(document: document)
+        return try await publisher.publish(
+            draft,
+            ownerID: userID,
+            eventIDValue: existingEventIDValue
+        )
     }
 
     func fetchEvent(eventIDValue: String) async throws -> OutingPlan? {
@@ -286,25 +259,5 @@ final class OutingPlanService: ObservableObject {
             throw OutingPlanServiceError.noAuthenticatedUser
         }
         return userID
-    }
-}
-
-enum OutingPlanServiceError: LocalizedError, Equatable {
-    case noAuthenticatedUser
-    case invalidEventID
-    case missingPublishedEvent
-    case notificationEventUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .noAuthenticatedUser:
-            return "Connecte-toi pour gérer un événement."
-        case .invalidEventID:
-            return "L’identifiant de l’événement est invalide."
-        case .missingPublishedEvent:
-            return "L’événement publié n’a pas pu être relu. Réessaie."
-        case .notificationEventUnavailable:
-            return "Cet événement n’est plus disponible."
-        }
     }
 }
