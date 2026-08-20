@@ -1144,26 +1144,31 @@ final class FriendScratchOverlayRenderer: MKOverlayRenderer {
         guard let overlay = overlay as? FriendScratchOverlay,
               !overlay.cellPolygons.isEmpty else { return }
 
+        context.saveGState()
+        defer { context.restoreGState() }
+
         let color = overlay.color
-        context.setLineWidth(1 / zoomScale)
-        context.setFillColor(color.withAlphaComponent(0.34).cgColor)
-        context.setStrokeColor(color.withAlphaComponent(0.75).cgColor)
+        let mergedPath = CGMutablePath()
 
         for polygon in overlay.cellPolygons.values
             where polygon.mapRect.intersects(mapRect) {
-
-            context.beginPath()
             for (index, coordinate) in polygon.coordinates.enumerated() {
                 let point = point(for: MKMapPoint(coordinate))
                 if index == 0 {
-                    context.move(to: point)
+                    mergedPath.move(to: point)
                 } else {
-                    context.addLine(to: point)
+                    mergedPath.addLine(to: point)
                 }
             }
-            context.closePath()
-            context.drawPath(using: .fillStroke)
+            mergedPath.closeSubpath()
         }
+
+        guard !mergedPath.isEmpty else { return }
+
+        context.setBlendMode(.normal)
+        context.setFillColor(color.withAlphaComponent(0.34).cgColor)
+        context.addPath(mergedPath)
+        context.fillPath()
     }
 }
 
@@ -1216,26 +1221,38 @@ final class FogOfWarOverlayRenderer: MKOverlayRenderer {
     }
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
-        guard let overlay = overlay as? FogOfWarOverlay else { return }
+        guard let overlay = overlay as? FogOfWarOverlay,
+              zoomScale > 0 else { return }
 
-        let path = CGMutablePath()
-        path.addRect(rect(for: mapRect))
+        context.saveGState()
+        defer { context.restoreGState() }
 
-        for cell in overlay.cellPolygons where cell.mapRect.intersects(mapRect) {
+        context.setBlendMode(.normal)
+        context.setFillColor(fogColor.cgColor)
+        let drawRect = rect(for: mapRect)
+        context.fill(drawRect)
+
+        let revealedPath = CGMutablePath()
+
+        for cell in overlay.cellPolygons
+            where cell.mapRect.intersects(mapRect) {
             for (index, coordinate) in cell.coordinates.enumerated() {
                 let point = self.point(for: MKMapPoint(coordinate))
                 if index == 0 {
-                    path.move(to: point)
+                    revealedPath.move(to: point)
                 } else {
-                    path.addLine(to: point)
+                    revealedPath.addLine(to: point)
                 }
             }
-            path.closeSubpath()
+            revealedPath.closeSubpath()
         }
 
-        context.addPath(path)
-        context.setFillColor(fogColor.cgColor)
-        context.drawPath(using: .eoFill)
+        guard !revealedPath.isEmpty else { return }
+
+        context.clip(to: drawRect)
+        context.setBlendMode(.clear)
+        context.addPath(revealedPath)
+        context.fillPath()
     }
 }
 
@@ -1272,7 +1289,7 @@ struct MapWithFogView: UIViewRepresentable {
     var userAvatarID = ""
 
     /// Fog colour — used by the polygon renderer.
-    var fogColor: UIColor = UIColor.black.withAlphaComponent(0.45)
+    var fogColor: UIColor = UIColor.black.withAlphaComponent(0.22)
 
     /// When toggled, follows the user's location while keeping north at the top.
     @Binding var centerOnUser: Bool
