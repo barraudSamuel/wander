@@ -108,6 +108,8 @@ fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
     var category = OutingCategory.other
 }
 
+fileprivate final class DraftOutingAnnotation: MKPointAnnotation {}
+
 private final class OutingPlanAnnotationView: MKAnnotationView {
     static let reuseIdentifier = "OutingPlanAnnotation"
     static let controlSize: CGFloat = 48
@@ -1303,6 +1305,12 @@ struct MapWithFogView: UIViewRepresentable {
     /// When set, centers and selects one event once.
     @Binding var centerOnOutingPlanEventID: String?
 
+    /// Coordinate selected for an event that has not been published yet.
+    var pendingOutingCoordinate: CLLocationCoordinate2D?
+
+    /// Whether a long press may start another event creation flow.
+    var isEventCreationEnabled = true
+
     /// Event whose detail card is currently visible.
     var selectedOutingPlanEventID: String?
 
@@ -1365,6 +1373,10 @@ struct MapWithFogView: UIViewRepresentable {
         context.coordinator.onSelectOutingPlan = onSelectOutingPlan
         context.coordinator.onDeselectOutingPlan = onDeselectOutingPlan
         context.coordinator.onCreateEvent = onCreateEvent
+        context.coordinator.setEventCreationEnabled(isEventCreationEnabled)
+        uiView.accessibilityHint = isEventCreationEnabled
+            ? "Maintenez un doigt sur un endroit vide pour créer un événement."
+            : "Le lieu du nouvel événement est indiqué par un pin."
 
         let visibleCellIDs = visibleDiscoveredCellIDs
         let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
@@ -1394,6 +1406,7 @@ struct MapWithFogView: UIViewRepresentable {
         updateFriendAnnotations(on: uiView, context: context)
         updateUserLocationAnnotation(on: uiView, context: context)
         updateOutingPlanAnnotations(on: uiView, context: context)
+        updateDraftOutingAnnotation(on: uiView, context: context)
         context.coordinator.refreshMapOffscreenIndicators(on: uiView)
         synchronizeOutingPlanSelection(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
@@ -1657,6 +1670,92 @@ struct MapWithFogView: UIViewRepresentable {
                 annotationView.configure(with: annotation)
             }
         }
+    }
+
+    private func updateDraftOutingAnnotation(
+        on mapView: MKMapView,
+        context: Context
+    ) {
+        let coordinator = context.coordinator
+
+        guard let pendingOutingCoordinate,
+              CLLocationCoordinate2DIsValid(pendingOutingCoordinate) else {
+            if let annotation = coordinator.draftOutingAnnotation {
+                mapView.removeAnnotation(annotation)
+                coordinator.draftOutingAnnotation = nil
+            }
+            coordinator.lastFocusedDraftCoordinate = nil
+            return
+        }
+
+        let annotation: DraftOutingAnnotation
+        if let existing = coordinator.draftOutingAnnotation {
+            annotation = existing
+            if annotation.coordinate.latitude
+                != pendingOutingCoordinate.latitude
+                || annotation.coordinate.longitude
+                    != pendingOutingCoordinate.longitude {
+                annotation.coordinate = pendingOutingCoordinate
+            }
+        } else {
+            annotation = DraftOutingAnnotation()
+            annotation.coordinate = pendingOutingCoordinate
+            annotation.title = "Lieu du nouvel événement"
+            coordinator.draftOutingAnnotation = annotation
+            mapView.addAnnotation(annotation)
+        }
+
+        let draftCoordinate = MapUserCoordinate(pendingOutingCoordinate)
+        guard coordinator.lastFocusedDraftCoordinate != draftCoordinate else {
+            return
+        }
+
+        guard focusDraftOuting(
+            at: pendingOutingCoordinate,
+            on: mapView
+        ) else {
+            return
+        }
+        coordinator.lastFocusedDraftCoordinate = draftCoordinate
+    }
+
+    private func focusDraftOuting(
+        at coordinate: CLLocationCoordinate2D,
+        on mapView: MKMapView
+    ) -> Bool {
+        guard mapView.bounds.width > 0, mapView.bounds.height > 0 else {
+            return false
+        }
+
+        mapView.setUserTrackingMode(.none, animated: false)
+
+        let topInset = mapView.safeAreaInsets.top + 24
+        let exposedBottom = max(
+            topInset,
+            mapView.bounds.height * 0.34 - 24
+        )
+        let targetPoint = CGPoint(
+            x: mapView.bounds.midX,
+            y: topInset + (exposedBottom - topInset) / 2
+        )
+
+        let targetCoordinate = mapView.convert(
+            targetPoint,
+            toCoordinateFrom: mapView
+        )
+        let currentCenter = MKMapPoint(mapView.centerCoordinate)
+        let currentTarget = MKMapPoint(targetCoordinate)
+        let draftPoint = MKMapPoint(coordinate)
+        let translatedCenter = MKMapPoint(
+            x: currentCenter.x + draftPoint.x - currentTarget.x,
+            y: currentCenter.y + draftPoint.y - currentTarget.y
+        )
+
+        mapView.setCenter(
+            translatedCenter.coordinate,
+            animated: true
+        )
+        return true
     }
 
     // MARK: - Fog overlay
@@ -1988,6 +2087,8 @@ struct MapWithFogView: UIViewRepresentable {
         var friendProfileColorHexByUserID: [String: String] = [:]
         var friendCalloutInfoByUserID: [String: MapUserCalloutInfo] = [:]
         fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
+        fileprivate var draftOutingAnnotation: DraftOutingAnnotation?
+        fileprivate var lastFocusedDraftCoordinate: MapUserCoordinate?
         var onJoinFriend: (String) -> Void
         var onViewFriendProfile: (String) -> Void
         var onSelectOutingPlan: (String) -> Void
@@ -2046,6 +2147,10 @@ struct MapWithFogView: UIViewRepresentable {
             guard let longPressRecognizer else { return }
             mapView.removeGestureRecognizer(longPressRecognizer)
             self.longPressRecognizer = nil
+        }
+
+        func setEventCreationEnabled(_ isEnabled: Bool) {
+            longPressRecognizer?.isEnabled = isEnabled
         }
 
         func installMapOffscreenIndicatorContainer(on mapView: MKMapView) {
@@ -2480,6 +2585,35 @@ struct MapWithFogView: UIViewRepresentable {
             }
 
             guard !(annotation is MKUserLocation) else { return nil }
+            if annotation is DraftOutingAnnotation {
+                let reuseIdentifier = "DraftOutingAnnotation"
+                let annotationView = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: reuseIdentifier
+                ) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(
+                        annotation: annotation,
+                        reuseIdentifier: reuseIdentifier
+                    )
+                annotationView.annotation = annotation
+                annotationView.markerTintColor = .systemRed
+                annotationView.glyphImage = UIImage(
+                    systemName: "calendar.badge.plus"
+                )
+                annotationView.glyphTintColor = .white
+                annotationView.titleVisibility = .hidden
+                annotationView.subtitleVisibility = .hidden
+                annotationView.canShowCallout = false
+                annotationView.clusteringIdentifier = nil
+                annotationView.displayPriority = .required
+                annotationView.isAccessibilityElement = true
+                annotationView.accessibilityLabel =
+                    "Lieu du nouvel événement"
+                annotationView.accessibilityHint =
+                    "Ce pin indique le lieu qui sera publié."
+                annotationView.accessibilityTraits = .image
+                return annotationView
+            }
+
             if let outingPlanAnnotation = annotation as? OutingPlanAnnotation {
                 let annotationView = mapView.dequeueReusableAnnotationView(
                     withIdentifier: OutingPlanAnnotationView.reuseIdentifier

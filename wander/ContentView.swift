@@ -18,6 +18,33 @@ private enum RootTab: Hashable {
     case profile
 }
 
+private enum OutingComposerPresentation {
+    static let creationDetent = PresentationDetent.fraction(0.66)
+}
+
+private struct OutingComposerPresentationModifier: ViewModifier {
+    let isCreating: Bool
+    @Binding var selectedDetent: PresentationDetent
+
+    func body(content: Content) -> some View {
+        content
+            .presentationDetents(
+                isCreating
+                    ? [OutingComposerPresentation.creationDetent, .large]
+                    : [.large],
+                selection: $selectedDetent
+            )
+            .presentationBackgroundInteraction(
+                isCreating
+                    ? .enabled(
+                        upThrough: OutingComposerPresentation.creationDetent
+                    )
+                    : .disabled
+            )
+            .presentationDragIndicator(.visible)
+    }
+}
+
 struct FriendMapSummary: Identifiable, Hashable {
     let userID: String
     let displayName: String
@@ -65,6 +92,8 @@ struct ContentView: View {
     @State private var selectedTab: RootTab = .explore
     @State private var filterSheetVisible = false
     @State private var outingComposerVisible = false
+    @State private var outingComposerDetent =
+        OutingComposerPresentation.creationDetent
     @State private var editingOutingEvent: OutingPlan?
     @State private var pendingOutingCoordinate: CLLocationCoordinate2D?
     @State private var centerOnUser = false
@@ -343,6 +372,8 @@ struct ContentView: View {
                     resetMapOrientation: $resetMapOrientation,
                     centerOnFriendUserID: $centerOnFriendUserID,
                     centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
+                    pendingOutingCoordinate: pendingOutingCoordinate,
+                    isEventCreationEnabled: !outingComposerVisible,
                     selectedOutingPlanEventID: selectedOutingPlanEventID,
                     showsHeatMap: heatMapEnabled,
                     heatMapCellData: locationTracker.heatMapCellData,
@@ -364,6 +395,8 @@ struct ContentView: View {
                         selectedOutingPlanEventID = nil
                         editingOutingEvent = nil
                         pendingOutingCoordinate = coordinate
+                        outingComposerDetent =
+                            OutingComposerPresentation.creationDetent
                         outingComposerVisible = true
                     }
                 )
@@ -380,6 +413,7 @@ struct ContentView: View {
                         onEdit: {
                             pendingOutingCoordinate = nil
                             editingOutingEvent = selectedOutingPlan.plan
+                            outingComposerDetent = .large
                             outingComposerVisible = true
                         },
                         onToggleAttendance: {
@@ -471,8 +505,12 @@ struct ContentView: View {
                 initialCoordinate: pendingOutingCoordinate,
                 editingEvent: editingOutingEvent
             )
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
+            .modifier(
+                OutingComposerPresentationModifier(
+                    isCreating: editingOutingEvent == nil,
+                    selectedDetent: $outingComposerDetent
+                )
+            )
         }
         .alert(
             "Rejoindre \(selectedNavigationFriendName)",
