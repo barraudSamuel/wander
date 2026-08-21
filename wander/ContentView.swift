@@ -368,6 +368,7 @@ struct ContentView: View {
                         friendSyncService.loadedFriendExplorationUserIDs,
                     userDisplayName: displayName,
                     userAvatarID: avatarID,
+                    userProfileColorHex: profileColorHex,
                     centerOnUser: $centerOnUser,
                     resetMapOrientation: $resetMapOrientation,
                     centerOnFriendUserID: $centerOnFriendUserID,

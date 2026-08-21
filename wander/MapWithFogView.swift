@@ -210,6 +210,13 @@ private final class UserPinBackgroundView: UIView {
         shapeLayer.shadowPath = path.cgPath
     }
 
+    func setColor(_ color: UIColor) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shapeLayer.fillColor = color.cgColor
+        CATransaction.commit()
+    }
+
     private func configureView() {
         backgroundColor = .clear
         isUserInteractionEnabled = false
@@ -401,6 +408,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
 
     fileprivate func configure(
         avatarID: String,
+        profileColorHex: String,
         calloutInfo: MapUserCalloutInfo,
         calloutContent: UserLocationCalloutContent = .information
     ) {
@@ -415,6 +423,9 @@ final class UserLocationAnnotationView: MKAnnotationView {
                 ?? UIImage(systemName: "person.crop.circle.fill")
             configuredAvatarID = resolvedAvatar.id
         }
+        pinBackgroundView.setColor(
+            ProfileColor.uiColor(hex: profileColorHex)
+        )
 
         if configuredCalloutInfo != calloutInfo || calloutModeChanged {
             if shouldResetAddress(for: calloutInfo.coordinate) {
@@ -1289,6 +1300,7 @@ struct MapWithFogView: UIViewRepresentable {
 
     var userDisplayName = ""
     var userAvatarID = ""
+    var userProfileColorHex = ""
 
     /// Fog colour — used by the polygon renderer.
     var fogColor: UIColor = UIColor.black.withAlphaComponent(0.22)
@@ -1506,6 +1518,7 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.updateUserMarkerAppearance(
             displayName: resolvedDisplayName,
             avatarID: userAvatarID,
+            profileColorHex: userProfileColorHex,
             calloutInfo: calloutInfo,
             on: mapView
         )
@@ -1599,6 +1612,7 @@ struct MapWithFogView: UIViewRepresentable {
                     coordinator.configureFriendAnnotationView(
                         annotationView,
                         avatarID: friendLocation.avatarID,
+                        profileColorHex: friendLocation.profileColorHex,
                         calloutInfo: calloutInfo
                     )
                 }
@@ -2081,6 +2095,7 @@ struct MapWithFogView: UIViewRepresentable {
         var userLocationAnnotation: UserLocationAnnotation?
         private var userDisplayName = ""
         private var userAvatarID = ""
+        private var userProfileColorHex = ""
         private var userCalloutInfo: MapUserCalloutInfo?
         var friendAnnotations: [String: FriendLocationAnnotation] = [:]
         var friendAvatarIDByUserID: [String: String] = [:]
@@ -2568,6 +2583,7 @@ struct MapWithFogView: UIViewRepresentable {
                 annotationView.annotation = annotation
                 annotationView.configure(
                     avatarID: userAvatarID,
+                    profileColorHex: userProfileColorHex,
                     calloutInfo: userCalloutInfo ?? MapUserCalloutInfo(
                         displayName: userDisplayName,
                         relationshipText: "Vous",
@@ -2644,6 +2660,8 @@ struct MapWithFogView: UIViewRepresentable {
             let userID = friendAnnotation.userID
             let avatarID = friendAvatarIDByUserID[userID]
                 ?? ProfileAvatar.generatedID(seed: userID)
+            let profileColorHex = friendProfileColorHexByUserID[userID]
+                ?? ProfileColor.generatedHex(seed: userID)
             let calloutInfo = friendCalloutInfoByUserID[userID]
                 ?? MapUserCalloutInfo(
                     displayName: displayName,
@@ -2660,6 +2678,7 @@ struct MapWithFogView: UIViewRepresentable {
             configureFriendAnnotationView(
                 annotationView,
                 avatarID: avatarID,
+                profileColorHex: profileColorHex,
                 calloutInfo: calloutInfo
             )
             return annotationView
@@ -2705,18 +2724,24 @@ struct MapWithFogView: UIViewRepresentable {
         func updateUserMarkerAppearance(
             displayName: String,
             avatarID: String,
+            profileColorHex: String,
             calloutInfo: MapUserCalloutInfo,
             on mapView: MKMapView
         ) {
             let normalizedAvatarID = ProfileAvatar.normalizedID(avatarID)
                 ?? ProfileAvatar.cyclopsHorns.id
+            let normalizedProfileColorHex = ProfileColor.normalizedHex(
+                profileColorHex
+            ) ?? ProfileColor.generatedHex(seed: profileColorHex)
 
             guard userDisplayName != displayName ||
                     userAvatarID != normalizedAvatarID ||
+                    userProfileColorHex != normalizedProfileColorHex ||
                     userCalloutInfo != calloutInfo else { return }
 
             userDisplayName = displayName
             userAvatarID = normalizedAvatarID
+            userProfileColorHex = normalizedProfileColorHex
             userCalloutInfo = calloutInfo
 
             guard let annotation = userLocationAnnotation,
@@ -2725,6 +2750,7 @@ struct MapWithFogView: UIViewRepresentable {
 
             annotationView.configure(
                 avatarID: normalizedAvatarID,
+                profileColorHex: normalizedProfileColorHex,
                 calloutInfo: calloutInfo
             )
         }
@@ -2732,6 +2758,7 @@ struct MapWithFogView: UIViewRepresentable {
         func configureFriendAnnotationView(
             _ annotationView: MKAnnotationView,
             avatarID: String,
+            profileColorHex: String,
             calloutInfo: MapUserCalloutInfo
         ) {
             guard let annotationView = annotationView as? UserLocationAnnotationView,
@@ -2743,6 +2770,7 @@ struct MapWithFogView: UIViewRepresentable {
 
             annotationView.configure(
                 avatarID: avatarID,
+                profileColorHex: profileColorHex,
                 calloutInfo: calloutInfo,
                 calloutContent: .friendActions(
                     FriendCalloutActions(
