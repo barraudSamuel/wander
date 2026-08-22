@@ -41,7 +41,8 @@ partie de la signature.
 Les fonctions `notifyAcceptedFriendsOfEvent`,
 `notifyRecipientOfFriendRequest`,
 `notifyEventParticipantsOfAttendance`, `cleanupEventAttendances` et
-`cleanupReplacedEventAttendances` sont préparées pour la région
+`cleanupReplacedEventAttendances` ainsi que `cleanupExpiredEvents` sont
+préparées pour la région
 `asia-northeast3`. Avant le premier déploiement, confirmer que cette région est
 adaptée à l'emplacement Firestore du projet ; changer une région après
 déploiement crée une nouvelle fonction au lieu de déplacer l'existante.
@@ -62,9 +63,21 @@ relance du même événement ne duplique pas le push, tandis qu'un véritable
 départ suivi d'une nouvelle arrivée constitue une nouvelle participation.
 
 Les événements sont stockés dans `users/{ownerId}/events/{eventId}` sans champ
-`expiresAt` ni TTL. Ils restent disponibles jusqu’à leur annulation manuelle.
-La modification d’un événement nettoie les participations de son ancienne
-publication. Sa suppression nettoie toute la sous-collection `attendees`.
+`expiresAt` ni TTL. La fonction planifiée `cleanupExpiredEvents`, déployée dans
+`asia-northeast3`, s’exécute toutes les heures et supprime les événements dont
+`publishedAt` date d’au moins 12 heures. Une modification renouvelle ce timestamp
+serveur : la nouvelle publication dispose donc de 12 heures supplémentaires.
+La suppression intervient en pratique entre 12 et 13 heures après la dernière
+publication. La modification nettoie les participations de l’ancienne
+publication ; la suppression, manuelle ou planifiée, nettoie toute la
+sous-collection `attendees` via `cleanupEventAttendances`.
+
+La requête planifiée utilise l’index collection-group déclaré dans
+`firestore.indexes.json`. Cet index ne change pas avec la nouvelle durée : seul
+`cleanupExpiredEvents` doit être redéployé pour passer de 24 à 12 heures.
+
+La fonction déjà déployée conserve son ancienne rétention de 24 heures jusqu’au
+redéploiement manuel de `cleanupExpiredEvents` avec cette version.
 
 Installer et valider localement le backend :
 

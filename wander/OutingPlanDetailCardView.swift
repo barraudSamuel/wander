@@ -9,6 +9,7 @@ struct OutingPlanDetailCardView: View {
     let outing: MapOutingPlan
     let onDismiss: () -> Void
     let onEdit: () -> Void
+    let onOpenDirections: () -> Void
     let onToggleAttendance: () -> Void
 
     var body: some View {
@@ -16,6 +17,7 @@ struct OutingPlanDetailCardView: View {
             header
             outingDetails
             participationSummary
+            directionsButton
 
             if outing.isCurrentUser {
                 editButton
@@ -128,6 +130,18 @@ struct OutingPlanDetailCardView: View {
         .controlSize(.large)
         .disabled(outing.isAttendanceUpdating)
         .accessibilityHint("Modifie ta participation à cette sortie")
+    }
+
+    private var directionsButton: some View {
+        Button(action: onOpenDirections) {
+            Label("Itinéraire", systemImage: "map")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .accessibilityHint(
+            "Choisir une application pour rejoindre le lieu de cet événement"
+        )
     }
 
     private var editButton: some View {

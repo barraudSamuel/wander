@@ -844,14 +844,14 @@ final class UserLocationAnnotationView: MKAnnotationView {
     private func makeFriendActionView(for info: MapUserCalloutInfo) -> UIView {
         let joinButton = UIButton(type: .system)
         var joinConfiguration = UIButton.Configuration.plain()
-        joinConfiguration.image = UIImage(systemName: "figure.walk")
+        joinConfiguration.image = UIImage(systemName: "map")
         joinConfiguration.baseForegroundColor = .label
         joinConfiguration.preferredSymbolConfigurationForImage =
             UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
         joinConfiguration.contentInsets = .zero
         joinButton.configuration = joinConfiguration
         joinButton.isEnabled = info.coordinate != nil
-        joinButton.accessibilityLabel = "Rejoindre \(info.displayName)"
+        joinButton.accessibilityLabel = "Itinéraire vers \(info.displayName)"
         joinButton.accessibilityHint = "Choisir une application pour afficher l’itinéraire"
         joinButton.addTarget(
             self,

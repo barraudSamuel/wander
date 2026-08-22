@@ -41,8 +41,10 @@ struct FriendProfileSheet: View {
     @ObservedObject private var service: FriendSyncService
     @ObservedObject private var cityBoundary: CityBoundary
     @Binding private var cityBoundaryResolutionState: CityBoundaryResolutionState
+    @State private var opensDirectionsAfterDismiss = false
 
     private let userID: String
+    private let onOpenDirections: () -> Void
 
     private enum CityProgressState {
         case explorationLoading
@@ -57,11 +59,13 @@ struct FriendProfileSheet: View {
         userID: String,
         service: FriendSyncService,
         cityBoundary: CityBoundary,
-        cityBoundaryResolutionState: Binding<CityBoundaryResolutionState>
+        cityBoundaryResolutionState: Binding<CityBoundaryResolutionState>,
+        onOpenDirections: @escaping () -> Void
     ) {
         self.userID = userID
         self.service = service
         self.cityBoundary = cityBoundary
+        self.onOpenDirections = onOpenDirections
         _cityBoundaryResolutionState = cityBoundaryResolutionState
     }
 
@@ -187,11 +191,25 @@ struct FriendProfileSheet: View {
                         Text("Position indisponible")
                             .foregroundStyle(.secondary)
                     }
+
+                    Button {
+                        opensDirectionsAfterDismiss = true
+                        dismiss()
+                    } label: {
+                        Label("Itinéraire", systemImage: "map")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(location == nil)
+                    .accessibilityHint(
+                        "Choisir une application pour rejoindre cet ami"
+                    )
                 } header: {
                     Text("Position")
                 } footer: {
                     Text(
-                        "L’action Rejoindre utilise la dernière position connue, même si elle n’a pas été actualisée récemment."
+                        "L’action Itinéraire utilise la dernière position connue, même si elle n’a pas été actualisée récemment."
                     )
                 }
             }
@@ -208,6 +226,13 @@ struct FriendProfileSheet: View {
         .onChange(of: isFriendAccepted, initial: true) { _, isAccepted in
             if !isAccepted {
                 dismiss()
+            }
+        }
+        .onDisappear {
+            guard opensDirectionsAfterDismiss else { return }
+            Task { @MainActor in
+                await Task.yield()
+                onOpenDirections()
             }
         }
     }

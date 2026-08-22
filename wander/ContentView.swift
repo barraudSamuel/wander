@@ -65,6 +65,11 @@ private struct FriendSelection: Identifiable, Equatable {
     var id: String { userID }
 }
 
+private struct ExternalMapNavigationDestination: Equatable {
+    let displayName: String
+    let coordinate: MapUserCoordinate
+}
+
 struct ContentView: View {
     private static let navigationDateTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -107,6 +112,7 @@ struct ContentView: View {
     @State private var cityProgress: CityProgress?
     @State private var friendExplorationProgress: [String: CityProgress] = [:]
     @State private var friendNavigationSelection: FriendSelection?
+    @State private var selectedOutingNavigationEventID: String?
     @State private var selectedFriendProfile: FriendSelection?
     @State private var outingAttendanceErrorMessage: String?
     @State private var cityBoundaryResolutionState: CityBoundaryResolutionState = .loading
@@ -417,6 +423,11 @@ struct ContentView: View {
                             outingComposerDetent = .large
                             outingComposerVisible = true
                         },
+                        onOpenDirections: {
+                            presentOutingNavigationOptions(
+                                eventID: selectedOutingPlan.plan.eventIDValue
+                            )
+                        },
                         onToggleAttendance: {
                             toggleOutingAttendance(
                                 eventID: selectedOutingPlan.plan.eventIDValue
@@ -514,7 +525,7 @@ struct ContentView: View {
             )
         }
         .alert(
-            "Rejoindre \(selectedNavigationFriendName)",
+            "Itinéraire vers \(selectedNavigationFriendName)",
             isPresented: navigationAlertIsPresented
         ) {
             Button("Google Maps") {
@@ -531,12 +542,33 @@ struct ContentView: View {
         } message: {
             Text(selectedNavigationMessage)
         }
+        .alert(
+            "Itinéraire vers \(selectedOutingNavigationName)",
+            isPresented: outingNavigationAlertIsPresented
+        ) {
+            Button("Google Maps") {
+                openGoogleMapsForSelectedOuting()
+            }
+
+            if canOpenNaverMapForSelectedOuting {
+                Button("Naver Map · À pied") {
+                    openNaverMapForSelectedOuting()
+                }
+            }
+
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text(selectedOutingNavigationMessage)
+        }
         .sheet(item: $selectedFriendProfile) { selection in
             FriendProfileSheet(
                 userID: selection.userID,
                 service: friendSyncService,
                 cityBoundary: cityBoundary,
-                cityBoundaryResolutionState: $cityBoundaryResolutionState
+                cityBoundaryResolutionState: $cityBoundaryResolutionState,
+                onOpenDirections: {
+                    presentNavigationOptions(selection.userID)
+                }
             )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -613,6 +645,13 @@ struct ContentView: View {
         friendNavigationSelection = FriendSelection(userID: userID)
     }
 
+    private func presentOutingNavigationOptions(eventID: String) {
+        guard currentOutingNavigationDestination(for: eventID) != nil else {
+            return
+        }
+        selectedOutingNavigationEventID = eventID
+    }
+
     private func presentFriendProfile(_ userID: String) {
         guard acceptedFriendUserIDs.contains(userID) else { return }
         selectedFriendProfile = FriendSelection(userID: userID)
@@ -624,6 +663,17 @@ struct ContentView: View {
             set: { isPresented in
                 if !isPresented {
                     friendNavigationSelection = nil
+                }
+            }
+        )
+    }
+
+    private var outingNavigationAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { selectedOutingNavigationEventID != nil },
+            set: { isPresented in
+                if !isPresented {
+                    selectedOutingNavigationEventID = nil
                 }
             }
         )
@@ -646,6 +696,23 @@ struct ContentView: View {
             return
         }
 
+        openGoogleMaps(
+            to: externalMapNavigationDestination(for: destination)
+        )
+    }
+
+    private func openGoogleMapsForSelectedOuting() {
+        guard let destination = selectedOutingNavigationDestination else {
+            selectedOutingNavigationEventID = nil
+            return
+        }
+
+        openGoogleMaps(to: destination)
+    }
+
+    private func openGoogleMaps(
+        to destination: ExternalMapNavigationDestination
+    ) {
         var components = URLComponents(
             string: "https://www.google.com/maps/dir/"
         )
@@ -667,6 +734,23 @@ struct ContentView: View {
             return
         }
 
+        openNaverMap(
+            to: externalMapNavigationDestination(for: destination)
+        )
+    }
+
+    private func openNaverMapForSelectedOuting() {
+        guard let destination = selectedOutingNavigationDestination else {
+            selectedOutingNavigationEventID = nil
+            return
+        }
+
+        openNaverMap(to: destination)
+    }
+
+    private func openNaverMap(
+        to destination: ExternalMapNavigationDestination
+    ) {
         guard let url = naverMapURL(for: destination),
               UIApplication.shared.canOpenURL(url) else {
             return
@@ -674,7 +758,9 @@ struct ContentView: View {
         UIApplication.shared.open(url)
     }
 
-    private func canOpenNaverMap(for destination: FriendNavigationDestination) -> Bool {
+    private func canOpenNaverMap(
+        for destination: ExternalMapNavigationDestination
+    ) -> Bool {
         guard isInsideNaverMapCoverage(destination.coordinate),
               let url = naverMapURL(for: destination) else {
             return false
@@ -683,7 +769,7 @@ struct ContentView: View {
     }
 
     private func naverMapURL(
-        for destination: FriendNavigationDestination
+        for destination: ExternalMapNavigationDestination
     ) -> URL? {
         var components = URLComponents()
         components.scheme = "nmap"
@@ -745,7 +831,52 @@ struct ContentView: View {
 
     private var canOpenNaverMapForSelectedFriend: Bool {
         guard let destination = selectedNavigationDestination else { return false }
+        return canOpenNaverMap(
+            for: externalMapNavigationDestination(for: destination)
+        )
+    }
+
+    private var selectedOutingNavigationDestination: ExternalMapNavigationDestination? {
+        guard let eventID = selectedOutingNavigationEventID else { return nil }
+        return currentOutingNavigationDestination(for: eventID)
+    }
+
+    private var selectedOutingNavigationName: String {
+        selectedOutingNavigationDestination?.displayName ?? "cet événement"
+    }
+
+    private var selectedOutingNavigationMessage: String {
+        guard let eventID = selectedOutingNavigationEventID,
+              let outing = mapOutingPlans[eventID] else {
+            return "Le lieu de cet événement n’est plus disponible."
+        }
+
+        return outing.plan.address
+            ?? "L’itinéraire utilisera le lieu enregistré pour cet événement."
+    }
+
+    private var canOpenNaverMapForSelectedOuting: Bool {
+        guard let destination = selectedOutingNavigationDestination else {
+            return false
+        }
         return canOpenNaverMap(for: destination)
+    }
+
+    private func currentOutingNavigationDestination(
+        for eventID: String
+    ) -> ExternalMapNavigationDestination? {
+        guard let outing = mapOutingPlans[eventID] else { return nil }
+        let coordinate = outing.plan.coordinate
+        guard CLLocationCoordinate2DIsValid(coordinate),
+              coordinate.latitude.isFinite,
+              coordinate.longitude.isFinite else {
+            return nil
+        }
+
+        return ExternalMapNavigationDestination(
+            displayName: outing.plan.placeName,
+            coordinate: MapUserCoordinate(coordinate)
+        )
     }
 
     private func currentNavigationDestination(
@@ -765,6 +896,15 @@ struct ContentView: View {
             displayName: location.displayName,
             coordinate: MapUserCoordinate(location.coordinate),
             sampledAt: location.sampledAt
+        )
+    }
+
+    private func externalMapNavigationDestination(
+        for destination: FriendNavigationDestination
+    ) -> ExternalMapNavigationDestination {
+        ExternalMapNavigationDestination(
+            displayName: destination.displayName,
+            coordinate: destination.coordinate
         )
     }
 
@@ -907,11 +1047,17 @@ struct ContentView: View {
     }
 
     private func reconcileSelectedOutingPlan() {
-        guard let selectedOutingPlanEventID,
-              mapOutingPlans[selectedOutingPlanEventID] == nil else {
-            return
+        let outingPlans = mapOutingPlans
+
+        if let selectedOutingPlanEventID,
+           outingPlans[selectedOutingPlanEventID] == nil {
+            self.selectedOutingPlanEventID = nil
         }
-        self.selectedOutingPlanEventID = nil
+
+        if let selectedOutingNavigationEventID,
+           outingPlans[selectedOutingNavigationEventID] == nil {
+            self.selectedOutingNavigationEventID = nil
+        }
     }
 
     private func synchronizeOutingPlanObservation() {

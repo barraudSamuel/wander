@@ -13,6 +13,8 @@ import {
   onDocumentUpdated,
   onDocumentWritten,
 } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { expiredEventCutoff } from "./eventCleanupLogic.js";
 import {
   DeviceTargetCandidate,
   acceptedRecipientIDs,
@@ -387,6 +389,40 @@ export const cleanupEventAttendances = onDocumentDeleted(
     }
 
     await deleteEventAttendances(deletedEvent.ref);
+  },
+);
+
+export const cleanupExpiredEvents = onSchedule(
+  {
+    schedule: "every 60 minutes",
+    region: "asia-northeast3",
+    maxInstances: 1,
+  },
+  async () => {
+    const cutoff = Timestamp.fromDate(expiredEventCutoff(new Date()));
+    let deletedEventCount = 0;
+
+    while (true) {
+      const snapshot = await database
+        .collectionGroup("events")
+        .where("publishedAt", "<=", cutoff)
+        .limit(maximumBatchSize)
+        .get();
+      if (snapshot.empty) {
+        logger.info("Expired event cleanup completed.", {
+          cutoff: cutoff.toDate().toISOString(),
+          deletedEventCount,
+        });
+        return;
+      }
+
+      const batch = database.batch();
+      for (const document of snapshot.docs) {
+        batch.delete(document.ref);
+      }
+      await batch.commit();
+      deletedEventCount += snapshot.size;
+    }
   },
 );
 
