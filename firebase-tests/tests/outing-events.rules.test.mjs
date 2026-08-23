@@ -123,10 +123,14 @@ describe("users/{ownerID}/events/{eventID}", () => {
     const database = authenticatedFirestore(ownerId);
     const firstEventId = crypto.randomUUID();
     const secondEventId = crypto.randomUUID();
+    const firstPublicationId = crypto.randomUUID();
     const firstReference = eventReference(database, firstEventId);
     const secondReference = eventReference(database, secondEventId);
 
-    await assertSucceeds(setDoc(firstReference, eventData(firstEventId)));
+    await assertSucceeds(setDoc(
+      firstReference,
+      eventData(firstEventId, { publicationId: firstPublicationId }),
+    ));
     await assertSucceeds(setDoc(secondReference, eventData(secondEventId)));
 
     const snapshot = await assertSucceeds(
@@ -139,13 +143,16 @@ describe("users/{ownerID}/events/{eventID}", () => {
 
     await assertSucceeds(setDoc(
       firstReference,
-      eventData(firstEventId, { placeName: "Namsan Seoul Tower" }),
+      eventData(firstEventId, {
+        publicationId: firstPublicationId,
+        placeName: "Namsan Seoul Tower",
+      }),
     ));
     await assertSucceeds(deleteDoc(firstReference));
     assert.equal((await assertSucceeds(getDoc(secondReference))).exists(), true);
   });
 
-  test("an update preserves event identity and renews publication identity", async () => {
+  test("an update preserves event and publication identity", async () => {
     const database = authenticatedFirestore(ownerId);
     const eventId = crypto.randomUUID();
     const publicationId = crypto.randomUUID();
@@ -155,9 +162,13 @@ describe("users/{ownerID}/events/{eventID}", () => {
       reference,
       eventData(eventId, { publicationId }),
     ));
-    await assertFails(setDoc(
+    await assertSucceeds(setDoc(
       reference,
       eventData(eventId, { publicationId, placeName: "Bukchon" }),
+    ));
+    await assertFails(setDoc(
+      reference,
+      eventData(eventId, { placeName: "Bukchon" }),
     ));
     await assertFails(setDoc(
       reference,
@@ -186,15 +197,19 @@ describe("users/{ownerID}/events/{eventID}", () => {
     }
   });
 
-  test("an update cannot change the category", async () => {
+  test("an update can change the category without replacing the publication", async () => {
     const database = authenticatedFirestore(ownerId);
     const eventId = crypto.randomUUID();
+    const publicationId = crypto.randomUUID();
     const reference = eventReference(database, eventId);
 
-    await assertSucceeds(setDoc(reference, eventData(eventId)));
-    await assertFails(setDoc(
+    await assertSucceeds(setDoc(
       reference,
-      eventData(eventId, { category: "meal" }),
+      eventData(eventId, { publicationId }),
+    ));
+    await assertSucceeds(setDoc(
+      reference,
+      eventData(eventId, { publicationId, category: "meal" }),
     ));
   });
 

@@ -52,6 +52,7 @@ function eventData(eventId, publicationId) {
     publicationId,
     displayName: profiles[ownerId].displayName,
     placeName: "Namsan Seoul Tower",
+    category: "coffee",
     location: new GeoPoint(37.5512, 126.9882),
     plannedAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
     publishedAt: Timestamp.now(),
@@ -237,6 +238,35 @@ describe("users/{ownerID}/events/{eventID}/attendees", () => {
       currentAttendancesQuery(database, secondEventId, secondPublicationId),
     ));
     assert.equal(secondSnapshot.size, 1);
+  });
+
+  test("an event update preserves attendance for the stable publication", async () => {
+    const eventId = crypto.randomUUID();
+    const publicationId = crypto.randomUUID();
+    await seedEvent(eventId, publicationId);
+    await seedFriendship(participantId);
+    await seedAttendance(eventId, publicationId);
+
+    const ownerDatabase = authenticatedFirestore(ownerId);
+    await assertSucceeds(setDoc(
+      doc(ownerDatabase, "users", ownerId, "events", eventId),
+      {
+        ...eventData(eventId, publicationId),
+        category: "meal",
+        publishedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+    ));
+
+    const participantDatabase = authenticatedFirestore(participantId);
+    const reference = attendanceReference(
+      participantDatabase,
+      eventId,
+      publicationId,
+    );
+    const snapshot = await assertSucceeds(getDoc(reference));
+    assert.equal(snapshot.exists(), true);
+    assert.equal(snapshot.data().publicationId, publicationId);
   });
 
   test("current participants can list peers but non-participants cannot", async () => {
