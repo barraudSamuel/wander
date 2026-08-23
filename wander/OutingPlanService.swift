@@ -83,13 +83,19 @@ final class OutingPlanService: ObservableObject {
     @discardableResult
     func publish(
         _ draft: OutingPlanDraft,
-        eventIDValue existingEventIDValue: String? = nil
+        existingPlan: OutingPlan? = nil
     ) async throws -> OutingPlan {
         let userID = try authenticatedUserID()
+        if let existingPlan {
+            return try await publisher.update(
+                draft,
+                existingPlan: existingPlan,
+                ownerID: userID
+            )
+        }
         return try await publisher.publish(
             draft,
-            ownerID: userID,
-            eventIDValue: existingEventIDValue
+            ownerID: userID
         )
     }
 

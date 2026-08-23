@@ -17,24 +17,25 @@ une panne lors du `getDocument(source: .server)` suivant est remontée comme un
 échec de publication. L’extension reste alors ouverte et indique une erreur
 alors que l’événement existe déjà.
 
-Le même `eventId` limite les doublons lors d’un nouvel essai, mais si
-l’utilisateur change la catégorie avant de réessayer, les règles refusent la
-mise à jour car la catégorie d’un événement existant est immuable.
+L’extension réutilise désormais le même `eventId` et le même `publicationId` :
+un nouvel essai reste idempotent même si la catégorie a changé. Le problème
+restant est l’état trompeur de l’interface entre l’écriture confirmée et la
+relecture échouée.
 
 ## Evidence
 
-- `wander/OutingPlanPublishing.swift:61-66` effectue l’écriture puis une seconde
+- `wander/OutingPlanPublishing.swift:56-57` effectue l’écriture puis une seconde
   requête serveur indispensable au retour de la méthode.
 - `WanderShareExtension/ShareComposerView.swift:215-227` traite toute erreur de
   cette méthode comme une publication échouée et réactive le formulaire.
-- `firestore.rules:771-782` interdit de changer la catégorie lors d’une mise à
-  jour.
+- `wander/OutingPlanPublishing.swift:30-39` dérive l’identité de publication de
+  l’`eventId` fourni par l’extension afin de rendre le rejeu stable.
 
 ## Acceptance criteria
 
 - [ ] L’interface distingue une écriture non confirmée d’une écriture confirmée
       dont seule la relecture a échoué.
-- [ ] Un réessai après succès partiel reste idempotent, même si les contrôles du
+- [x] Un réessai après succès partiel reste idempotent, même si les contrôles du
       formulaire ont changé.
 - [ ] L’utilisateur ne peut pas fermer en croyant qu’aucun événement n’existe
       alors que Firestore l’a déjà créé.
@@ -42,5 +43,6 @@ mise à jour car la catégorie d’un événement existant est immuable.
 
 ## Resolution notes
 
-La correction doit préserver le publisher commun utilisé par l’application et
-l’extension.
+La correction restante doit préserver le publisher commun utilisé par
+l’application et l’extension, tout en distinguant le succès de l’écriture de
+celui de la relecture.

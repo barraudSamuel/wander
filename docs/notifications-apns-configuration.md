@@ -66,11 +66,12 @@ Les événements sont stockés dans `users/{ownerId}/events/{eventId}` sans cham
 `expiresAt` ni TTL. La fonction planifiée `cleanupExpiredEvents`, déployée dans
 `asia-northeast3`, s’exécute toutes les heures et supprime les événements dont
 `publishedAt` date d’au moins 12 heures. Une modification renouvelle ce timestamp
-serveur : la nouvelle publication dispose donc de 12 heures supplémentaires.
+serveur : l’événement dispose donc de 12 heures supplémentaires.
 La suppression intervient en pratique entre 12 et 13 heures après la dernière
-publication. La modification nettoie les participations de l’ancienne
-publication ; la suppression, manuelle ou planifiée, nettoie toute la
-sous-collection `attendees` via `cleanupEventAttendances`.
+publication. Une modification conserve `eventId` et `publicationId` : elle ne
+renvoie pas la notification de publication et les participations restent
+rattachées à l’événement. Seule la suppression, manuelle ou planifiée, nettoie
+toute la sous-collection `attendees` via `cleanupEventAttendances`.
 
 La requête planifiée utilise l’index collection-group déclaré dans
 `firestore.indexes.json`. Cet index ne change pas avec la nouvelle durée : seul

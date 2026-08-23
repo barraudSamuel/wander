@@ -177,25 +177,16 @@ struct OutingPlanComposerView: View {
             }
 
             Section {
-                if existingPlan == nil {
-                    Picker("Catégorie", selection: $category) {
-                        Text("Choisir…")
-                            .tag(nil as OutingCategory?)
+                Picker("Catégorie", selection: $category) {
+                    Text("Choisir…")
+                        .tag(nil as OutingCategory?)
 
-                        ForEach(OutingCategory.allCases) { category in
-                            Label(
-                                category.title,
-                                systemImage: category.systemImageName
-                            )
-                            .tag(category as OutingCategory?)
-                        }
-                    }
-                } else if let category {
-                    LabeledContent("Catégorie") {
+                    ForEach(OutingCategory.allCases) { category in
                         Label(
                             category.title,
                             systemImage: category.systemImageName
                         )
+                        .tag(category as OutingCategory?)
                     }
                 }
             } header: {
@@ -294,6 +285,19 @@ struct OutingPlanComposerView: View {
             && plannedAt > referenceDate
             && plannedAt.timeIntervalSince(referenceDate)
                 <= OutingPlan.maximumPlanningInterval
+            && hasEventChanges
+    }
+
+    private var hasEventChanges: Bool {
+        guard let existingPlan else { return true }
+        guard let category else { return false }
+
+        let plannedMinuteIsUnchanged = Calendar.current.isDate(
+            plannedAt,
+            equalTo: existingPlan.plannedAt,
+            toGranularity: .minute
+        )
+        return category != existingPlan.category || !plannedMinuteIsUnchanged
     }
 
     private var notificationsBinding: Binding<Bool> {
@@ -382,7 +386,11 @@ struct OutingPlanComposerView: View {
     }
 
     private func publishPlan() {
-        guard let selectedCoordinate, let category else { return }
+        guard canPublish,
+              let selectedCoordinate,
+              let category else {
+            return
+        }
 
         isWriting = true
         writeErrorMessage = nil
@@ -402,7 +410,7 @@ struct OutingPlanComposerView: View {
             do {
                 _ = try await service.publish(
                     draft,
-                    eventIDValue: existingPlan?.eventIDValue
+                    existingPlan: existingPlan
                 )
                 dismiss()
             } catch {
