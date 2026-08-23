@@ -53,10 +53,9 @@ struct FriendMapSummary: Identifiable, Hashable {
     let locationSampledAt: Date?
     let spotEnteredAt: Date?
     let isLocationFresh: Bool
-    let cellCount: Int
 
     var id: String { userID }
-    var canShowOnMap: Bool { locationSampledAt != nil || cellCount > 0 }
+    var canShowOnMap: Bool { locationSampledAt != nil }
 }
 
 private struct FriendSelection: Identifiable, Equatable {
@@ -107,15 +106,11 @@ struct ContentView: View {
     @State private var centerOnOutingPlanEventID: String?
     @State private var selectedOutingPlanEventID: String?
     @State private var heatMapEnabled = false
-    @State private var selectedFriendExplorationUserIDs: Set<String> = []
-    @State private var knownFriendUserIDs: Set<String> = []
     @State private var cityProgress: CityProgress?
-    @State private var friendExplorationProgress: [String: CityProgress] = [:]
     @State private var friendNavigationSelection: FriendSelection?
     @State private var selectedOutingNavigationEventID: String?
     @State private var selectedFriendProfile: FriendSelection?
     @State private var outingAttendanceErrorMessage: String?
-    @State private var cityBoundaryResolutionState: CityBoundaryResolutionState = .loading
 
     #if DEBUG
     @State private var debugDrawerVisible = false
@@ -123,18 +118,13 @@ struct ContentView: View {
     #endif
 
     var body: some View {
-        let allFriendExplorations = friendSyncService.friendExplorations
         let summaries = friendSummaries(
-            locations: friendSyncService.friendLocations,
-            explorations: allFriendExplorations
+            locations: friendSyncService.friendLocations
         )
 
         GeometryReader { geometry in
             TabView(selection: $selectedTab) {
-                exploreTab(
-                    allFriendExplorations: allFriendExplorations,
-                    friendSummaries: summaries
-                )
+                exploreTab(friendSummaries: summaries)
                     .tabItem {
                         tabBarImage("TabIconExplore", accessibilityLabel: "Explorer")
                     }
@@ -200,15 +190,11 @@ struct ContentView: View {
             let discoveredCellIDs = locationTracker.discoveredCellIDs
             friendSyncService.syncDiscoveredCells(discoveredCellIDs)
             refreshCityProgress(discoveredCellIDs: discoveredCellIDs)
-            refreshFriendExplorationProgress()
             synchronizeOutingPlanObservation()
             synchronizeOutingAttendanceObservation()
 
             Task {
                 await cityBoundary.load()
-                cityBoundaryResolutionState = cityBoundary.cityCellIDs.isEmpty
-                    ? .unavailable
-                    : .ready
                 if let location = locationTracker.lastLocation {
                     cityBoundary.detectCity(for: location.coordinate)
                 }
@@ -263,7 +249,6 @@ struct ContentView: View {
             openPendingFriendRequestNotificationRouteIfPossible()
         }
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
-            selectNewFriends(from: userIDs)
             reconcileFriendPresentations(acceptedUserIDs: userIDs)
             synchronizeOutingPlanObservation()
             synchronizeOutingAttendanceObservation()
@@ -284,20 +269,15 @@ struct ContentView: View {
             openPendingFriendRequestNotificationRouteIfPossible()
         }
         .onChange(of: friendSyncService.friendLocations) {
-            refreshFriendExplorationProgress()
             reconcileFriendPresentations(
                 acceptedUserIDs: acceptedFriendUserIDs
             )
-        }
-        .onChange(of: friendSyncService.friendExplorationRevision) {
-            refreshFriendExplorationProgress()
         }
         .onChange(of: friendSyncService.ownExplorationRevision) {
             restoreOwnExplorationIfAvailable()
         }
         .onChange(of: cityBoundary.cityCellIDs) {
             refreshCityProgress()
-            refreshFriendExplorationProgress()
         }
         .onChange(of: cityBoundary.currentCity.id) {
             refreshCityProgress()
@@ -339,12 +319,8 @@ struct ContentView: View {
     // MARK: - Explore
 
     private func exploreTab(
-        allFriendExplorations: [String: FriendExploration],
         friendSummaries: [FriendMapSummary]
     ) -> some View {
-        let visibleFriendExplorations = allFriendExplorations.filter {
-            selectedFriendExplorationUserIDs.contains($0.key)
-        }
         let outingPlans = mapOutingPlans
         let selectedOutingPlan = selectedOutingPlanEventID.flatMap {
             outingPlans[$0]
@@ -366,12 +342,7 @@ struct ContentView: View {
                     freshFriendLocationUserIDs:
                         friendSyncService.freshFriendLocationUserIDs,
                     outingPlans: outingPlans,
-                    friendExplorations: visibleFriendExplorations,
-                    allFriendExplorations: allFriendExplorations,
                     userExplorationProgress: cityProgress,
-                    friendExplorationProgress: friendExplorationProgress,
-                    loadedFriendExplorationUserIDs:
-                        friendSyncService.loadedFriendExplorationUserIDs,
                     userDisplayName: displayName,
                     userAvatarID: avatarID,
                     userProfileColorHex: profileColorHex,
@@ -498,9 +469,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $filterSheetVisible) {
             MapFiltersSheet(
-                heatMapEnabled: $heatMapEnabled,
-                friends: friendSummaries.filter { $0.cellCount > 0 },
-                selectedFriendUserIDs: $selectedFriendExplorationUserIDs
+                heatMapEnabled: $heatMapEnabled
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -564,8 +533,6 @@ struct ContentView: View {
             FriendProfileSheet(
                 userID: selection.userID,
                 service: friendSyncService,
-                cityBoundary: cityBoundary,
-                cityBoundaryResolutionState: $cityBoundaryResolutionState,
                 onOpenDirections: {
                     presentNavigationOptions(selection.userID)
                 }
@@ -926,13 +893,11 @@ struct ContentView: View {
     // MARK: - Friends
 
     private func friendSummaries(
-        locations: [String: FriendLocation],
-        explorations: [String: FriendExploration]
+        locations: [String: FriendLocation]
     ) -> [FriendMapSummary] {
         friendSyncService.acceptedFriends
             .map { friend in
                 let location = locations[friend.userID]
-                let exploration = explorations[friend.userID]
                 let isLocationFresh =
                     friendSyncService.freshFriendLocationUserIDs.contains(
                         friend.userID
@@ -941,18 +906,15 @@ struct ContentView: View {
                 return FriendMapSummary(
                     userID: friend.userID,
                     displayName: location?.displayName
-                        ?? exploration?.displayName
                         ?? friend.displayName,
                     avatarID: friend.avatarID,
                     profileColorHex: ProfileColor.normalizedHex(
                         location?.profileColorHex
-                            ?? exploration?.profileColorHex
                             ?? friend.profileColorHex
                     ) ?? ProfileColor.generatedHex(seed: friend.userID),
                     locationSampledAt: location?.sampledAt,
                     spotEnteredAt: location?.spotEnteredAt,
-                    isLocationFresh: isLocationFresh,
-                    cellCount: exploration?.cellIDs.count ?? 0
+                    isLocationFresh: isLocationFresh
                 )
             }
             .sorted { lhs, rhs in
@@ -962,7 +924,6 @@ struct ContentView: View {
 
     private func showFriendOnMap(_ friend: FriendMapSummary) {
         guard friend.canShowOnMap else { return }
-        selectedFriendExplorationUserIDs.insert(friend.userID)
         centerOnFriendUserID = friend.userID
         selectedTab = .explore
     }
@@ -1151,33 +1112,6 @@ struct ContentView: View {
 
         selectedTab = .friends
         notificationService.consume(route)
-    }
-
-    private func refreshFriendExplorationProgress() {
-        let explorations = friendSyncService.friendExplorations
-        let loadedUserIDs = friendSyncService.loadedFriendExplorationUserIDs
-
-        friendExplorationProgress = friendSyncService.friendLocations.reduce(into: [:]) {
-            result, entry in
-            let (userID, location) = entry
-            guard loadedUserIDs.contains(userID),
-                  let exploration = explorations[userID],
-                  let progress = cityBoundary.progress(
-                    against: exploration.cellIDs,
-                    at: location.coordinate
-                  ) else {
-                return
-            }
-
-            result[userID] = progress
-        }
-    }
-
-    private func selectNewFriends(from currentUserIDs: Set<String>) {
-        let newUserIDs = currentUserIDs.subtracting(knownFriendUserIDs)
-        selectedFriendExplorationUserIDs.formUnion(newUserIDs)
-        selectedFriendExplorationUserIDs.formIntersection(currentUserIDs)
-        knownFriendUserIDs = currentUserIDs
     }
 
     private func syncProfileColor(_ rawValue: String) {
@@ -1578,16 +1512,7 @@ private struct FriendRow: View {
         if let sampledAt = friend.locationSampledAt {
             let locationText = presenceStatusText(relativeTo: referenceDate)
                 ?? positionStatusText(sampledAt, relativeTo: referenceDate)
-            Text(
-                [
-                    locationText,
-                    explorationStatusText
-                ]
-                .compactMap { $0 }
-                .joined(separator: " · ")
-            )
-        } else if let explorationText = explorationStatusText {
-            Text(explorationText)
+            Text(locationText)
         } else {
             Text("Position indisponible")
         }
@@ -1653,16 +1578,6 @@ private struct FriendRow: View {
         return formatter
     }()
 
-    private var explorationStatusText: String? {
-        switch friend.cellCount {
-        case 0:
-            nil
-        case 1:
-            "1 zone explorée"
-        default:
-            "\(friend.cellCount) zones explorées"
-        }
-    }
 }
 
 // MARK: - Profile
@@ -1734,7 +1649,7 @@ private struct ProfileView: View {
                     Text("Identité")
                 } footer: {
                     Text(
-                        "Cette couleur identifie tes zones explorées chez tes amis et entoure ton avatar sur la carte."
+                        "Cette couleur identifie ton profil et entoure ton avatar sur la carte."
                     )
                 }
 
@@ -2220,8 +2135,6 @@ private struct AccountDeletionAuthorizationView: View {
 private struct MapFiltersSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var heatMapEnabled: Bool
-    let friends: [FriendMapSummary]
-    @Binding var selectedFriendUserIDs: Set<String>
 
     var body: some View {
         NavigationStack {
@@ -2232,45 +2145,6 @@ private struct MapFiltersSheet: View {
                     Text("Exploration")
                 } footer: {
                     Text("Affiche les zones où tu as passé le plus de temps.")
-                }
-
-                Section {
-                    if friends.isEmpty {
-                        Text(
-                            "Les cartes de tes amis apparaîtront dès qu’ils auront exploré une zone."
-                        )
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(friends) { friend in
-                            Toggle(
-                                isOn: selectionBinding(for: friend.userID)
-                            ) {
-                                HStack(spacing: 10) {
-                                    Circle()
-                                        .fill(
-                                            ProfileColor.color(
-                                                hex: friend.profileColorHex
-                                            )
-                                        )
-                                        .frame(width: 12, height: 12)
-                                        .accessibilityHidden(true)
-
-                                    Text(friend.displayName)
-
-                                    Spacer()
-
-                                    Text(friend.cellCount.formatted())
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .monospacedDigit()
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Cartes des amis")
-                } footer: {
-                    Text("Le nombre indique les zones explorées par chaque ami.")
                 }
             }
             .navigationTitle("Affichage")
@@ -2283,21 +2157,6 @@ private struct MapFiltersSheet: View {
                 }
             }
         }
-    }
-
-    private func selectionBinding(for userID: String) -> Binding<Bool> {
-        Binding(
-            get: {
-                selectedFriendUserIDs.contains(userID)
-            },
-            set: { isSelected in
-                if isSelected {
-                    selectedFriendUserIDs.insert(userID)
-                } else {
-                    selectedFriendUserIDs.remove(userID)
-                }
-            }
-        )
     }
 }
 

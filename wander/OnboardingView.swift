@@ -70,11 +70,11 @@ struct OnboardingView: View {
                         )
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(
-                            "Illustration d’une carte partagée entre plusieurs téléphones"
+                            "Illustration d’une carte révélée au fil des déplacements"
                         )
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Découvre la carte avec tes amis")
+                        Text("Découvre ta propre carte")
                             .font(.largeTitle.bold())
                             .accessibilityAddTraits(.isHeader)
 
@@ -233,14 +233,14 @@ struct OnboardingView: View {
 
                     OnboardingInformationRow(
                         iconName: "person.2.fill",
-                        title: "Explorer entre amis",
-                        detail: "Tes nouvelles zones explorées sont partagées avec tes amis acceptés. Ta position en direct n’est envoyée que pendant l’exploration."
+                        title: "Retrouver tes amis",
+                        detail: "La carte affichée reste personnelle. Ta position en direct n’est envoyée à tes amis acceptés que pendant l’exploration."
                     )
 
                     OnboardingInformationRow(
                         iconName: "pause.circle.fill",
                         title: "Garder le contrôle",
-                        detail: "Le profil permet de suspendre la collecte et l’envoi de nouvelles données. Les zones déjà partagées restent visibles par tes amis acceptés."
+                        detail: "Le profil permet de suspendre la collecte et l’envoi de nouvelles données. Tes zones déjà synchronisées restent liées à ton compte."
                     )
                 }
 

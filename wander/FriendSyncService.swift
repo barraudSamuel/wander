@@ -80,13 +80,6 @@ struct FriendLocation: Equatable {
     }
 }
 
-struct FriendExploration: Equatable {
-    let userID: String
-    let displayName: String
-    let profileColorHex: String
-    let cellIDs: Set<String>
-}
-
 enum OwnExplorationSyncState: Equatable {
     case idle
     case loading
@@ -127,8 +120,6 @@ final class FriendSyncService: ObservableObject {
     @Published private(set) var acceptedFriends: [FriendContact] = []
     @Published private var receivedFriendLocations: [String: FriendLocation] = [:]
     @Published private(set) var freshFriendLocationUserIDs: Set<String> = []
-    @Published private var receivedFriendExplorationCellIDs: [String: Set<String>] = [:]
-    @Published private(set) var friendExplorationRevision = 0
     @Published private(set) var isProfileReady = false
     @Published private(set) var isPreparingProfile = true
     @Published private(set) var hasLoadedOwnProfileFromServer = false
@@ -149,29 +140,6 @@ final class FriendSyncService: ObservableObject {
 
     var friendLocations: [String: FriendLocation] {
         receivedFriendLocations
-    }
-
-    var friendExplorations: [String: FriendExploration] {
-        Dictionary(
-            uniqueKeysWithValues: acceptedFriends.map { friend in
-                (
-                    friend.userID,
-                    FriendExploration(
-                        userID: friend.userID,
-                        displayName: friend.displayName,
-                        profileColorHex: friend.profileColorHex,
-                        cellIDs: receivedFriendExplorationCellIDs[friend.userID] ?? []
-                    )
-                )
-            }
-        )
-    }
-
-    /// A successful snapshot can legitimately contain zero cells. Keeping the
-    /// loaded state separate prevents the UI from presenting "0%" while the
-    /// first Firestore snapshot is still pending or has failed.
-    var loadedFriendExplorationUserIDs: Set<String> {
-        Set(receivedFriendExplorationCellIDs.keys)
     }
 
     private var db = Firestore.firestore()
@@ -199,7 +167,6 @@ final class FriendSyncService: ObservableObject {
     private var profileListeners: [String: ListenerRegistration] = [:]
     private var locationListeners: [String: ListenerRegistration] = [:]
     private var locationFreshnessTimers: [String: Timer] = [:]
-    private var explorationListeners: [String: ListenerRegistration] = [:]
     private var friendshipAccessChecksInFlight: Set<String> = []
     private var profileUpdateTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
@@ -860,8 +827,6 @@ final class FriendSyncService: ObservableObject {
         acceptedFriends = []
         receivedFriendLocations = [:]
         freshFriendLocationUserIDs = []
-        receivedFriendExplorationCellIDs = [:]
-        friendExplorationRevision &+= 1
         isProcessingFriendAction = false
         isAccountDeletionPending = false
         lastLocationPush = nil
@@ -1482,59 +1447,6 @@ final class FriendSyncService: ObservableObject {
         }
     }
 
-    private func reconcileExplorationListeners(for acceptedUserIDs: Set<String>) {
-        let removedUserIDs = explorationListeners.keys.filter {
-            !acceptedUserIDs.contains($0)
-        }
-
-        for userID in removedUserIDs {
-            explorationListeners.removeValue(forKey: userID)?.remove()
-            if receivedFriendExplorationCellIDs.removeValue(forKey: userID) != nil {
-                friendExplorationRevision &+= 1
-            }
-        }
-
-        for userID in acceptedUserIDs where explorationListeners[userID] == nil {
-            let generation = authenticationGeneration
-            explorationListeners[userID] = explorationCellsCollection(for: userID)
-                .addSnapshotListener { [weak self] snapshot, error in
-                    DispatchQueue.main.async {
-                        guard let self,
-                              self.authenticationGeneration == generation,
-                              self.explorationListeners[userID] != nil,
-                              self.isAcceptedFriend(userID) else {
-                            return
-                        }
-
-                        if let error {
-                            self.handleRelatedListenerError(
-                                for: error,
-                                relatedUserID: userID,
-                                fallback: "Impossible de charger la carte d’un ami."
-                            )
-                            return
-                        }
-
-                        guard let snapshot else { return }
-
-                        if var cellIDs = self.receivedFriendExplorationCellIDs[userID] {
-                            guard Self.applyExplorationChanges(
-                                from: snapshot,
-                                to: &cellIDs
-                            ) else {
-                                return
-                            }
-                            self.receivedFriendExplorationCellIDs[userID] = cellIDs
-                        } else {
-                            self.receivedFriendExplorationCellIDs[userID] =
-                                Self.explorationCellIDs(in: snapshot)
-                        }
-                        self.friendExplorationRevision &+= 1
-                    }
-                }
-        }
-    }
-
     private static func explorationCellIDs(
         in snapshot: QuerySnapshot
     ) -> Set<String> {
@@ -1555,31 +1467,6 @@ final class FriendSyncService: ObservableObject {
             id: cellID,
             sharedAt: (document.data()["sharedAt"] as? Timestamp)?.dateValue()
         )
-    }
-
-    @discardableResult
-    private static func applyExplorationChanges(
-        from snapshot: QuerySnapshot,
-        to cellIDs: inout Set<String>
-    ) -> Bool {
-        var didChange = false
-
-        for change in snapshot.documentChanges {
-            let cellID = change.document.documentID
-
-            switch change.type {
-            case .added, .modified:
-                if Self.isValidH3CellID(cellID) {
-                    didChange = cellIDs.insert(cellID).inserted || didChange
-                } else {
-                    didChange = cellIDs.remove(cellID) != nil || didChange
-                }
-            case .removed:
-                didChange = cellIDs.remove(cellID) != nil || didChange
-            }
-        }
-
-        return didChange
     }
 
     private func explorationCellsCollection(for userID: String) -> CollectionReference {
@@ -1657,7 +1544,6 @@ final class FriendSyncService: ObservableObject {
             }
         )
         reconcileLocationListeners(for: acceptedUserIDs)
-        reconcileExplorationListeners(for: acceptedUserIDs)
     }
 
     private func reconcileProfileListeners(for requiredUserIDs: Set<String>) {
@@ -2225,10 +2111,6 @@ final class FriendSyncService: ObservableObject {
         }
         locationFreshnessTimers.removeAll()
 
-        for listener in explorationListeners.values {
-            listener.remove()
-        }
-        explorationListeners.removeAll()
         friendshipAccessChecksInFlight.removeAll()
     }
 
