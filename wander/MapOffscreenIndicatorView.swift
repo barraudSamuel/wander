@@ -472,6 +472,7 @@ final class OutingCategoryBadgeView: UIView {
 
     private func configureView() {
         clipsToBounds = true
+        isUserInteractionEnabled = false
         isAccessibilityElement = false
 
         symbolImageView.contentMode = .scaleAspectFit

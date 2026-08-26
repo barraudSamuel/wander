@@ -1884,6 +1884,7 @@ struct MapWithFogView: UIViewRepresentable {
             [String: FriendOffscreenIndicatorView] = [:]
         private var outingOffscreenIndicatorViews:
             [String: OutingOffscreenIndicatorView] = [:]
+        private var pendingOutingPlanSelectionEventID: String?
         private let eventCreationFeedback = UIImpactFeedbackGenerator(
             style: .medium
         )
@@ -2245,7 +2246,22 @@ struct MapWithFogView: UIViewRepresentable {
                 latitudinalMeters: 800,
                 longitudinalMeters: 800
             )
+            pendingOutingPlanSelectionEventID = eventID
             mapView.setRegion(region, animated: true)
+            selectPendingOutingPlanIfVisible(on: mapView)
+        }
+
+        private func selectPendingOutingPlanIfVisible(on mapView: MKMapView) {
+            guard let eventID = pendingOutingPlanSelectionEventID else {
+                return
+            }
+            guard let annotation = outingPlanAnnotations[eventID] else {
+                pendingOutingPlanSelectionEventID = nil
+                return
+            }
+            guard mapView.view(for: annotation) != nil else { return }
+
+            pendingOutingPlanSelectionEventID = nil
             mapView.selectAnnotation(annotation, animated: true)
         }
 
@@ -2317,6 +2333,7 @@ struct MapWithFogView: UIViewRepresentable {
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
             refreshMapOffscreenIndicators(on: mapView)
+            selectPendingOutingPlanIfVisible(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -2453,11 +2470,16 @@ struct MapWithFogView: UIViewRepresentable {
             for view in views where view.annotation is MKUserLocation {
                 view.isHidden = userLocationAnnotation != nil
             }
+            selectPendingOutingPlanIfVisible(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             guard let annotation = view.annotation as? OutingPlanAnnotation else {
                 return
+            }
+
+            if pendingOutingPlanSelectionEventID == annotation.eventID {
+                pendingOutingPlanSelectionEventID = nil
             }
 
             if mapView.userTrackingMode != .none {
