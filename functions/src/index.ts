@@ -1,3 +1,5 @@
+import { createPrivateKey, sign } from "node:crypto";
+import { connect } from "node:http2";
 import { initializeApp } from "firebase-admin/app";
 import {
   DocumentReference,
@@ -7,6 +9,8 @@ import {
 } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { logger } from "firebase-functions";
+import { defineSecret } from "firebase-functions/params";
+import { HttpsError, onCall } from "firebase-functions/v2/https";
 import {
   onDocumentCreated,
   onDocumentDeleted,
@@ -15,6 +19,16 @@ import {
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { expiredEventCutoff } from "./eventCleanupLogic.js";
+import {
+  LocationPushTarget,
+  acceptedFriendshipMatches,
+  isLocationPushRateLimited,
+  isLocationSampleFresh,
+  isPermanentAPNsLocationPushFailure,
+  isValidLocationRefreshRequest,
+  locationPushPairID,
+  locationPushTargets,
+} from "./locationPushLogic.js";
 import {
   DeviceTargetCandidate,
   acceptedRecipientIDs,
@@ -40,6 +54,17 @@ initializeApp();
 
 const database = getFirestore();
 const maximumBatchSize = 500;
+const apnsAuthKey = defineSecret("APNS_AUTH_KEY");
+const apnsKeyID = defineSecret("APNS_KEY_ID");
+const apnsTeamID = defineSecret("APNS_TEAM_ID");
+const locationPushTopic = "com.iterar.wander.wander.location-query";
+
+let cachedProviderToken: {
+  value: string;
+  createdAtSeconds: number;
+  keyID: string;
+  teamID: string;
+} | undefined;
 
 interface DeviceTarget extends DeviceTargetCandidate {
   deviceReference: DocumentReference;
@@ -48,6 +73,164 @@ interface DeviceTarget extends DeviceTargetCandidate {
 interface ClaimedTarget extends DeviceTarget {
   claimReference: DocumentReference;
 }
+
+interface StoredLocationPushTarget extends LocationPushTarget {
+  deviceReference: DocumentReference;
+}
+
+interface APNsLocationPushResult {
+  success: boolean;
+  statusCode: number;
+  reason?: string;
+}
+
+export const requestFriendLocationRefresh = onCall(
+  {
+    region: "asia-northeast3",
+    maxInstances: 20,
+    secrets: [apnsAuthKey, apnsKeyID, apnsTeamID],
+  },
+  async (request) => {
+    const requesterID = request.auth?.uid;
+    const targetUserID = request.data?.targetUserId;
+    const requestID = request.data?.requestId;
+
+    if (
+      !requesterID
+      || request.auth?.token.firebase?.sign_in_provider !== "apple.com"
+    ) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+    if (!isValidLocationRefreshRequest(requesterID, targetUserID, requestID)) {
+      throw new HttpsError("invalid-argument", "Invalid location refresh request.");
+    }
+
+    const pairID = locationPushPairID(requesterID, targetUserID);
+    const [friendshipSnapshot, targetProfileSnapshot, locationSnapshot] =
+      await Promise.all([
+        database.collection("friendships").doc(pairID).get(),
+        database.collection("users").doc(targetUserID).get(),
+        database.collection("locations").doc(targetUserID).get(),
+      ]);
+
+    if (!acceptedFriendshipMatches(
+      requesterID,
+      targetUserID,
+      friendshipSnapshot.data(),
+    )) {
+      throw new HttpsError(
+        "permission-denied",
+        "An accepted friendship is required.",
+      );
+    }
+
+    if (
+      !targetProfileSnapshot.exists
+      || targetProfileSnapshot.data()?.deletionRequestedAt instanceof Timestamp
+    ) {
+      return { status: "unavailable" };
+    }
+
+    const sampledAt = locationSnapshot.data()?.sampledAt;
+    if (
+      sampledAt instanceof Timestamp
+      && isLocationSampleFresh(sampledAt.toMillis(), Date.now())
+    ) {
+      return { status: "fresh" };
+    }
+
+    const deviceSnapshot = await database
+      .collection("users")
+      .doc(targetUserID)
+      .collection("locationPushDevices")
+      .get();
+    const targetsByDeviceID = new Map(
+      deviceSnapshot.docs.map((document) => [document.id, document]),
+    );
+    const targets = locationPushTargets(deviceSnapshot.docs.map((document) => {
+      const data = document.data();
+      return {
+        deviceID: document.id,
+        token: data.token,
+        environment: data.environment,
+        updatedAtMilliseconds: data.updatedAt instanceof Timestamp
+          ? data.updatedAt.toMillis()
+          : undefined,
+      };
+    })).flatMap((target): StoredLocationPushTarget[] => {
+      const deviceDocument = targetsByDeviceID.get(target.deviceID);
+      return deviceDocument
+        ? [{ ...target, deviceReference: deviceDocument.ref }]
+        : [];
+    });
+
+    if (targets.length === 0) {
+      return { status: "unavailable" };
+    }
+
+    const dispatchReference = database
+      .collection("locationPushDispatches")
+      .doc(targetUserID);
+    const dispatchClaimed = await database.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(dispatchReference);
+      const lastSentAt = snapshot.data()?.lastSentAt;
+      if (
+        lastSentAt instanceof Timestamp
+        && isLocationPushRateLimited(lastSentAt.toMillis(), Date.now())
+      ) {
+        return false;
+      }
+
+      transaction.set(dispatchReference, {
+        requesterId: requesterID,
+        requestId: requestID,
+        lastSentAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+
+    if (!dispatchClaimed) {
+      return { status: "throttled" };
+    }
+
+    let providerToken: string;
+    try {
+      providerToken = makeAPNsProviderToken(
+        apnsAuthKey.value(),
+        apnsKeyID.value(),
+        apnsTeamID.value(),
+      );
+    } catch {
+      logger.error("Location push provider credentials are unavailable.");
+      throw new HttpsError("internal", "Location refresh is unavailable.");
+    }
+
+    const results = await Promise.all(targets.map(async (target) => ({
+      target,
+      result: await sendAPNsLocationPush(target, requestID, providerToken),
+    })));
+
+    await Promise.all(results.map(async ({ target, result }) => {
+      if (
+        result.reason
+        && isPermanentAPNsLocationPushFailure(result.reason)
+      ) {
+        await deleteLocationPushDeviceIfTokenMatches(target);
+      }
+    }));
+
+    const sentCount = results.filter(({ result }) => result.success).length;
+    if (sentCount === 0) {
+      logger.warn("No location push target accepted the request.", {
+        targetCount: targets.length,
+        statusCodes: results.map(({ result }) => result.statusCode),
+      });
+      return { status: "unavailable" };
+    }
+
+    return { status: "sent" };
+  },
+);
 
 export const notifyAcceptedFriendsOfEvent = onDocumentWritten(
   {
@@ -655,4 +838,149 @@ function isAlreadyExistsError(error: unknown): boolean {
   }
   const code = (error as { code?: unknown }).code;
   return code === 6 || code === "6" || code === "already-exists";
+}
+
+function makeAPNsProviderToken(
+  privateKeyValue: string,
+  keyIDValue: string,
+  teamIDValue: string,
+): string {
+  const keyID = keyIDValue.trim();
+  const teamID = teamIDValue.trim();
+  const privateKey = privateKeyValue.replaceAll("\\n", "\n").trim();
+  if (
+    !/^[A-Z0-9]{10}$/.test(keyID)
+    || !/^[A-Z0-9]{10}$/.test(teamID)
+    || !privateKey.includes("BEGIN PRIVATE KEY")
+  ) {
+    throw new Error("Invalid APNs provider credentials");
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  if (
+    cachedProviderToken
+    && cachedProviderToken.keyID === keyID
+    && cachedProviderToken.teamID === teamID
+    && nowSeconds - cachedProviderToken.createdAtSeconds < 50 * 60
+  ) {
+    return cachedProviderToken.value;
+  }
+
+  const encodedHeader = base64URL(JSON.stringify({ alg: "ES256", kid: keyID }));
+  const encodedClaims = base64URL(JSON.stringify({ iss: teamID, iat: nowSeconds }));
+  const signingInput = `${encodedHeader}.${encodedClaims}`;
+  const signature = sign("sha256", Buffer.from(signingInput), {
+    key: createPrivateKey(privateKey),
+    dsaEncoding: "ieee-p1363",
+  });
+  const value = `${signingInput}.${signature.toString("base64url")}`;
+  cachedProviderToken = {
+    value,
+    createdAtSeconds: nowSeconds,
+    keyID,
+    teamID,
+  };
+  return value;
+}
+
+function base64URL(value: string): string {
+  return Buffer.from(value).toString("base64url");
+}
+
+async function sendAPNsLocationPush(
+  target: StoredLocationPushTarget,
+  requestID: string,
+  providerToken: string,
+): Promise<APNsLocationPushResult> {
+  const authority = target.environment === "sandbox"
+    ? "https://api.sandbox.push.apple.com"
+    : "https://api.push.apple.com";
+
+  return new Promise((resolve) => {
+    const client = connect(authority);
+    let didFinish = false;
+    const timeout = setTimeout(() => {
+      finish({ success: false, statusCode: 0, reason: "RequestTimeout" });
+    }, 10_000);
+
+    const finish = (result: APNsLocationPushResult) => {
+      if (didFinish) return;
+      didFinish = true;
+      clearTimeout(timeout);
+      client.destroy();
+      resolve(result);
+    };
+
+    client.once("error", () => {
+      finish({ success: false, statusCode: 0 });
+    });
+
+    try {
+      const stream = client.request({
+        ":method": "POST",
+        ":path": `/3/device/${target.token}`,
+        authorization: `bearer ${providerToken}`,
+        "apns-topic": locationPushTopic,
+        "apns-push-type": "location",
+        "apns-priority": "10",
+        "apns-expiration": "0",
+        "apns-id": requestID,
+        "content-type": "application/json",
+      });
+      let statusCode = 0;
+      let responseBody = "";
+
+      stream.setEncoding("utf8");
+      stream.on("response", (headers) => {
+        const rawStatus = headers[":status"];
+        statusCode = typeof rawStatus === "number"
+          ? rawStatus
+          : Number(rawStatus) || 0;
+      });
+      stream.on("data", (chunk: string) => {
+        if (responseBody.length < 4_096) {
+          responseBody += chunk;
+        }
+      });
+      stream.once("error", () => {
+        finish({ success: false, statusCode });
+      });
+      stream.once("end", () => {
+        let reason: string | undefined;
+        if (responseBody) {
+          try {
+            const parsed = JSON.parse(responseBody) as { reason?: unknown };
+            if (typeof parsed.reason === "string") {
+              reason = parsed.reason;
+            }
+          } catch {
+            // APNs error bodies are best-effort diagnostics only.
+          }
+        }
+        finish({
+          success: statusCode === 200,
+          statusCode,
+          ...(reason ? { reason } : {}),
+        });
+      });
+
+      stream.end(JSON.stringify({
+        aps: {},
+        requestId: requestID,
+      }));
+    } catch {
+      finish({ success: false, statusCode: 0 });
+    }
+  });
+}
+
+async function deleteLocationPushDeviceIfTokenMatches(
+  target: StoredLocationPushTarget,
+): Promise<void> {
+  await database.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(target.deviceReference);
+    if (snapshot.data()?.token === target.token) {
+      transaction.delete(target.deviceReference);
+    }
+  });
 }

@@ -730,6 +730,9 @@ final class FriendSyncService: ObservableObject {
             from: userReference.collection("devices")
         )
         try await deleteDocumentsInBatches(
+            from: userReference.collection("locationPushDevices")
+        )
+        try await deleteDocumentsInBatches(
             from: explorationCellsCollection(for: userID)
         )
         try await deleteDocumentsInBatches(
@@ -742,6 +745,7 @@ final class FriendSyncService: ObservableObject {
                 .whereField("participants", arrayContains: userID)
         )
         try await db.collection("locations").document(userID).delete()
+        try await db.collection("locationPushDispatches").document(userID).delete()
 
         guard profileSnapshot.exists else { return }
         guard let friendCode, Self.isValidFriendCode(friendCode) else {

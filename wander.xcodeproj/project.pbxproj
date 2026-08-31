@@ -19,6 +19,13 @@
 		A10000000000000000000006 /* wander/SharedPlaceImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* wander/SharedPlaceImport.swift */; };
 		A10000000000000000000007 /* wander/GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* wander/GoogleService-Info.plist */; };
 		A10000000000000000000008 /* WanderShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* WanderShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B10000000000000000000001 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = B20000000000000000000001 /* FirebaseFunctions */; };
+		B10000000000000000000002 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE52FEBBC300082CF8C /* FirebaseAuth */; };
+		B10000000000000000000003 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE32FEBBC270082CF8C /* FirebaseFirestore */; };
+		B10000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */; };
+		B10000000000000000000005 /* wander/GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* wander/GoogleService-Info.plist */; };
+		B10000000000000000000006 /* WanderLocationPushExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* WanderLocationPushExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B10000000000000000000007 /* wander/LocationPushSharedConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* wander/LocationPushSharedConfiguration.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,6 +35,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = A60000000000000000000001;
 			remoteInfo = WanderShareExtension;
+		};
+		B60000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 37F8D0CD2FE28F0200AA042A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B50000000000000000000001;
+			remoteInfo = WanderLocationPushExtension;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -39,6 +53,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				A10000000000000000000008 /* WanderShareExtension.appex in Embed App Extensions */,
+				B10000000000000000000006 /* WanderLocationPushExtension.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -53,6 +68,8 @@
 		A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/SharedFirebaseAuthConfiguration.swift; sourceTree = SOURCE_ROOT; };
 		A20000000000000000000005 /* wander/SharedPlaceImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/SharedPlaceImport.swift; sourceTree = SOURCE_ROOT; };
 		A20000000000000000000006 /* wander/GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "wander/GoogleService-Info.plist"; sourceTree = SOURCE_ROOT; };
+		B20000000000000000000002 /* WanderLocationPushExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WanderLocationPushExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000003 /* wander/LocationPushSharedConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/LocationPushSharedConfiguration.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -69,6 +86,13 @@
 				Info.plist,
 			);
 			target = A60000000000000000000001 /* WanderShareExtension */;
+		};
+		B30000000000000000000001 /* Exceptions for "WanderLocationPushExtension" folder in "WanderLocationPushExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B50000000000000000000001 /* WanderLocationPushExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -89,6 +113,14 @@
 			path = WanderShareExtension;
 			sourceTree = "<group>";
 		};
+		B30000000000000000000002 /* WanderLocationPushExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B30000000000000000000001 /* Exceptions for "WanderLocationPushExtension" folder in "WanderLocationPushExtension" target */,
+			);
+			path = WanderLocationPushExtension;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +132,7 @@
 				3758ECE62FEBBC300082CF8C /* FirebaseAuth in Frameworks */,
 				3758ECE42FEBBC270082CF8C /* FirebaseFirestore in Frameworks */,
 				37A4A1013000000000000001 /* FirebaseMessaging in Frameworks */,
+				B10000000000000000000001 /* FirebaseFunctions in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -109,6 +142,15 @@
 			files = (
 				A10000000000000000000001 /* FirebaseAuth in Frameworks */,
 				A10000000000000000000002 /* FirebaseFirestore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B40000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000002 /* FirebaseAuth in Frameworks */,
+				B10000000000000000000003 /* FirebaseFirestore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -127,6 +169,7 @@
 			children = (
 				37F8D0D72FE28F0200AA042A /* wander */,
 				A30000000000000000000002 /* WanderShareExtension */,
+				B30000000000000000000002 /* WanderLocationPushExtension */,
 				A50000000000000000000001 /* Extension Shared Files */,
 				3758ECE22FEBBC270082CF8C /* Frameworks */,
 				37F8D0D62FE28F0200AA042A /* Products */,
@@ -138,6 +181,7 @@
 			children = (
 				37F8D0D52FE28F0200AA042A /* wander.app */,
 				A20000000000000000000001 /* WanderShareExtension.appex */,
+				B20000000000000000000002 /* WanderLocationPushExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -150,6 +194,7 @@
 				A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */,
 				A20000000000000000000005 /* wander/SharedPlaceImport.swift */,
 				A20000000000000000000006 /* wander/GoogleService-Info.plist */,
+				B20000000000000000000003 /* wander/LocationPushSharedConfiguration.swift */,
 			);
 			name = "Extension Shared Files";
 			sourceTree = "<group>";
@@ -170,6 +215,7 @@
 			);
 			dependencies = (
 				A80000000000000000000002 /* PBXTargetDependency */,
+				B60000000000000000000002 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				37F8D0D72FE28F0200AA042A /* wander */,
@@ -180,6 +226,7 @@
 				3758ECE32FEBBC270082CF8C /* FirebaseFirestore */,
 				3758ECE52FEBBC300082CF8C /* FirebaseAuth */,
 				37A4A1003000000000000001 /* FirebaseMessaging */,
+				B20000000000000000000001 /* FirebaseFunctions */,
 			);
 			productName = wander;
 			productReference = 37F8D0D52FE28F0200AA042A /* wander.app */;
@@ -207,6 +254,30 @@
 			);
 			productName = WanderShareExtension;
 			productReference = A20000000000000000000001 /* WanderShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		B50000000000000000000001 /* WanderLocationPushExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B80000000000000000000001 /* Build configuration list for PBXNativeTarget "WanderLocationPushExtension" */;
+			buildPhases = (
+				B40000000000000000000002 /* Sources */,
+				B40000000000000000000001 /* Frameworks */,
+				B40000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B30000000000000000000002 /* WanderLocationPushExtension */,
+			);
+			name = WanderLocationPushExtension;
+			packageProductDependencies = (
+				3758ECE32FEBBC270082CF8C /* FirebaseFirestore */,
+				3758ECE52FEBBC300082CF8C /* FirebaseAuth */,
+			);
+			productName = WanderLocationPushExtension;
+			productReference = B20000000000000000000002 /* WanderLocationPushExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
@@ -250,6 +321,17 @@
 							};
 						};
 					};
+					B50000000000000000000001 = {
+						CreatedOnToolsVersion = 26.3;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+							com.apple.Keychain = {
+								enabled = 1;
+							};
+						};
+					};
 				};
 			};
 			buildConfigurationList = 37F8D0D02FE28F0200AA042A /* Build configuration list for PBXProject "wander" */;
@@ -272,6 +354,7 @@
 			targets = (
 				37F8D0D42FE28F0200AA042A /* wander */,
 				A60000000000000000000001 /* WanderShareExtension */,
+				B50000000000000000000001 /* WanderLocationPushExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -289,6 +372,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000007 /* wander/GoogleService-Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B40000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000005 /* wander/GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -313,6 +404,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B40000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift in Sources */,
+				B10000000000000000000007 /* wander/LocationPushSharedConfiguration.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -320,6 +420,11 @@
 			isa = PBXTargetDependency;
 			target = A60000000000000000000001 /* WanderShareExtension */;
 			targetProxy = A80000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		B60000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B50000000000000000000001 /* WanderLocationPushExtension */;
+			targetProxy = B60000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -452,7 +557,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -486,7 +591,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -573,6 +678,66 @@
 			};
 			name = Release;
 		};
+		B70000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = WanderLocationPushExtension/WanderLocationPushExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 27;
+				DEVELOPMENT_TEAM = MDSH9S69B9;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WanderLocationPushExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iterar.wander.wander.locationpush;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B70000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = WanderLocationPushExtension/WanderLocationPushExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 27;
+				DEVELOPMENT_TEAM = MDSH9S69B9;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WanderLocationPushExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iterar.wander.wander.locationpush;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -599,6 +764,15 @@
 			buildConfigurations = (
 				A90000000000000000000001 /* Debug */,
 				A90000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B80000000000000000000001 /* Build configuration list for PBXNativeTarget "WanderLocationPushExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B70000000000000000000001 /* Debug */,
+				B70000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -644,6 +818,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 37F8D0E72FE2AAB700AA042A /* XCRemoteSwiftPackageReference "H3Swift" */;
 			productName = H3;
+		};
+		B20000000000000000000001 /* FirebaseFunctions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3758ECDD2FEBB9630082CF8C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFunctions;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

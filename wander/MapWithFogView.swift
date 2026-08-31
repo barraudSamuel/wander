@@ -327,8 +327,10 @@ final class UserLocationAnnotationView: MKAnnotationView {
     private let circularPresenceTextView = CircularPresenceTextView()
     private let pinBackgroundView = UserPinBackgroundView()
     private let avatarImageView = UIImageView()
+    private let locationRefreshIndicator = UIActivityIndicatorView(style: .medium)
     private var configuredAvatarID: String?
     private var configuredCalloutInfo: MapUserCalloutInfo?
+    private var configuredIsRefreshingLocation = false
     private var calloutContent = UserLocationCalloutContent.information
     private var presenceRefreshTimer: Timer?
     private var addressRequest: MKReverseGeocodingRequest?
@@ -375,6 +377,8 @@ final class UserLocationAnnotationView: MKAnnotationView {
         pinBackgroundView.frame = CGRect(x: 22, y: 22, width: 44, height: 44)
         avatarImageView.frame = CGRect(x: 4, y: 4, width: 36, height: 36)
         avatarImageView.layer.cornerRadius = 18
+        locationRefreshIndicator.frame = avatarImageView.frame
+        locationRefreshIndicator.layer.cornerRadius = 18
     }
 
     override func setSelected(_ selected: Bool, animated: Bool) {
@@ -394,8 +398,11 @@ final class UserLocationAnnotationView: MKAnnotationView {
         stopPresenceRefreshTimer()
         resetAddressResolution()
         configuredCalloutInfo = nil
+        configuredIsRefreshingLocation = false
         configuredAvatarID = nil
         avatarImageView.image = nil
+        avatarImageView.alpha = 1
+        locationRefreshIndicator.stopAnimating()
         calloutContent = .information
         circularPresenceTextView.text = nil
     }
@@ -410,11 +417,15 @@ final class UserLocationAnnotationView: MKAnnotationView {
         avatarID: String,
         profileColorHex: String,
         calloutInfo: MapUserCalloutInfo,
-        calloutContent: UserLocationCalloutContent = .information
+        calloutContent: UserLocationCalloutContent = .information,
+        isRefreshingLocation: Bool = false
     ) {
         let calloutModeChanged = self.calloutContent.showsFriendActions
             != calloutContent.showsFriendActions
+        let refreshStateChanged = configuredIsRefreshingLocation
+            != isRefreshingLocation
         self.calloutContent = calloutContent
+        configuredIsRefreshingLocation = isRefreshingLocation
 
         let resolvedAvatar = ProfileAvatar(rawValue: avatarID)
             ?? ProfileAvatar.cyclopsHorns
@@ -426,8 +437,16 @@ final class UserLocationAnnotationView: MKAnnotationView {
         pinBackgroundView.setColor(
             ProfileColor.uiColor(hex: profileColorHex)
         )
+        avatarImageView.alpha = isRefreshingLocation ? 0.3 : 1
+        if isRefreshingLocation {
+            locationRefreshIndicator.startAnimating()
+        } else {
+            locationRefreshIndicator.stopAnimating()
+        }
 
-        if configuredCalloutInfo != calloutInfo || calloutModeChanged {
+        if configuredCalloutInfo != calloutInfo
+            || calloutModeChanged
+            || refreshStateChanged {
             if shouldResetAddress(for: calloutInfo.coordinate) {
                 resetAddressResolution()
             }
@@ -436,6 +455,9 @@ final class UserLocationAnnotationView: MKAnnotationView {
             refreshPresencePresentation()
             refreshCallout()
             accessibilityLabel = "\(calloutInfo.displayName), \(calloutInfo.relationshipText)"
+            accessibilityValue = isRefreshingLocation
+                ? "Actualisation de la position en cours"
+                : Self.locationAccessibilityText(for: calloutInfo)
             accessibilityHint = calloutContent.showsFriendActions
                 ? "Touchez pour afficher les actions de cet ami"
                 : "Touchez pour afficher l’adresse et les informations d’exploration"
@@ -713,6 +735,13 @@ final class UserLocationAnnotationView: MKAnnotationView {
         avatarImageView.contentMode = .scaleAspectFill
         avatarImageView.isAccessibilityElement = false
         pinBackgroundView.addSubview(avatarImageView)
+
+        locationRefreshIndicator.hidesWhenStopped = true
+        locationRefreshIndicator.color = .label
+        locationRefreshIndicator.backgroundColor = UIColor.systemBackground
+            .withAlphaComponent(0.72)
+        locationRefreshIndicator.isAccessibilityElement = false
+        pinBackgroundView.addSubview(locationRefreshIndicator)
 
         setNeedsLayout()
     }
@@ -1162,6 +1191,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// Friends whose last known location is still recent.
     var freshFriendLocationUserIDs: Set<String> = []
 
+    /// Friends currently waiting for an on-demand location update.
+    var refreshingFriendLocationUserIDs: Set<String> = []
+
     /// Events belonging to the account and accepted friends, keyed by event ID.
     var outingPlans: [String: MapOutingPlan] = [:]
 
@@ -1203,6 +1235,9 @@ struct MapWithFogView: UIViewRepresentable {
 
     /// Presents external navigation choices for the selected friend.
     var onJoinFriend: (String) -> Void = { _ in }
+
+    /// Requests an on-demand location update when MapKit selects a friend.
+    var onSelectFriend: (String) -> Void = { _ in }
 
     /// Presents the native profile sheet for the selected friend.
     var onViewFriendProfile: (String) -> Void = { _ in }
@@ -1251,7 +1286,10 @@ struct MapWithFogView: UIViewRepresentable {
 
     func updateUIView(_ uiView: MKMapView, context: Context) {
         context.coordinator.onJoinFriend = onJoinFriend
+        context.coordinator.onSelectFriend = onSelectFriend
         context.coordinator.onViewFriendProfile = onViewFriendProfile
+        context.coordinator.refreshingFriendUserIDs =
+            refreshingFriendLocationUserIDs
         context.coordinator.onSelectOutingPlan = onSelectOutingPlan
         context.coordinator.onDeselectOutingPlan = onDeselectOutingPlan
         context.coordinator.onCreateEvent = onCreateEvent
@@ -1336,6 +1374,7 @@ struct MapWithFogView: UIViewRepresentable {
         Coordinator(
             fogColor: fogColor,
             onJoinFriend: onJoinFriend,
+            onSelectFriend: onSelectFriend,
             onViewFriendProfile: onViewFriendProfile,
             onSelectOutingPlan: onSelectOutingPlan,
             onDeselectOutingPlan: onDeselectOutingPlan,
@@ -1472,7 +1511,9 @@ struct MapWithFogView: UIViewRepresentable {
                         annotationView,
                         avatarID: friendLocation.avatarID,
                         profileColorHex: friendLocation.profileColorHex,
-                        calloutInfo: calloutInfo
+                        calloutInfo: calloutInfo,
+                        isRefreshingLocation: refreshingFriendLocationUserIDs
+                            .contains(friendLocation.userID)
                     )
                 }
             } else {
@@ -1869,10 +1910,12 @@ struct MapWithFogView: UIViewRepresentable {
         var friendAvatarIDByUserID: [String: String] = [:]
         var friendProfileColorHexByUserID: [String: String] = [:]
         var friendCalloutInfoByUserID: [String: MapUserCalloutInfo] = [:]
+        var refreshingFriendUserIDs: Set<String> = []
         fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
         fileprivate var draftOutingAnnotation: DraftOutingAnnotation?
         fileprivate var lastFocusedDraftCoordinate: MapUserCoordinate?
         var onJoinFriend: (String) -> Void
+        var onSelectFriend: (String) -> Void
         var onViewFriendProfile: (String) -> Void
         var onSelectOutingPlan: (String) -> Void
         var onDeselectOutingPlan: (String) -> Void
@@ -1898,6 +1941,7 @@ struct MapWithFogView: UIViewRepresentable {
         init(
             fogColor: UIColor,
             onJoinFriend: @escaping (String) -> Void,
+            onSelectFriend: @escaping (String) -> Void,
             onViewFriendProfile: @escaping (String) -> Void,
             onSelectOutingPlan: @escaping (String) -> Void,
             onDeselectOutingPlan: @escaping (String) -> Void,
@@ -1905,6 +1949,7 @@ struct MapWithFogView: UIViewRepresentable {
         ) {
             self.fogColor = fogColor
             self.onJoinFriend = onJoinFriend
+            self.onSelectFriend = onSelectFriend
             self.onViewFriendProfile = onViewFriendProfile
             self.onSelectOutingPlan = onSelectOutingPlan
             self.onDeselectOutingPlan = onDeselectOutingPlan
@@ -2461,7 +2506,8 @@ struct MapWithFogView: UIViewRepresentable {
                 annotationView,
                 avatarID: avatarID,
                 profileColorHex: profileColorHex,
-                calloutInfo: calloutInfo
+                calloutInfo: calloutInfo,
+                isRefreshingLocation: refreshingFriendUserIDs.contains(userID)
             )
             return annotationView
         }
@@ -2474,6 +2520,15 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            if let friendAnnotation = view.annotation as? FriendLocationAnnotation {
+                if mapView.userTrackingMode != .none {
+                    mapView.setUserTrackingMode(.none, animated: false)
+                }
+                mapView.setCenter(friendAnnotation.coordinate, animated: true)
+                onSelectFriend(friendAnnotation.userID)
+                return
+            }
+
             guard let annotation = view.annotation as? OutingPlanAnnotation else {
                 return
             }
@@ -2546,7 +2601,8 @@ struct MapWithFogView: UIViewRepresentable {
             _ annotationView: MKAnnotationView,
             avatarID: String,
             profileColorHex: String,
-            calloutInfo: MapUserCalloutInfo
+            calloutInfo: MapUserCalloutInfo,
+            isRefreshingLocation: Bool
         ) {
             guard let annotationView = annotationView as? UserLocationAnnotationView,
                   let friendAnnotation = annotationView.annotation
@@ -2568,7 +2624,8 @@ struct MapWithFogView: UIViewRepresentable {
                             self?.onViewFriendProfile(userID)
                         }
                     )
-                )
+                ),
+                isRefreshingLocation: isRefreshingLocation
             )
         }
     }

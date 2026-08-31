@@ -84,6 +84,7 @@ struct ContentView: View {
     @StateObject private var outingAttendanceService =
         OutingAttendanceService.shared
     @StateObject private var notificationService = NotificationService.shared
+    @StateObject private var locationPushService = LocationPushService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
@@ -192,6 +193,7 @@ struct ContentView: View {
             refreshCityProgress(discoveredCellIDs: discoveredCellIDs)
             synchronizeOutingPlanObservation()
             synchronizeOutingAttendanceObservation()
+            synchronizeLocationPushRegistration()
 
             Task {
                 await cityBoundary.load()
@@ -216,6 +218,16 @@ struct ContentView: View {
             if !isEnabled {
                 friendSyncService.stopSharingLocation()
             }
+            synchronizeLocationPushRegistration()
+        }
+        .onChange(
+            of: locationTracker.backgroundTrackingEnabled,
+            initial: true
+        ) {
+            synchronizeLocationPushRegistration()
+        }
+        .onChange(of: locationTracker.authorizationStatus, initial: true) {
+            synchronizeLocationPushRegistration()
         }
         .onChange(of: displayName) { _, newDisplayName in
             friendSyncService.updateDisplayName(newDisplayName)
@@ -236,6 +248,7 @@ struct ContentView: View {
         .onChange(of: friendSyncService.isProfileReady) { _, isReady in
             synchronizeOutingPlanObservation()
             synchronizeOutingAttendanceObservation()
+            synchronizeLocationPushRegistration()
             guard isReady else { return }
 
             friendSyncService.updateDisplayName(displayName)
@@ -269,6 +282,9 @@ struct ContentView: View {
             openPendingFriendRequestNotificationRouteIfPossible()
         }
         .onChange(of: friendSyncService.friendLocations) {
+            locationPushService.receiveLocations(
+                friendSyncService.friendLocations
+            )
             reconcileFriendPresentations(
                 acceptedUserIDs: acceptedFriendUserIDs
             )
@@ -289,6 +305,7 @@ struct ContentView: View {
             switch newPhase {
             case .active:
                 locationTracker.resumeTrackingIfNeeded()
+                synchronizeLocationPushRegistration()
                 openPendingNotificationRouteIfPossible()
                 openPendingFriendRequestNotificationRouteIfPossible()
             case .background:
@@ -341,6 +358,8 @@ struct ContentView: View {
                     friendLocations: friendSyncService.friendLocations,
                     freshFriendLocationUserIDs:
                         friendSyncService.freshFriendLocationUserIDs,
+                    refreshingFriendLocationUserIDs:
+                        locationPushService.refreshingFriendUserIDs,
                     outingPlans: outingPlans,
                     userExplorationProgress: cityProgress,
                     userDisplayName: displayName,
@@ -357,6 +376,13 @@ struct ContentView: View {
                     heatMapCellData: locationTracker.heatMapCellData,
                     heatMapRevision: locationTracker.heatMapRevision,
                     onJoinFriend: presentNavigationOptions,
+                    onSelectFriend: { userID in
+                        locationPushService.requestRefresh(
+                            for: userID,
+                            currentLocation:
+                                friendSyncService.friendLocations[userID]
+                        )
+                    },
                     onViewFriendProfile: presentFriendProfile,
                     onSelectOutingPlan: { eventID in
                         selectedOutingPlanEventID = eventID
@@ -926,6 +952,16 @@ struct ContentView: View {
         guard friend.canShowOnMap else { return }
         centerOnFriendUserID = friend.userID
         selectedTab = .explore
+    }
+
+    private func synchronizeLocationPushRegistration() {
+        locationPushService.synchronizeRegistration(
+            userID: FirebaseService.shared.currentUserId,
+            trackingEnabled: locationTracker.trackingEnabled,
+            backgroundTrackingEnabled:
+                locationTracker.backgroundTrackingEnabled,
+            authorizationStatus: locationTracker.authorizationStatus
+        )
     }
 
     private var acceptedFriendUserIDs: Set<String> {
@@ -1590,6 +1626,7 @@ private struct ProfileView: View {
     @ObservedObject private var authenticationService = FirebaseService.shared
     @ObservedObject private var friendSyncService = FriendSyncService.shared
     @ObservedObject private var notificationService = NotificationService.shared
+    @ObservedObject private var locationPushService = LocationPushService.shared
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     let cityProgress: CityProgress?
@@ -1685,7 +1722,7 @@ private struct ProfileView: View {
                     Text("Localisation")
                 } footer: {
                     Text(
-                        "Quand l’exploration est active, Wander utilise ta position pour révéler la carte et alimenter les fonctions entre amis. Le suivi en arrière-plan reste optionnel."
+                        "Quand l’exploration est active, Wander utilise ta position pour révéler la carte et alimenter les fonctions entre amis. Avec le suivi en arrière-plan et l’autorisation Toujours, tes amis acceptés peuvent aussi actualiser ta position lorsqu’ils te sélectionnent."
                     )
                 }
 
@@ -1767,8 +1804,17 @@ private struct ProfileView: View {
                 Task {
                     do {
                         try await notificationService.prepareForSignOut()
+                        await locationPushService.prepareForSignOut()
                         if !authenticationService.signOut() {
                             await notificationService.enableNotifications()
+                            locationPushService.synchronizeRegistration(
+                                userID: authenticationService.currentUserId,
+                                trackingEnabled: locationTracker.trackingEnabled,
+                                backgroundTrackingEnabled:
+                                    locationTracker.backgroundTrackingEnabled,
+                                authorizationStatus:
+                                    locationTracker.authorizationStatus
+                            )
                             accountActionErrorMessage =
                                 authenticationService.authErrorMessage
                         }
@@ -1969,6 +2015,7 @@ private struct ProfileView: View {
                 }
 
                 try await notificationService.prepareForAccountDeletion()
+                await locationPushService.prepareForAccountDeletion()
                 try await friendSyncService.deleteCurrentAccountData()
                 try await authenticationService.finishAccountDeletion(
                     authorizationCode: authorizationCode

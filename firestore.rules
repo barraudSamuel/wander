@@ -518,6 +518,19 @@ service cloud.firestore {
         && data.updatedAt == request.time;
     }
 
+    function isValidLocationPushDevice(data, deviceId) {
+      return isValidDeviceId(deviceId)
+        && data.keys().hasAll(['token', 'environment', 'updatedAt'])
+        && data.keys().hasOnly(['token', 'environment', 'updatedAt'])
+        && data.token is string
+        && data.token.size() >= 40
+        && data.token.size() <= 400
+        && data.token.matches('^[0-9A-Fa-f]+$')
+        && data.environment in ['sandbox', 'production']
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
     match /users/{uid} {
       allow get: if isSignedIn()
         && (
@@ -601,6 +614,17 @@ service cloud.firestore {
           && request.auth.uid == uid
           && !accountDeletionIsPending(uid)
           && isValidDevice(request.resource.data, deviceId);
+
+        allow delete: if isSignedIn() && request.auth.uid == uid;
+      }
+
+      match /locationPushDevices/{deviceId} {
+        allow get, list: if isSignedIn() && request.auth.uid == uid;
+
+        allow create, update: if isSignedIn()
+          && request.auth.uid == uid
+          && !accountDeletionIsPending(uid)
+          && isValidLocationPushDevice(request.resource.data, deviceId);
 
         allow delete: if isSignedIn() && request.auth.uid == uid;
       }
@@ -715,6 +739,13 @@ service cloud.firestore {
 
       allow delete: if isSignedIn()
         && request.auth.uid == uid;
+    }
+
+    // Cloud Functions owns dispatch creation and updates. The target may only
+    // remove its own quota document as part of account deletion.
+    match /locationPushDispatches/{uid} {
+      allow get, list, create, update: if false;
+      allow delete: if isSignedIn() && request.auth.uid == uid;
     }
 
     match /explorations/{uid}/cells/{cellId} {

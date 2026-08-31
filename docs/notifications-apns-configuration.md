@@ -28,6 +28,7 @@ environnements de développement et de production.
 Le target `wander` doit conserver :
 
 - la capacité **Push Notifications** ;
+- la capacité **Location Push Service Extension** ;
 - le mode d’arrière-plan **Remote notifications** ;
 - `FirebaseMessaging` dans les produits Swift Package Manager ;
 - `aps-environment` dans les entitlements signés par le profil actif.
@@ -35,6 +36,63 @@ Le target `wander` doit conserver :
 Avant un archive de distribution, vérifier que le profil embarqué autorise
 l’environnement APNs de production. Le build simulateur ne valide pas cette
 partie de la signature.
+
+### Actualisation de la position d’un ami
+
+Wander possède aussi le target `WanderLocationPushExtension`, dont le bundle ID
+est `com.iterar.wander.wander.locationpush`. Cette extension est distincte des
+notifications visibles gérées par Firebase Messaging. L’app obtient un token
+APNs dédié avec `startMonitoringLocationPushes` uniquement lorsque :
+
+- l’exploration est active ;
+- le suivi en arrière-plan est activé ;
+- Core Location dispose de l’autorisation **Toujours** ;
+- un compte Apple Wander est connecté.
+
+Le token est privé dans
+`users/{uid}/locationPushDevices/{installationId}` et n’est lisible que par son
+propriétaire. Le backend ignore les enregistrements non renouvelés depuis plus
+de 30 jours. Désactiver le partage, se déconnecter ou supprimer le compte arrête
+le monitoring et nettoie l’enregistrement disponible.
+
+Quand un pin d’ami est sélectionné, la callable
+`requestFriendLocationRefresh`, déployée dans `asia-northeast3`, vérifie de
+nouveau l’amitié acceptée. Elle ne réveille pas l’appareil si la position a
+moins de cinq minutes et n’autorise qu’un Location Push par cible toutes les
+quatre minutes. Les demandes rapprochées sont donc absorbées avant d’atteindre
+le quota Apple.
+
+L’envoi contourne FCM car le token Location Push est différent du token FCM.
+La fonction contacte directement APNs avec :
+
+- `apns-topic: com.iterar.wander.wander.location-query` ;
+- `apns-push-type: location` ;
+- `apns-expiration: 0`, afin de ne pas livrer une demande devenue ancienne ;
+- l’environnement sandbox ou production enregistré par le build iOS.
+
+La même clé APNs `.p8` peut être fournie à la fonction sous forme de secrets.
+Ces commandes sont des étapes manuelles du propriétaire et ne doivent jamais
+être automatisées ou commitées :
+
+```sh
+firebase functions:secrets:set APNS_AUTH_KEY
+firebase functions:secrets:set APNS_KEY_ID
+firebase functions:secrets:set APNS_TEAM_ID
+```
+
+`APNS_AUTH_KEY` contient le texte complet de la clé `.p8`. `APNS_KEY_ID` et
+`APNS_TEAM_ID` sont les identifiants Apple de dix caractères. Après revue,
+déployer séparément les règles et la fonction :
+
+```sh
+firebase deploy --only firestore:rules
+firebase deploy --only functions:requestFriendLocationRefresh
+```
+
+La fonction ne journalise ni token, ni identifiant de compte, ni coordonnée.
+Un document serveur privé `locationPushDispatches/{targetUid}` conserve le
+demandeur, l’identifiant de requête et l’horodatage nécessaires à la
+déduplication. Il est supprimé avec le compte cible.
 
 ## Backend
 
@@ -115,3 +173,15 @@ hors du Sprint 4 et nécessite l’approbation indépendante du Sprint 5.
 - Refaire les essais avec une demande en attente, un non-ami, une amitié
   révoquée, un refus de permission, une déconnexion et une suppression de
   compte.
+- Avec deux appareils et deux amis acceptés, laisser la position de B devenir
+  ancienne, puis sélectionner son pin depuis A. Vérifier que le loader recouvre
+  seulement l’avatar de B, que l’extension publie une position récente et que
+  le pin se déplace avant la fin du timeout de 20 secondes.
+- Répéter depuis le pin, le rail, l’indicateur hors champ et « Voir sur la
+  carte ». Une sélection déjà fraîche ne doit pas consommer de Location Push.
+- Vérifier les cas sans autorisation Toujours, partage arrêté, token absent,
+  appareil hors ligne et requêtes répétées : le loader disparaît et la dernière
+  position connue reste affichée.
+- Valider séparément un build Debug/sandbox et une archive
+  Distribution/production ; le simulateur ne prouve pas la livraison d’un
+  Location Push réel.
