@@ -181,7 +181,7 @@ final class NotificationService: ObservableObject {
         }
 
         switch type {
-        case "eventPublished", "eventAttendanceCreated":
+        case "eventPublished", "eventAttendanceCreated", "eventDeclineCreated":
             guard let ownerID = userInfo["eventOwnerId"] as? String,
                   Self.isValidUserID(ownerID),
                   let eventIDValue = userInfo["eventId"] as? String,

@@ -6,86 +6,42 @@ import {
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
+  collection,
+  deleteDoc,
   doc,
   getDoc,
-  serverTimestamp,
+  getDocs,
+  setDoc,
   updateDoc,
-  writeBatch,
 } from "firebase/firestore";
 
-const projectId = "demo-wander-profile-avatar";
-const ownerId = "avatar-owner";
-const friendId = "avatar-friend";
-const strangerId = "avatar-stranger";
-const friendCode = "ABCDEFGH234";
-const appleClaims = {
-  firebase: { sign_in_provider: "apple.com" },
-};
+const projectId = "demo-wander-profiles";
+const ownerId = "profile-owner";
+const friendId = "profile-friend";
+const strangerId = "profile-stranger";
+const friendCode = "FRIEND-CODE-NEXT";
 
 let testEnvironment;
 
 function authenticatedFirestore(userId) {
-  return testEnvironment.authenticatedContext(userId, appleClaims).firestore();
+  return testEnvironment.authenticatedContext(userId).firestore();
 }
 
-function userData(overrides = {}) {
-  return {
-    displayName: "Samuel",
-    avatarID: "radiant-eye",
-    profileColorHex: "#3366CC",
-    friendCode,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    ...overrides,
-  };
+function profileReference(database, userId = ownerId) {
+  return doc(database, "users", userId);
 }
 
-async function createProfile(data = userData()) {
-  const database = authenticatedFirestore(ownerId);
-  const batch = writeBatch(database);
-  batch.set(doc(database, "users", ownerId), data);
-  batch.set(doc(database, "friendCodes", friendCode), {
-    ownerId,
-    displayName: data.displayName,
-    createdAt: serverTimestamp(),
-  });
-  return batch.commit();
-}
-
-async function seedLegacyProfile() {
-  await testEnvironment.withSecurityRulesDisabled(async (context) => {
-    const database = context.firestore();
-    const batch = writeBatch(database);
-    batch.set(doc(database, "users", ownerId), {
-      displayName: "Samuel",
-      profileColorHex: "#3366CC",
-      friendCode,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    batch.set(doc(database, "friendCodes", friendCode), {
-      ownerId,
-      displayName: "Samuel",
-      createdAt: new Date(),
-    });
-    await batch.commit();
-  });
-}
-
-async function seedAcceptedFriendship() {
+async function seedFriendship(status) {
   const participants = [ownerId, friendId].sort();
-  const pairId = participants.join("__");
   await testEnvironment.withSecurityRulesDisabled(async (context) => {
-    const database = context.firestore();
-    const batch = writeBatch(database);
-    batch.set(doc(database, "friendships", pairId), {
-      participants,
-      requestedBy: ownerId,
-      status: "accepted",
-      createdAt: new Date(),
-      acceptedAt: new Date(),
-    });
-    await batch.commit();
+    await setDoc(
+      doc(context.firestore(), "friendships", participants.join("__")),
+      {
+        participants,
+        requestedBy: ownerId,
+        status,
+      },
+    );
   });
 }
 
@@ -96,73 +52,96 @@ before(async () => {
   );
   testEnvironment = await initializeTestEnvironment({
     projectId,
-    firestore: {
-      host: "127.0.0.1",
-      port: 8980,
-      rules,
-    },
+    firestore: { host: "127.0.0.1", port: 8980, rules },
   });
 });
 
 beforeEach(async () => {
   await testEnvironment.clearFirestore();
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(profileReference(context.firestore()), {
+      displayName: "Samuel",
+      avatarID: "legacy-or-future-avatar",
+      customProfileField: { revision: 3 },
+    });
+  });
 });
 
 after(async () => {
   await testEnvironment.cleanup();
 });
 
-describe("users/{uid} avatarID", () => {
-  test("a new profile accepts only catalog avatar identifiers", async () => {
-    await assertSucceeds(createProfile());
-    await testEnvironment.clearFirestore();
-    await assertFails(createProfile(userData({ avatarID: "wizard" })));
-    await testEnvironment.clearFirestore();
+describe("profiles and friend codes", () => {
+  test("the owner can evolve the profile schema freely", async () => {
+    const database = authenticatedFirestore(ownerId);
+    const reference = profileReference(database);
 
-    const dataWithoutAvatar = userData();
-    delete dataWithoutAvatar.avatarID;
-    await assertSucceeds(createProfile(dataWithoutAvatar));
+    await assertSucceeds(getDoc(reference));
+    await assertSucceeds(updateDoc(reference, {
+      avatarID: "uploaded-photo-url-or-new-catalog-value",
+      futureField: [1, 2, 3],
+    }));
+    await assertSucceeds(deleteDoc(reference));
+    await assertSucceeds(setDoc(reference, { minimalProfile: true }));
   });
 
-  test("an existing profile can select another catalog avatar", async () => {
-    await createProfile();
-    const reference = doc(authenticatedFirestore(ownerId), "users", ownerId);
-
-    await assertSucceeds(
-      updateDoc(reference, {
-        avatarID: "skull",
-        updatedAt: serverTimestamp(),
-      }),
-    );
-    await assertFails(
-      updateDoc(reference, {
-        avatarID: "uploaded-photo-url",
-        updatedAt: serverTimestamp(),
-      }),
-    );
+  test("pending and accepted relations can read a basic profile", async () => {
+    for (const status of ["pending", "accepted"]) {
+      await testEnvironment.clearFirestore();
+      await testEnvironment.withSecurityRulesDisabled(async (context) => {
+        await setDoc(profileReference(context.firestore()), {
+          displayName: "Samuel",
+        });
+      });
+      await seedFriendship(status);
+      await assertSucceeds(getDoc(
+        profileReference(authenticatedFirestore(friendId)),
+      ));
+    }
   });
 
-  test("a legacy profile can be migrated with a valid avatar", async () => {
-    await seedLegacyProfile();
-    const reference = doc(authenticatedFirestore(ownerId), "users", ownerId);
+  test("strangers and revoked relations cannot read or write a profile", async () => {
+    await assertFails(getDoc(
+      profileReference(authenticatedFirestore(strangerId)),
+    ));
+    await assertFails(updateDoc(
+      profileReference(authenticatedFirestore(strangerId)),
+      { displayName: "Imposteur" },
+    ));
 
-    await assertSucceeds(
-      updateDoc(reference, {
-        avatarID: "cyclops-horns",
-        updatedAt: serverTimestamp(),
-      }),
-    );
+    await seedFriendship("revoking");
+    await assertFails(getDoc(
+      profileReference(authenticatedFirestore(friendId)),
+    ));
+    await assertFails(getDocs(collection(
+      authenticatedFirestore(ownerId),
+      "users",
+    )));
   });
 
-  test("an accepted friend can read the selected avatar", async () => {
-    await createProfile();
-    await seedAcceptedFriendship();
+  test("friend codes are resolvable but remain owned by their creator", async () => {
+    const ownerDatabase = authenticatedFirestore(ownerId);
+    const strangerDatabase = authenticatedFirestore(strangerId);
+    const ownerReference = doc(ownerDatabase, "friendCodes", friendCode);
+    const strangerReference = doc(strangerDatabase, "friendCodes", friendCode);
 
-    await assertSucceeds(
-      getDoc(doc(authenticatedFirestore(friendId), "users", ownerId)),
-    );
-    await assertFails(
-      getDoc(doc(authenticatedFirestore(strangerId), "users", ownerId)),
-    );
+    await assertSucceeds(setDoc(ownerReference, {
+      ownerId,
+      displayName: "Samuel",
+      futureField: true,
+    }));
+    await assertSucceeds(getDoc(strangerReference));
+    await assertFails(updateDoc(strangerReference, { displayName: "Volé" }));
+    await assertFails(deleteDoc(strangerReference));
+    await assertSucceeds(updateDoc(ownerReference, { displayName: "Sam" }));
+    await assertSucceeds(deleteDoc(ownerReference));
+    await assertFails(getDocs(collection(ownerDatabase, "friendCodes")));
+  });
+
+  test("signed-out clients cannot resolve profiles or codes", async () => {
+    const database = testEnvironment.unauthenticatedContext().firestore();
+
+    await assertFails(getDoc(profileReference(database)));
+    await assertFails(getDoc(doc(database, "friendCodes", friendCode)));
   });
 });

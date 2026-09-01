@@ -52,19 +52,62 @@ par une règle stricte qui valide son identifiant, son profil et ses timestamps.
   l'interface, mais aurait supprimé la frontière entre participant et simple
   spectateur.
 
-## Validation
+## Frontière produit révisée
+
+Cette frontière participant/spectateur décrit la décision approuvée lors du
+sprint d'origine. Elle a été remplacée le 2026-09-01 par une frontière entre
+ami actuellement `accepted` de l'organisateur et autre compte, afin de montrer
+les participants avant de rejoindre une sortie. La requête reste bornée au
+`publicationId` courant, les lectures directes de documents tiers restent
+interdites et le client n'ouvre une prévisualisation que pour la fiche
+sélectionnée. Voir le plan révisé
+[`2026-08-31-afficher-organisateur-fiche-evenement.md`](../plans/2026-08-31-afficher-organisateur-fiche-evenement.md).
+
+La leçon durable reste de définir la population autorisée depuis le besoin
+produit, puis de contraindre explicitement la requête et de tester les pertes
+d'autorisation. L'élargissement est ici volontaire et approuvé, pas un
+contournement d'un refus de règles.
+
+## Validation historique (2026-08-15)
 
 - Une requête filtrée réussit pour l'organisateur et pour un participant actif.
 - La même requête échoue pour un ami accepté qui n'a pas rejoint.
 - Une requête non filtrée échoue même pour un participant.
 - Après suppression de sa participation ou révocation de l'amitié, la requête
   échoue immédiatement.
-- La matrice complète réussit avec 52 tests sur 52 dans l'émulateur local.
+- Lors de ce sprint, la matrice complète réussissait avec 52 tests sur 52 dans
+  l'émulateur local. Ce nombre documente cette validation historique, pas la
+  suite actuelle.
+
+## Matrice révisée actuelle (2026-09-01)
+
+- Une requête filtrée sur le `publicationId` courant réussit pour
+  l'organisateur, un participant actif et un ami actuellement `accepted` qui
+  n'a pas encore rejoint.
+- Les requêtes non filtrées ou filtrées sur une publication obsolète échouent
+  aussi pour l'organisateur ; celui-ci ne contourne donc pas la frontière de
+  publication active.
+- La lecture directe du document d'un tiers reste refusée à un ami accepté.
+- Les comptes sans amitié acceptée, en attente, non authentifiés ou connectés
+  avec un fournisseur non autorisé ne peuvent pas lister le groupe.
+- La révocation de l'amitié retire immédiatement l'accès à la liste, tandis
+  que le participant peut toujours supprimer sa propre inscription. Une
+  transition serveur-horodatée `accepted -> revoking` conserve ensuite un
+  tombstone jusqu'au nettoyage backend bidirectionnel des inscriptions.
+- Le nettoyage ignore les inscriptions dont `joinedAt` est postérieur à
+  `revokedAt`, se reprend après un échec partiel et ne supprime le tombstone
+  qu'après le succès des deux directions.
+- La suite actuelle réussit avec 52 tests sur 52 dans l'émulateur Firestore
+  local. Les 43 tests Functions actifs réussissent également ; un test
+  d'intégration préexistant reste explicitement ignoré.
 
 ## Reusable lesson and prevention
 
 Pour autoriser une liste selon une appartenance, préférer un document de membre
 à chemin déterministe et une contrainte de requête explicite. Tester ensemble le
 cas positif filtré, le lecteur non membre, la requête sans filtre et la perte
-d'appartenance. Ne jamais résoudre un refus de requête en ouvrant la collection
-à une population plus large que le besoin produit.
+d'appartenance. Lorsqu'une révocation exige aussi un nettoyage asynchrone,
+conserver un état intermédiaire immuable qui coupe les autorisations avant de
+supprimer les données dérivées, puis protéger les retries avec un cutoff
+serveur. Ne jamais résoudre un refus de requête en ouvrant la collection à une
+population plus large que le besoin produit.

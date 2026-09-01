@@ -119,11 +119,15 @@ struct ContentView: View {
     #endif
 
     var body: some View {
+        lifecycleObservedContent
+    }
+
+    private var tabContent: some View {
         let summaries = friendSummaries(
             locations: friendSyncService.friendLocations
         )
 
-        GeometryReader { geometry in
+        return GeometryReader { geometry in
             TabView(selection: $selectedTab) {
                 exploreTab(friendSummaries: summaries)
                     .tabItem {
@@ -181,6 +185,10 @@ struct ContentView: View {
             }
             #endif
         }
+    }
+
+    private var profileObservedContent: some View {
+        tabContent
         .onAppear {
             locationTracker.configure(with: modelContext)
             restoreOwnExplorationIfAvailable()
@@ -261,6 +269,10 @@ struct ContentView: View {
             openPendingNotificationRouteIfPossible()
             openPendingFriendRequestNotificationRouteIfPossible()
         }
+    }
+
+    private var outingObservedContent: some View {
+        profileObservedContent
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
             reconcileFriendPresentations(acceptedUserIDs: userIDs)
             synchronizeOutingPlanObservation()
@@ -271,6 +283,15 @@ struct ContentView: View {
         .onChange(of: outingPlanService.events) {
             synchronizeOutingAttendanceObservation()
             reconcileSelectedOutingPlan()
+        }
+        .onChange(of: selectedOutingPlanEventID) {
+            synchronizeOutingAttendanceObservation()
+        }
+        .onChange(of: selectedTab) {
+            if selectedTab != .explore {
+                selectedOutingPlanEventID = nil
+            }
+            synchronizeOutingAttendanceObservation()
         }
         .onChange(of: notificationService.pendingRoute, initial: true) {
             openPendingNotificationRouteIfPossible()
@@ -289,6 +310,10 @@ struct ContentView: View {
                 acceptedUserIDs: acceptedFriendUserIDs
             )
         }
+    }
+
+    private var lifecycleObservedContent: some View {
+        outingObservedContent
         .onChange(of: friendSyncService.ownExplorationRevision) {
             restoreOwnExplorationIfAvailable()
         }
@@ -425,8 +450,9 @@ struct ContentView: View {
                                 eventID: selectedOutingPlan.plan.eventIDValue
                             )
                         },
-                        onToggleAttendance: {
-                            toggleOutingAttendance(
+                        onSetAttendance: { shouldAttend in
+                            setOutingAttendance(
+                                shouldAttend,
                                 eventID: selectedOutingPlan.plan.eventIDValue
                             )
                         }
@@ -1002,6 +1028,30 @@ struct ContentView: View {
             }
         }
 
+        func declines(for plan: OutingPlan) -> [MapOutingAttendee] {
+            outingAttendanceService.visibleDeclines(for: plan)
+            .filter {
+                plan.ownerID != currentUserID
+                    || acceptedFriendUserIDs.contains($0.participantID)
+            }
+            .map { decline in
+                MapOutingAttendee(
+                    userID: decline.participantID,
+                    displayName: decline.displayName,
+                    avatarID: decline.avatarID
+                )
+            }
+            .sorted { lhs, rhs in
+                let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
+                    rhs.displayName
+                )
+                if comparison != .orderedSame {
+                    return comparison == .orderedAscending
+                }
+                return lhs.userID < rhs.userID
+            }
+        }
+
         return outingPlanService.events.reduce(
             into: [String: MapOutingPlan]()
         ) { result, entry in
@@ -1010,13 +1060,23 @@ struct ContentView: View {
             if ownerID == currentUserID {
                 result[eventID] = MapOutingPlan(
                     plan: plan,
-                    displayName: displayName,
+                    organizer: MapOutingAttendee(
+                        userID: ownerID,
+                        displayName: displayName.isEmpty
+                            ? plan.displayName
+                            : displayName,
+                        avatarID: avatarID
+                    ),
                     profileColorHex:
                         ProfileColor.normalizedHex(profileColorHex)
                         ?? ProfileColor.generatedHex(seed: ownerID),
                     isCurrentUser: true,
+                    rosterState: outingAttendanceService.rosterState(
+                        eventIDValue: eventID
+                    ),
+                    participationState: .notRequested,
                     attendees: attendees(for: plan),
-                    isCurrentUserAttending: false,
+                    declines: declines(for: plan),
                     isAttendanceUpdating: false
                 )
                 return
@@ -1027,16 +1087,25 @@ struct ContentView: View {
             }
             result[eventID] = MapOutingPlan(
                 plan: plan,
-                displayName: friend.displayName,
+                organizer: MapOutingAttendee(
+                    userID: ownerID,
+                    displayName: friend.displayName,
+                    avatarID: friend.avatarID
+                ),
                 profileColorHex:
                     ProfileColor.normalizedHex(friend.profileColorHex)
                     ?? ProfileColor.generatedHex(seed: ownerID),
                 isCurrentUser: false,
-                attendees: attendees(for: plan),
-                isCurrentUserAttending: outingAttendanceService.isAttending(
-                    eventIDValue: eventID,
-                    publicationIDValue: plan.publicationIDValue
+                rosterState: outingAttendanceService.rosterState(
+                    eventIDValue: eventID
                 ),
+                participationState: outingAttendanceService
+                    .participationState(
+                        eventIDValue: eventID,
+                        publicationIDValue: plan.publicationIDValue
+                    ),
+                attendees: attendees(for: plan),
+                declines: declines(for: plan),
                 isAttendanceUpdating:
                     outingAttendanceService.updatingEventIDs.contains(eventID)
             )
@@ -1074,25 +1143,46 @@ struct ContentView: View {
         }
         outingAttendanceService.observe(
             events: outingPlanService.events,
-            acceptedFriendUserIDs: acceptedFriendUserIDs
+            acceptedFriendUserIDs: acceptedFriendUserIDs,
+            selectedEventID: selectedTab == .explore
+                ? selectedOutingPlanEventID
+                : nil
         )
     }
 
-    private func toggleOutingAttendance(eventID: String) {
+    private func setOutingAttendance(
+        _ shouldAttend: Bool,
+        eventID: String
+    ) {
         guard let event = outingPlanService.events[eventID],
               acceptedFriendUserIDs.contains(event.ownerID) else {
             outingAttendanceErrorMessage = "Cet événement n’est plus disponible."
             return
         }
 
-        let shouldAttend = !outingAttendanceService.isAttending(
+        switch outingAttendanceService.participationState(
             eventIDValue: eventID,
             publicationIDValue: event.publicationIDValue
-        )
+        ) {
+        case .attending:
+            if shouldAttend { return }
+        case .declined:
+            if !shouldAttend { return }
+        case .notResponded:
+            break
+        case .notRequested, .loading:
+            outingAttendanceErrorMessage =
+                "Ta participation est encore en cours de vérification."
+            return
+        case .unavailable:
+            outingAttendanceErrorMessage =
+                "Ta participation est momentanément indisponible."
+            return
+        }
         Task {
             do {
-                try await outingAttendanceService.setAttending(
-                    shouldAttend,
+                try await outingAttendanceService.setResponse(
+                    shouldAttend ? .attending : .declined,
                     event: event
                 )
             } catch let error as OutingAttendanceServiceError {

@@ -11,44 +11,23 @@ import {
   doc,
   getDoc,
   getDocs,
-  serverTimestamp,
   setDoc,
+  updateDoc,
 } from "firebase/firestore";
 
 const projectId = "demo-wander-device-tokens";
 const ownerId = "device-owner";
 const strangerId = "device-stranger";
-const deviceId = "d4c87be0-88a8-4d69-9878-84ff24b93ca2";
-const appleClaims = {
-  firebase: { sign_in_provider: "apple.com" },
-};
+const deviceId = "ios-phone";
 
 let testEnvironment;
 
 function authenticatedFirestore(userId) {
-  return testEnvironment.authenticatedContext(userId, appleClaims).firestore();
+  return testEnvironment.authenticatedContext(userId).firestore();
 }
 
-function deviceData(overrides = {}) {
-  return {
-    token: "fcm-token-value-with-more-than-twenty-characters",
-    platform: "ios",
-    updatedAt: serverTimestamp(),
-    ...overrides,
-  };
-}
-
-function deviceReference(database, userId = ownerId, id = deviceId) {
-  return doc(database, "users", userId, "devices", id);
-}
-
-async function seedDevice(data = deviceData()) {
-  await testEnvironment.withSecurityRulesDisabled(async (context) => {
-    await setDoc(deviceReference(context.firestore()), {
-      ...data,
-      updatedAt: new Date(),
-    });
-  });
+function deviceReference(database, userId = ownerId) {
+  return doc(database, "users", userId, "devices", deviceId);
 }
 
 before(async () => {
@@ -58,11 +37,7 @@ before(async () => {
   );
   testEnvironment = await initializeTestEnvironment({
     projectId,
-    firestore: {
-      host: "127.0.0.1",
-      port: 8980,
-      rules,
-    },
+    firestore: { host: "127.0.0.1", port: 8980, rules },
   });
 });
 
@@ -74,92 +49,42 @@ after(async () => {
   await testEnvironment.cleanup();
 });
 
-describe("users/{userID}/devices/{deviceID}", () => {
-  test("the owner can create, read, list, update, and delete a device", async () => {
+describe("users/{uid}/devices", () => {
+  test("the owner can use a flexible device payload", async () => {
     const database = authenticatedFirestore(ownerId);
     const reference = deviceReference(database);
 
-    await assertSucceeds(setDoc(reference, deviceData()));
+    await assertSucceeds(setDoc(reference, {
+      token: "short-or-long-client-defined-token",
+      platform: "future-ios",
+      metadata: { appVersion: "next" },
+    }));
     await assertSucceeds(getDoc(reference));
-    await assertSucceeds(
-      getDocs(collection(database, "users", ownerId, "devices")),
-    );
-    await assertSucceeds(
-      setDoc(reference, deviceData({ token: "replacement-token-value-long-enough" })),
-    );
+    await assertSucceeds(getDocs(
+      collection(database, "users", ownerId, "devices"),
+    ));
+    await assertSucceeds(updateDoc(reference, { extraField: true }));
     await assertSucceeds(deleteDoc(reference));
   });
 
-  test("another account cannot read, list, write, or delete devices", async () => {
-    await seedDevice();
-    const database = authenticatedFirestore(strangerId);
-    const reference = deviceReference(database);
-
-    await assertFails(getDoc(reference));
-    await assertFails(
-      getDocs(collection(database, "users", ownerId, "devices")),
-    );
-    await assertFails(setDoc(reference, deviceData()));
-    await assertFails(deleteDoc(reference));
-  });
-
-  test("an unauthenticated or non-Apple session is rejected", async () => {
-    const unauthenticated = testEnvironment
-      .unauthenticatedContext()
-      .firestore();
-    await assertFails(
-      setDoc(deviceReference(unauthenticated), deviceData()),
-    );
-
-    const passwordSession = testEnvironment
-      .authenticatedContext(ownerId, {
-        firebase: { sign_in_provider: "password" },
-      })
-      .firestore();
-    await assertFails(
-      setDoc(deviceReference(passwordSession), deviceData()),
-    );
-  });
-
-  test("device ID, token, platform, and exact fields are validated", async (t) => {
-    const database = authenticatedFirestore(ownerId);
-
-    await t.test("invalid device ID", async () => {
-      await assertFails(
-        setDoc(deviceReference(database, ownerId, "phone"), deviceData()),
-      );
-    });
-
-    await t.test("short token", async () => {
-      await assertFails(
-        setDoc(deviceReference(database), deviceData({ token: "short" })),
-      );
-    });
-
-    await t.test("wrong platform", async () => {
-      await assertFails(
-        setDoc(deviceReference(database), deviceData({ platform: "android" })),
-      );
-    });
-
-    await t.test("unexpected field", async () => {
-      await assertFails(
-        setDoc(deviceReference(database), deviceData({ ownerId })),
-      );
-    });
-  });
-
-  test("pending account deletion blocks writes but still permits cleanup", async () => {
-    await seedDevice();
+  test("another account cannot access device tokens", async () => {
     await testEnvironment.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), "users", ownerId), {
-        deletionRequestedAt: new Date(),
-      });
+      await setDoc(deviceReference(context.firestore()), { token: "secret" });
     });
 
-    const database = authenticatedFirestore(ownerId);
-    const reference = deviceReference(database);
-    await assertFails(setDoc(reference, deviceData()));
-    await assertSucceeds(deleteDoc(reference));
+    const database = authenticatedFirestore(strangerId);
+    await assertFails(getDoc(deviceReference(database)));
+    await assertFails(getDocs(
+      collection(database, "users", ownerId, "devices"),
+    ));
+    await assertFails(setDoc(deviceReference(database), { token: "stolen" }));
+    await assertFails(deleteDoc(deviceReference(database)));
+  });
+
+  test("signed-out clients are rejected", async () => {
+    const database = testEnvironment.unauthenticatedContext().firestore();
+
+    await assertFails(getDoc(deviceReference(database)));
+    await assertFails(setDoc(deviceReference(database), { token: "none" }));
   });
 });

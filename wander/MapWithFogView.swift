@@ -79,12 +79,34 @@ struct MapUserCoordinate: Equatable {
 
 struct MapOutingPlan: Equatable {
     let plan: OutingPlan
-    let displayName: String
+    let organizer: MapOutingAttendee
     let profileColorHex: String
     let isCurrentUser: Bool
+    let rosterState: OutingAttendanceRosterState
+    let participationState: OutingAttendanceParticipationState
     let attendees: [MapOutingAttendee]
-    let isCurrentUserAttending: Bool
+    let declines: [MapOutingAttendee]
     let isAttendanceUpdating: Bool
+
+    var isCurrentUserAttending: Bool {
+        participationState == .attending
+    }
+
+    var visiblePeople: [MapOutingAttendee] {
+        var seenUserIDs: Set<String> = []
+        return ([organizer] + attendees).filter {
+            seenUserIDs.insert($0.userID).inserted
+        }
+    }
+
+    var visibleDeclines: [MapOutingAttendee] {
+        let attendingUserIDs = Set(visiblePeople.map(\.userID))
+        var seenUserIDs: Set<String> = []
+        return declines.filter {
+            !attendingUserIDs.contains($0.userID)
+                && seenUserIDs.insert($0.userID).inserted
+        }
+    }
 }
 
 struct MapOutingAttendee: Identifiable, Equatable {

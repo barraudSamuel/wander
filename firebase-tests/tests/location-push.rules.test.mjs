@@ -11,46 +11,29 @@ import {
   doc,
   getDoc,
   getDocs,
-  serverTimestamp,
   setDoc,
+  updateDoc,
 } from "firebase/firestore";
 
 const projectId = "demo-wander-location-push";
-const ownerId = "location-push-owner";
-const strangerId = "location-push-stranger";
-const deviceId = "d4c87be0-88a8-4d69-9878-84ff24b93ca2";
-const validToken = "ab".repeat(32);
-const appleClaims = {
-  firebase: { sign_in_provider: "apple.com" },
-};
+const ownerId = "push-owner";
+const strangerId = "push-stranger";
+const deviceId = "background-device";
 
 let testEnvironment;
 
 function authenticatedFirestore(userId) {
-  return testEnvironment.authenticatedContext(userId, appleClaims).firestore();
+  return testEnvironment.authenticatedContext(userId).firestore();
 }
 
-function deviceData(overrides = {}) {
-  return {
-    token: validToken,
-    environment: "sandbox",
-    updatedAt: serverTimestamp(),
-    ...overrides,
-  };
-}
-
-function deviceReference(database, userId = ownerId, id = deviceId) {
-  return doc(database, "users", userId, "locationPushDevices", id);
-}
-
-async function seedDevice() {
-  await testEnvironment.withSecurityRulesDisabled(async (context) => {
-    await setDoc(deviceReference(context.firestore()), {
-      token: validToken,
-      environment: "sandbox",
-      updatedAt: new Date(),
-    });
-  });
+function deviceReference(database, userId = ownerId) {
+  return doc(
+    database,
+    "users",
+    userId,
+    "locationPushDevices",
+    deviceId,
+  );
 }
 
 before(async () => {
@@ -60,11 +43,7 @@ before(async () => {
   );
   testEnvironment = await initializeTestEnvironment({
     projectId,
-    firestore: {
-      host: "127.0.0.1",
-      port: 8980,
-      rules,
-    },
+    firestore: { host: "127.0.0.1", port: 8980, rules },
   });
 });
 
@@ -76,133 +55,73 @@ after(async () => {
   await testEnvironment.cleanup();
 });
 
-describe("users/{uid}/locationPushDevices/{deviceId}", () => {
-  test("the owner controls only their location push registrations", async () => {
+describe("location push security boundary", () => {
+  test("the owner can manage a flexible location-push device", async () => {
     const database = authenticatedFirestore(ownerId);
     const reference = deviceReference(database);
 
-    await assertSucceeds(setDoc(reference, deviceData()));
+    await assertSucceeds(setDoc(reference, {
+      token: "client-defined",
+      environment: "future",
+      capabilities: ["location", "background"],
+    }));
     await assertSucceeds(getDoc(reference));
-    await assertSucceeds(
-      getDocs(collection(database, "users", ownerId, "locationPushDevices")),
-    );
-    await assertSucceeds(
-      setDoc(reference, deviceData({ environment: "production" })),
-    );
+    await assertSucceeds(getDocs(collection(
+      database,
+      "users",
+      ownerId,
+      "locationPushDevices",
+    )));
+    await assertSucceeds(updateDoc(reference, { revision: 2 }));
     await assertSucceeds(deleteDoc(reference));
   });
 
-  test("another account cannot read, list, write, or delete registrations", async () => {
-    await seedDevice();
+  test("another account cannot access location-push devices", async () => {
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(deviceReference(context.firestore()), { token: "secret" });
+    });
+
     const database = authenticatedFirestore(strangerId);
-    const reference = deviceReference(database);
+    await assertFails(getDoc(deviceReference(database)));
+    await assertFails(getDocs(collection(
+      database,
+      "users",
+      ownerId,
+      "locationPushDevices",
+    )));
+    await assertFails(setDoc(deviceReference(database), { token: "spoofed" }));
+  });
 
-    await assertFails(getDoc(reference));
-    await assertFails(
-      getDocs(collection(database, "users", ownerId, "locationPushDevices")),
+  test("backend dispatches remain private to server code", async () => {
+    const ownerDatabase = authenticatedFirestore(ownerId);
+    const strangerDatabase = authenticatedFirestore(strangerId);
+    const dispatch = doc(
+      ownerDatabase,
+      "locationPushDispatches",
+      ownerId,
     );
-    await assertFails(setDoc(reference, deviceData()));
-    await assertFails(deleteDoc(reference));
+
+    await assertFails(getDoc(dispatch));
+    await assertFails(setDoc(dispatch, { count: 1 }));
+    await assertFails(updateDoc(dispatch, { count: 2 }));
+    await assertSucceeds(deleteDoc(dispatch));
+    await assertFails(deleteDoc(doc(
+      strangerDatabase,
+      "locationPushDispatches",
+      ownerId,
+    )));
+
+    await assertFails(setDoc(doc(
+      ownerDatabase,
+      "notificationDispatches",
+      "client-created",
+    ), { target: ownerId }));
   });
 
-  test("validates token, environment, device ID, and exact fields", async (t) => {
-    const database = authenticatedFirestore(ownerId);
+  test("signed-out clients are rejected", async () => {
+    const database = testEnvironment.unauthenticatedContext().firestore();
 
-    await t.test("non-hex token", async () => {
-      await assertFails(
-        setDoc(deviceReference(database), deviceData({ token: "zz".repeat(32) })),
-      );
-    });
-
-    await t.test("short token", async () => {
-      await assertFails(
-        setDoc(deviceReference(database), deviceData({ token: "ab" })),
-      );
-    });
-
-    await t.test("unknown environment", async () => {
-      await assertFails(
-        setDoc(deviceReference(database), deviceData({ environment: "preview" })),
-      );
-    });
-
-    await t.test("invalid device ID", async () => {
-      await assertFails(
-        setDoc(deviceReference(database, ownerId, "phone"), deviceData()),
-      );
-    });
-
-    await t.test("unexpected field", async () => {
-      await assertFails(
-        setDoc(deviceReference(database), deviceData({ ownerId })),
-      );
-    });
-  });
-
-  test("requires Apple authentication and allows cleanup during deletion", async () => {
-    const passwordSession = testEnvironment
-      .authenticatedContext(ownerId, {
-        firebase: { sign_in_provider: "password" },
-      })
-      .firestore();
-    await assertFails(setDoc(deviceReference(passwordSession), deviceData()));
-
-    await seedDevice();
-    await testEnvironment.withSecurityRulesDisabled(async (context) => {
-      await setDoc(doc(context.firestore(), "users", ownerId), {
-        deletionRequestedAt: new Date(),
-      });
-    });
-
-    const database = authenticatedFirestore(ownerId);
-    const reference = deviceReference(database);
-    await assertFails(setDoc(reference, deviceData()));
-    await assertSucceeds(deleteDoc(reference));
-  });
-});
-
-describe("locationPushDispatches/{targetUserId}", () => {
-  async function seedDispatch() {
-    await testEnvironment.withSecurityRulesDisabled(async (context) => {
-      await setDoc(
-        doc(context.firestore(), "locationPushDispatches", ownerId),
-        {
-          requesterId: strangerId,
-          requestId: "52e973c7-f824-4e73-8ef0-f86cfeaf21e2",
-          lastSentAt: new Date(),
-        },
-      );
-    });
-  }
-
-  test("clients cannot read or write server quota state", async () => {
-    await seedDispatch();
-    const database = authenticatedFirestore(ownerId);
-    const reference = doc(database, "locationPushDispatches", ownerId);
-
-    await assertFails(getDoc(reference));
-    await assertFails(setDoc(reference, { lastSentAt: serverTimestamp() }));
-  });
-
-  test("only the target can delete quota state during account cleanup", async () => {
-    await seedDispatch();
-    await assertFails(
-      deleteDoc(
-        doc(
-          authenticatedFirestore(strangerId),
-          "locationPushDispatches",
-          ownerId,
-        ),
-      ),
-    );
-    await assertSucceeds(
-      deleteDoc(
-        doc(
-          authenticatedFirestore(ownerId),
-          "locationPushDispatches",
-          ownerId,
-        ),
-      ),
-    );
+    await assertFails(getDoc(deviceReference(database)));
+    await assertFails(setDoc(deviceReference(database), { token: "none" }));
   });
 });

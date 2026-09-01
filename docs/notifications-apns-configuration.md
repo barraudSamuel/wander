@@ -99,8 +99,8 @@ déduplication. Il est supprimé avec le compte cible.
 Les fonctions `notifyAcceptedFriendsOfEvent`,
 `notifyRecipientOfFriendRequest`,
 `notifyEventParticipantsOfAttendance`, `cleanupEventAttendances` et
-`cleanupReplacedEventAttendances` ainsi que `cleanupExpiredEvents` sont
-préparées pour la région
+`cleanupReplacedEventAttendances`, `cleanupRevokedFriendshipAttendances` ainsi
+que `cleanupExpiredEvents` sont préparées pour la région
 `asia-northeast3`. Avant le premier déploiement, confirmer que cette région est
 adaptée à l'emplacement Firestore du projet ; changer une région après
 déploiement crée une nouvelle fonction au lieu de déplacer l'existante.
@@ -120,6 +120,16 @@ l’événement et les amitiés avant l'envoi. L'identité de dispatch inclut
 relance du même événement ne duplique pas le push, tandis qu'un véritable
 départ suivi d'une nouvelle arrivée constitue une nouvelle participation.
 
+Une réponse négative explicite utilise le payload minimal parallèle
+`eventDeclineCreated`, avec les mêmes `eventOwnerId`, `eventId` et
+`publicationId`. Son auteur est exclu ; l'organisateur et les participants
+actuels encore amis avec lui reçoivent « Nouvelle réponse — Léa ne participera
+pas à Namsan. ». Le trigger relit le refus, vérifie que la participation
+positive déterministe est absente, puis contrôle le profil, l'événement et les
+amitiés. L'identité de dispatch inclut le timestamp serveur `respondedAt` afin
+qu'une reprise ne duplique pas le push et qu'une nouvelle réponse après un
+changement oui/non reste un événement distinct.
+
 Les événements sont stockés dans `users/{ownerId}/events/{eventId}` sans champ
 `expiresAt` ni TTL. La fonction planifiée `cleanupExpiredEvents`, déployée dans
 `asia-northeast3`, s’exécute toutes les heures et supprime les événements dont
@@ -127,9 +137,19 @@ Les événements sont stockés dans `users/{ownerId}/events/{eventId}` sans cham
 serveur : l’événement dispose donc de 12 heures supplémentaires.
 La suppression intervient en pratique entre 12 et 13 heures après la dernière
 publication. Une modification conserve `eventId` et `publicationId` : elle ne
-renvoie pas la notification de publication et les participations restent
-rattachées à l’événement. Seule la suppression, manuelle ou planifiée, nettoie
-toute la sous-collection `attendees` via `cleanupEventAttendances`.
+renvoie pas la notification de publication et les réponses restent rattachées
+à l’événement. Seule la suppression, manuelle ou planifiée, nettoie les
+sous-collections `attendees` et `declines` via `cleanupEventAttendances`.
+
+La suppression d'une amitié acceptée passe d'abord le document déterministe à
+`revoking` avec un `revokedAt` serveur. Ce statut coupe immédiatement les
+lectures sociales et empêche une suppression cliente prématurée. La fonction
+`cleanupRevokedFriendshipAttendances` retire ensuite en lots les inscriptions
+et refus où chacun des anciens amis est tour à tour organisateur et répondant.
+Elle ne supprime que les documents dont `joinedAt <= revokedAt` ou
+`respondedAt <= revokedAt`, afin qu'une exécution tardive ne touche pas une
+nouvelle réponse. Le tombstone n'est supprimé qu'après la réussite des deux
+directions ; les retries sont donc idempotents.
 
 La requête planifiée utilise l’index collection-group déclaré dans
 `firestore.indexes.json`. Cet index ne change pas avec la nouvelle durée : seul
@@ -168,8 +188,13 @@ hors du Sprint 4 et nécessite l’approbation indépendante du Sprint 5.
 - Toucher chaque notification et confirmer le recentrage sur le bon événement.
 - Avec trois comptes, faire rejoindre B puis C : A reçoit les deux arrivées, B
   reçoit celle de C, et aucun compte ne reçoit sa propre arrivée.
-- Confirmer que les participants voient les mêmes avatars dans la callout et
-  qu'un ami non participant ne voit pas la liste.
+- Confirmer que les participants et un ami accepté non participant voient les
+  mêmes avatars dans la fiche, tandis qu'une demande en attente, un non-ami ou
+  une relation révoquée ne peut pas lire la liste.
+- Révoquer B depuis A alors que B participe à une sortie de A et inversement.
+  Après le nettoyage backend, confirmer depuis A et un troisième ami C que B a
+  disparu du roster et que les totaux sont identiques. Vérifier qu'une nouvelle
+  inscription postérieure à `revokedAt` reste intacte.
 - Refaire les essais avec une demande en attente, un non-ami, une amitié
   révoquée, un refus de permission, une déconnexion et une suppression de
   compte.

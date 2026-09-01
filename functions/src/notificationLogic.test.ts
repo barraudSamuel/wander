@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import {
   acceptedRecipientIDs,
   buildEventAttendanceNotificationContent,
+  buildEventDeclineNotificationContent,
   buildEventNotificationContent,
   buildFriendRequestNotificationContent,
   deduplicateTargetsByToken,
@@ -10,6 +11,8 @@ import {
   eventAttendanceNotificationData,
   eventAttendanceRecipientIDs,
   eventDispatchID,
+  eventDeclineDispatchID,
+  eventDeclineNotificationData,
   eventNotificationData,
   friendRequestDispatchID,
   friendRequestNotificationData,
@@ -274,6 +277,70 @@ describe("event attendance notifications", () => {
         [],
       )
     );
+  });
+});
+
+describe("event decline notifications", () => {
+  const eventID = "52e973c7-f824-4e73-8ef0-f86cfeaf21e2";
+  const publicationID = "5e973c7d-f824-4e73-8ef0-f86cfeaf21e2";
+
+  test("uses the same owner and participant audience as an attendance", () => {
+    assert.deepEqual(
+      eventAttendanceRecipientIDs(
+        "owner",
+        "decliner",
+        publicationID,
+        ["decliner", "participant-a", "participant-b"],
+        [
+          { participantId: "participant-b", publicationId: publicationID },
+          { participantId: "participant-a", publicationId: publicationID },
+          { participantId: "decliner", publicationId: publicationID },
+        ],
+      ),
+      ["owner", "participant-a", "participant-b"],
+    );
+  });
+
+  test("builds named content and a minimal event route", () => {
+    assert.deepEqual(
+      buildEventDeclineNotificationContent("Léa", "Namsan"),
+      {
+        title: "Nouvelle réponse",
+        body: "Léa ne participera pas à Namsan.",
+      },
+    );
+    assert.deepEqual(
+      eventDeclineNotificationData("owner", eventID, publicationID),
+      {
+        type: "eventDeclineCreated",
+        eventOwnerId: "owner",
+        eventId: eventID,
+        publicationId: publicationID,
+      },
+    );
+  });
+
+  test("uses the server response timestamp as an idempotent identity", () => {
+    assert.equal(
+      eventDeclineDispatchID(
+        "owner",
+        eventID,
+        publicationID,
+        "decliner",
+        12,
+        34,
+      ),
+      `eventDecline__owner__${eventID}__${publicationID}__decliner__12_34`,
+    );
+    assert.throws(() => eventDeclineDispatchID(
+      "owner",
+      eventID,
+      publicationID,
+      "owner",
+      12,
+      34,
+    ));
+    assert.throws(() => buildEventDeclineNotificationContent("Léa ", "Namsan"));
   });
 });
 

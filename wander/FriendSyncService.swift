@@ -612,7 +612,7 @@ final class FriendSyncService: ObservableObject {
                     return "removed"
                 }
                 guard let data = snapshot.data(),
-                      data["status"] as? String == "accepted",
+                      let status = data["status"] as? String,
                       let participants = data["participants"] as? [String],
                       participants.count == 2,
                       participants.contains(currentUserID),
@@ -620,8 +620,21 @@ final class FriendSyncService: ObservableObject {
                     return "invalid"
                 }
 
-                transaction.deleteDocument(reference)
-                return "removed"
+                if status == "revoking" {
+                    return "revoking"
+                }
+                guard status == "accepted" else {
+                    return "invalid"
+                }
+
+                transaction.updateData(
+                    [
+                        "status": "revoking",
+                        "revokedAt": FieldValue.serverTimestamp()
+                    ],
+                    forDocument: reference
+                )
+                return "revoking"
             } catch {
                 errorPointer?.pointee = error as NSError
                 return nil
@@ -640,7 +653,8 @@ final class FriendSyncService: ObservableObject {
                         for: error,
                         fallback: "Impossible de supprimer cet ami."
                     )
-                } else if result as? String == "removed" {
+                } else if result as? String == "removed"
+                    || result as? String == "revoking" {
                     if self.friendshipRecords[friendship.pairID]?.status == "accepted" {
                         self.friendshipRecords.removeValue(forKey: friendship.pairID)
                         self.reconcileRelatedListeners()
@@ -737,6 +751,10 @@ final class FriendSyncService: ObservableObject {
         )
         try await deleteDocumentsInBatches(
             from: db.collectionGroup("attendees")
+                .whereField("participantId", isEqualTo: userID)
+        )
+        try await deleteDocumentsInBatches(
+            from: db.collectionGroup("declines")
                 .whereField("participantId", isEqualTo: userID)
         )
         try await deleteOwnedEvents(for: userID)
@@ -1725,6 +1743,9 @@ final class FriendSyncService: ObservableObject {
                             ? "already-sent"
                             : "already-received"
                     }
+                    if data["status"] as? String == "revoking" {
+                        return "revoking"
+                    }
                     return "already-exists"
                 }
 
@@ -1776,6 +1797,10 @@ final class FriendSyncService: ObservableObject {
                     completion(false)
                 case "already-received":
                     self.errorMessage = "Cette personne t’a déjà envoyé une demande."
+                    completion(false)
+                case "revoking":
+                    self.errorMessage =
+                        "La suppression de cette amitié est encore en cours."
                     completion(false)
                 default:
                     self.errorMessage = "Une demande existe déjà pour cet utilisateur."
@@ -2086,6 +2111,9 @@ final class FriendSyncService: ObservableObject {
             for event in snapshot.documents {
                 try await deleteDocumentsInBatches(
                     from: event.reference.collection("attendees")
+                )
+                try await deleteDocumentsInBatches(
+                    from: event.reference.collection("declines")
                 )
                 try await event.reference.delete()
             }

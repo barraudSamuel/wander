@@ -2,6 +2,7 @@ import { createPrivateKey, sign } from "node:crypto";
 import { connect } from "node:http2";
 import { initializeApp } from "firebase-admin/app";
 import {
+  CollectionReference,
   DocumentReference,
   FieldValue,
   Timestamp,
@@ -20,6 +21,12 @@ import {
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { expiredEventCutoff } from "./eventCleanupLogic.js";
 import {
+  AttendanceCleanupCandidate,
+  FriendshipCleanupDirection,
+  friendshipRevocation,
+  runFriendshipRevocationCleanup,
+} from "./friendshipCleanupLogic.js";
+import {
   LocationPushTarget,
   acceptedFriendshipMatches,
   isLocationPushRateLimited,
@@ -33,12 +40,15 @@ import {
   DeviceTargetCandidate,
   acceptedRecipientIDs,
   buildEventAttendanceNotificationContent,
+  buildEventDeclineNotificationContent,
   buildEventNotificationContent,
   buildFriendRequestNotificationContent,
   deduplicateTargetsByToken,
   eventAttendanceDispatchID,
   eventAttendanceNotificationData,
   eventAttendanceRecipientIDs,
+  eventDeclineDispatchID,
+  eventDeclineNotificationData,
   eventDispatchID,
   eventNotificationData,
   friendRequestDispatchID,
@@ -559,6 +569,180 @@ export const notifyEventParticipantsOfAttendance = onDocumentCreated(
   },
 );
 
+export const notifyEventParticipantsOfDecline = onDocumentCreated(
+  {
+    document: "users/{ownerId}/events/{eventId}/declines/{declineId}",
+    region: "asia-northeast3",
+    maxInstances: 10,
+  },
+  async (event) => {
+    const ownerID = event.params.ownerId;
+    const eventID = event.params.eventId;
+    const declineID = event.params.declineId;
+    const createdSnapshot = event.data;
+    const createdDecline = createdSnapshot?.data();
+    if (
+      !createdSnapshot ||
+      !createdDecline ||
+      !isValidUserID(ownerID) ||
+      !isValidEventID(eventID)
+    ) {
+      return;
+    }
+
+    const participantID = createdDecline.participantId;
+    const publicationID = createdDecline.publicationId;
+    const displayName = createdDecline.displayName;
+    const avatarID = createdDecline.avatarID;
+    const respondedAt = createdDecline.respondedAt;
+    if (
+      createdDecline.eventId !== eventID ||
+      typeof participantID !== "string" ||
+      !isValidUserID(participantID) ||
+      typeof publicationID !== "string" ||
+      !isValidPublicationID(publicationID) ||
+      declineID !== `${publicationID}__${participantID}` ||
+      typeof displayName !== "string" ||
+      typeof avatarID !== "string" ||
+      !(respondedAt instanceof Timestamp)
+    ) {
+      return;
+    }
+
+    const eventReference = database
+      .collection("users")
+      .doc(ownerID)
+      .collection("events")
+      .doc(eventID);
+    const currentAttendanceReference = eventReference
+      .collection("attendees")
+      .doc(declineID);
+    const profileReference = database.collection("users").doc(participantID);
+    const [
+      currentDeclineSnapshot,
+      currentAttendanceSnapshot,
+      eventSnapshot,
+      profileSnapshot,
+    ] = await Promise.all([
+      createdSnapshot.ref.get(),
+      currentAttendanceReference.get(),
+      eventReference.get(),
+      profileReference.get(),
+    ]);
+    const currentDecline = currentDeclineSnapshot.data();
+    const currentRespondedAt = currentDecline?.respondedAt;
+    const userEvent = eventSnapshot.data();
+    const profile = profileSnapshot.data();
+    if (
+      !currentDeclineSnapshot.exists ||
+      currentAttendanceSnapshot.exists ||
+      currentDecline?.eventId !== eventID ||
+      currentDecline?.participantId !== participantID ||
+      currentDecline?.publicationId !== publicationID ||
+      currentDecline?.displayName !== displayName ||
+      currentDecline?.avatarID !== avatarID ||
+      !(currentRespondedAt instanceof Timestamp) ||
+      !currentRespondedAt.isEqual(respondedAt) ||
+      !eventSnapshot.exists ||
+      userEvent?.eventId !== eventID ||
+      userEvent?.ownerId !== ownerID ||
+      participantID === ownerID ||
+      userEvent?.publicationId !== publicationID ||
+      typeof userEvent?.placeName !== "string" ||
+      !profileSnapshot.exists ||
+      profile?.displayName !== displayName ||
+      profile?.avatarID !== avatarID
+    ) {
+      return;
+    }
+
+    const friendshipSnapshot = await database
+      .collection("friendships")
+      .where("participants", "array-contains", ownerID)
+      .get();
+    const acceptedFriendIDs = acceptedRecipientIDs(
+      ownerID,
+      friendshipSnapshot.docs.map((document) => document.data()),
+    );
+    if (!acceptedFriendIDs.includes(participantID)) {
+      return;
+    }
+
+    const attendanceSnapshot = await eventReference
+      .collection("attendees")
+      .where("publicationId", "==", publicationID)
+      .get();
+    const validAttendances = attendanceSnapshot.docs.flatMap((document) => {
+      const attendance = document.data();
+      const candidateParticipantID = attendance.participantId;
+      if (
+        attendance.eventId !== eventID ||
+        typeof candidateParticipantID !== "string" ||
+        !isValidUserID(candidateParticipantID) ||
+        document.id !== `${publicationID}__${candidateParticipantID}` ||
+        attendance.publicationId !== publicationID
+      ) {
+        return [];
+      }
+      return [{
+        participantId: candidateParticipantID,
+        publicationId: publicationID,
+      }];
+    });
+
+    let content;
+    try {
+      content = buildEventDeclineNotificationContent(
+        displayName,
+        userEvent.placeName,
+      );
+    } catch {
+      logger.warn(
+        "Event decline notification skipped for invalid visible text.",
+      );
+      return;
+    }
+
+    const recipientIDs = eventAttendanceRecipientIDs(
+      ownerID,
+      participantID,
+      publicationID,
+      acceptedFriendIDs,
+      validAttendances,
+    );
+    const data = eventDeclineNotificationData(
+      ownerID,
+      eventID,
+      publicationID,
+    );
+    const dispatchReference = database
+      .collection("notificationDispatches")
+      .doc(eventDeclineDispatchID(
+        ownerID,
+        eventID,
+        publicationID,
+        participantID,
+        respondedAt.seconds,
+        respondedAt.nanoseconds,
+      ));
+
+    await dispatchNotification(
+      dispatchReference,
+      recipientIDs,
+      content,
+      data,
+      {
+        type: "eventDeclineCreated",
+        eventId: eventID,
+        ownerId: ownerID,
+        publicationId: publicationID,
+        participantId: participantID,
+        declineRespondedAt: respondedAt,
+      },
+    );
+  },
+);
+
 export const cleanupEventAttendances = onDocumentDeleted(
   {
     document: "users/{ownerId}/events/{eventId}",
@@ -571,7 +755,7 @@ export const cleanupEventAttendances = onDocumentDeleted(
       return;
     }
 
-    await deleteEventAttendances(deletedEvent.ref);
+    await deleteEventResponses(deletedEvent.ref);
   },
 );
 
@@ -633,24 +817,126 @@ export const cleanupReplacedEventAttendances = onDocumentUpdated(
       return;
     }
 
-    await deleteEventAttendances(
+    await deleteEventResponses(
       change.after.ref,
       beforePublicationID,
     );
   },
 );
 
-async function deleteEventAttendances(
+export const cleanupRevokedFriendshipAttendances = onDocumentUpdated(
+  {
+    document: "friendships/{pairId}",
+    region: "asia-northeast3",
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const change = event.data;
+    if (!change) {
+      return;
+    }
+
+    const revocation = friendshipRevocation(
+      change.before.data(),
+      change.after.data(),
+    );
+    if (!revocation) {
+      return;
+    }
+
+    const deletedAttendanceCount = await runFriendshipRevocationCleanup(
+      revocation,
+      {
+        loadAttendances: loadRevokedFriendshipAttendances,
+        deleteAttendances: async (references) => {
+          const batch = database.batch();
+          for (const reference of references) {
+            batch.delete(reference);
+          }
+          await batch.commit();
+        },
+        finalizeRevocation: async (completedRevocation) => {
+          await database.runTransaction(async (transaction) => {
+            const snapshot = await transaction.get(change.after.ref);
+            const currentRevocation = snapshot.exists
+              ? friendshipRevocation(change.before.data(), snapshot.data())
+              : undefined;
+            if (
+              currentRevocation
+              && currentRevocation.participantIDs[0]
+                === completedRevocation.participantIDs[0]
+              && currentRevocation.participantIDs[1]
+                === completedRevocation.participantIDs[1]
+              && currentRevocation.revokedAtMilliseconds
+                === completedRevocation.revokedAtMilliseconds
+            ) {
+              transaction.delete(change.after.ref);
+            }
+          });
+        },
+      },
+      maximumBatchSize,
+    );
+
+    logger.info("Revoked friendship attendance cleanup completed.", {
+      pairID: event.params.pairId,
+      deletedAttendanceCount,
+    });
+  },
+);
+
+async function loadRevokedFriendshipAttendances(
+  direction: FriendshipCleanupDirection,
+): Promise<readonly AttendanceCleanupCandidate<DocumentReference>[]> {
+  const events = await database
+    .collection("users")
+    .doc(direction.ownerID)
+    .collection("events")
+    .get();
+  const candidates: AttendanceCleanupCandidate<DocumentReference>[] = [];
+
+  for (const event of events.docs) {
+    for (const collectionName of ["attendees", "declines"] as const) {
+      const responses = await event.ref
+        .collection(collectionName)
+        .where("participantId", "==", direction.participantID)
+        .get();
+      for (const response of responses.docs) {
+        candidates.push({
+          reference: response.ref,
+          eventID: event.id,
+          data: response.data(),
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+async function deleteEventResponses(
   eventReference: DocumentReference,
   publicationID?: string,
 ): Promise<void> {
-  const attendees = eventReference.collection("attendees");
-  const attendanceQuery = publicationID
-    ? attendees.where("publicationId", "==", publicationID)
-    : attendees;
+  for (const collectionName of ["attendees", "declines"] as const) {
+    await deleteEventResponseCollection(
+      eventReference.collection(collectionName),
+      publicationID,
+    );
+  }
+}
+
+async function deleteEventResponseCollection(
+  responses: CollectionReference,
+  publicationID?: string,
+): Promise<void> {
+  const responseQuery = publicationID
+    ? responses.where("publicationId", "==", publicationID)
+    : responses;
 
   while (true) {
-    const snapshot = await attendanceQuery.limit(maximumBatchSize).get();
+    const snapshot = await responseQuery.limit(maximumBatchSize).get();
     if (snapshot.empty) {
       return;
     }

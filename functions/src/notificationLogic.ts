@@ -222,6 +222,64 @@ export function eventAttendanceDispatchID(
   return `eventAttendance__${ownerID}__${eventID}__${publicationID}__${participantID}__${joinedAtSeconds}_${joinedAtNanoseconds}`;
 }
 
+export function buildEventDeclineNotificationContent(
+  displayName: string,
+  placeName: string,
+): NotificationContent {
+  const normalizedDisplayName = normalizedRequiredText(displayName, 50);
+  const normalizedPlaceName = normalizedRequiredText(placeName, 120);
+  return {
+    title: "Nouvelle réponse",
+    body: `${normalizedDisplayName} ne participera pas à ${normalizedPlaceName}.`,
+  };
+}
+
+export function eventDeclineNotificationData(
+  ownerID: string,
+  eventID: string,
+  publicationID: string,
+): Record<string, string> {
+  if (
+    !isValidUserID(ownerID) ||
+    !isValidEventID(eventID) ||
+    !isValidPublicationID(publicationID)
+  ) {
+    throw new Error("Invalid event decline notification route");
+  }
+
+  return {
+    type: "eventDeclineCreated",
+    eventOwnerId: ownerID,
+    eventId: eventID,
+    publicationId: publicationID,
+  };
+}
+
+export function eventDeclineDispatchID(
+  ownerID: string,
+  eventID: string,
+  publicationID: string,
+  participantID: string,
+  respondedAtSeconds: number,
+  respondedAtNanoseconds: number,
+): string {
+  if (
+    !isValidUserID(ownerID) ||
+    !isValidEventID(eventID) ||
+    !isValidPublicationID(publicationID) ||
+    !isValidUserID(participantID) ||
+    ownerID === participantID ||
+    !Number.isSafeInteger(respondedAtSeconds) ||
+    !Number.isInteger(respondedAtNanoseconds) ||
+    respondedAtNanoseconds < 0 ||
+    respondedAtNanoseconds > 999_999_999
+  ) {
+    throw new Error("Invalid event decline dispatch identity");
+  }
+
+  return `eventDecline__${ownerID}__${eventID}__${publicationID}__${participantID}__${respondedAtSeconds}_${respondedAtNanoseconds}`;
+}
+
 export function friendRequestNotificationData(
   pairID: string,
 ): Record<string, string> {

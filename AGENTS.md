@@ -8,7 +8,13 @@
 
 - `open wander.xcodeproj`: open and run the `wander` scheme in Xcode.
 - `xcodebuild -project wander.xcodeproj -scheme wander -configuration Debug -destination 'generic/platform=iOS Simulator' build`: perform a CLI debug build.
-- `firebase deploy --only firestore:rules`: publish reviewed rules to the selected Firebase project.
+- The project-local Firebase CLI is installed in `firebase-tests`. From the
+  repository root, deploy reviewed Firestore rules with:
+
+  ```bash
+  cd firebase-tests
+  npx firebase --config ../firebase.json --project wander-1954f deploy --only firestore:rules
+  ```
 
 Xcode resolves Firebase and H3Swift with Swift Package Manager.
 
