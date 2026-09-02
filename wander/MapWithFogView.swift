@@ -128,6 +128,11 @@ fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
     var profileColorHex = ""
     var isCurrentUser = false
     var category = OutingCategory.other
+    var participantAvatarIDs: [String] = []
+
+    var participantCount: Int {
+        participantAvatarIDs.count
+    }
 }
 
 fileprivate final class DraftOutingAnnotation: MKPointAnnotation {}
@@ -172,14 +177,19 @@ private final class OutingPlanAnnotationView: MKAnnotationView {
         badgeView.configure(
             category: annotation.category,
             profileColorHex: annotation.profileColorHex,
-            isCurrentUser: annotation.isCurrentUser
+            isCurrentUser: annotation.isCurrentUser,
+            participantAvatarIDs: annotation.participantAvatarIDs
         )
         applySocialClusterPresentation()
 
         let placeName = annotation.title ?? "Lieu sans nom"
-        accessibilityLabel = annotation.isCurrentUser
+        let outingLabel = annotation.isCurrentUser
             ? "Votre sortie prévue, \(placeName)"
             : "Sortie prévue, \(placeName)"
+        accessibilityLabel = outingLabel
+            + Self.participantAccessibilitySuffix(
+                count: annotation.participantCount
+            )
         accessibilityHint = "Touchez deux fois pour afficher la fiche de la sortie."
     }
 
@@ -230,6 +240,13 @@ private final class OutingPlanAnnotationView: MKAnnotationView {
             width: controlSize,
             height: controlSize
         )
+    }
+
+    private static func participantAccessibilitySuffix(count: Int) -> String {
+        guard count > 0 else { return ", participants indisponibles" }
+        return count == 1
+            ? ", organisateur seul"
+            : ", \(count) personnes participent"
     }
 }
 
@@ -1677,6 +1694,10 @@ struct MapWithFogView: UIViewRepresentable {
             annotation.profileColorHex = presentation.profileColorHex
             annotation.isCurrentUser = presentation.isCurrentUser
             annotation.category = plan.category
+            annotation.participantAvatarIDs = presentation.rosterState
+                == .available
+                ? presentation.visiblePeople.map(\.avatarID)
+                : []
 
             if !isNewAnnotation,
                let annotationView = mapView.view(for: annotation)
@@ -2642,7 +2663,8 @@ struct MapWithFogView: UIViewRepresentable {
                                 ?? "Lieu sans nom",
                             category: outing.category,
                             profileColorHex: outing.profileColorHex,
-                            isCurrentUser: outing.isCurrentUser
+                            isCurrentUser: outing.isCurrentUser,
+                            participantAvatarIDs: outing.participantAvatarIDs
                         )
                     )
                 }
@@ -3062,6 +3084,7 @@ struct MapWithFogView: UIViewRepresentable {
                         category: annotation.category,
                         profileColorHex: annotation.profileColorHex,
                         isCurrentUser: annotation.isCurrentUser,
+                        participantAvatarIDs: annotation.participantAvatarIDs,
                         directionName: placement.directionName,
                         pointerAngle: placement.pointerAngle
                     )

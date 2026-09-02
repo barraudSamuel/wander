@@ -429,7 +429,13 @@ final class MapOffscreenIndicatorContainerView: UIView {
 }
 
 final class OutingCategoryBadgeView: UIView {
+    private static let participantSize: CGFloat = 18
+    private static let participantStep: CGFloat = participantSize / 2
+    private static let maximumVisibleAvatarCount = 3
+
+    private let categoryBackgroundView = UIView()
     private let symbolImageView = UIImageView()
+    private var participantViews: [UIView] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -444,43 +450,118 @@ final class OutingCategoryBadgeView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        layer.cornerRadius = min(bounds.width, bounds.height) / 2
-        layer.borderColor = UIColor.systemBackground
+        categoryBackgroundView.frame = bounds
+        categoryBackgroundView.layer.cornerRadius = min(
+            bounds.width,
+            bounds.height
+        ) / 2
+        categoryBackgroundView.layer.borderColor = UIColor.systemBackground
             .resolvedColor(with: traitCollection)
             .cgColor
         let symbolInset = max(5, min(bounds.width, bounds.height) * 0.25)
-        symbolImageView.frame = bounds.insetBy(
+        symbolImageView.frame = categoryBackgroundView.bounds.insetBy(
             dx: symbolInset,
             dy: symbolInset
         )
+
+        for (index, participantView) in participantViews.enumerated() {
+            let width: CGFloat
+            if let countLabel = participantView as? UILabel {
+                countLabel.sizeToFit()
+                width = max(
+                    Self.participantSize,
+                    countLabel.bounds.width + 8
+                )
+            } else {
+                width = Self.participantSize
+            }
+            participantView.frame = CGRect(
+                x: bounds.maxX - width + 4,
+                y: bounds.minY - 4
+                    - CGFloat(participantViews.count - 1 - index)
+                        * Self.participantStep,
+                width: width,
+                height: Self.participantSize
+            )
+            participantView.layer.cornerRadius = Self.participantSize / 2
+            participantView.layer.borderColor = UIColor.systemBackground
+                .resolvedColor(with: traitCollection)
+                .cgColor
+            bringSubviewToFront(participantView)
+        }
     }
 
     func configure(
         category: OutingCategory,
         profileColorHex: String,
-        isCurrentUser: Bool
+        isCurrentUser: Bool,
+        participantAvatarIDs: [String] = []
     ) {
         let backgroundColor = ProfileColor.uiColor(hex: profileColorHex)
-        self.backgroundColor = backgroundColor
-        layer.borderWidth = isCurrentUser ? 3 : 2
+        categoryBackgroundView.backgroundColor = backgroundColor
+        categoryBackgroundView.layer.borderWidth = isCurrentUser ? 3 : 2
         symbolImageView.image = UIImage(systemName: category.systemImageName)
         symbolImageView.tintColor = ProfileColor.contrastingUIColor(
             for: backgroundColor
         )
+
+        rebuildParticipantViews(avatarIDs: participantAvatarIDs)
         setNeedsLayout()
     }
 
     private func configureView() {
-        clipsToBounds = true
+        clipsToBounds = false
+        backgroundColor = .clear
         isUserInteractionEnabled = false
         isAccessibilityElement = false
+
+        categoryBackgroundView.clipsToBounds = true
+        categoryBackgroundView.isUserInteractionEnabled = false
+        categoryBackgroundView.isAccessibilityElement = false
+        addSubview(categoryBackgroundView)
 
         symbolImageView.contentMode = .scaleAspectFit
         symbolImageView.isAccessibilityElement = false
         symbolImageView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(
             weight: .semibold
         )
-        addSubview(symbolImageView)
+        categoryBackgroundView.addSubview(symbolImageView)
+    }
+
+    private func rebuildParticipantViews(avatarIDs: [String]) {
+        participantViews.forEach { $0.removeFromSuperview() }
+        participantViews.removeAll()
+
+        for avatarID in avatarIDs.prefix(Self.maximumVisibleAvatarCount) {
+            let imageView = UIImageView()
+            let avatar = ProfileAvatar(rawValue: avatarID)
+                ?? ProfileAvatar.cyclopsHorns
+            imageView.image = UIImage(named: avatar.assetName)
+                ?? UIImage(systemName: "person.crop.circle.fill")
+            imageView.backgroundColor = .secondarySystemBackground
+            imageView.contentMode = .scaleAspectFill
+            imageView.clipsToBounds = true
+            imageView.layer.borderWidth = 1
+            imageView.isAccessibilityElement = false
+            addSubview(imageView)
+            participantViews.append(imageView)
+        }
+
+        let remainingCount = avatarIDs.count
+            - Self.maximumVisibleAvatarCount
+        guard remainingCount > 0 else { return }
+
+        let countLabel = UILabel()
+        countLabel.text = "+\(remainingCount)"
+        countLabel.font = .systemFont(ofSize: 10, weight: .bold)
+        countLabel.textAlignment = .center
+        countLabel.textColor = .label
+        countLabel.backgroundColor = .systemBackground
+        countLabel.clipsToBounds = true
+        countLabel.layer.borderWidth = 1
+        countLabel.isAccessibilityElement = false
+        addSubview(countLabel)
+        participantViews.append(countLabel)
     }
 }
 
@@ -702,6 +783,7 @@ final class OutingOffscreenIndicatorView: UIControl {
         category: OutingCategory,
         profileColorHex: String,
         isCurrentUser: Bool,
+        participantAvatarIDs: [String],
         directionName: String,
         pointerAngle: CGFloat
     ) {
@@ -714,12 +796,22 @@ final class OutingOffscreenIndicatorView: UIControl {
         badgeView.configure(
             category: category,
             profileColorHex: profileColorHex,
-            isCurrentUser: isCurrentUser
+            isCurrentUser: isCurrentUser,
+            participantAvatarIDs: participantAvatarIDs
         )
         accessibilityLabel = isCurrentUser
             ? "Votre sortie prévue, \(placeName), hors de la carte, direction \(directionName)"
             : "Sortie prévue, \(placeName), hors de la carte, direction \(directionName)"
-        accessibilityValue = category.title
+        let participantText: String
+        let participantCount = participantAvatarIDs.count
+        if participantCount == 1 {
+            participantText = "Organisateur seul"
+        } else if participantCount > 1 {
+            participantText = "\(participantCount) personnes participent"
+        } else {
+            participantText = "Participants indisponibles"
+        }
+        accessibilityValue = "\(category.title), \(participantText)"
         accessibilityHint =
             "Touchez deux fois pour centrer et afficher la fiche de cette sortie"
     }

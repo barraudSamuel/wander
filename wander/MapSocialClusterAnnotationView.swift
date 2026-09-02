@@ -26,6 +26,11 @@ struct MapSocialClusterOutingPresentation: Equatable {
     let category: OutingCategory
     let profileColorHex: String
     let isCurrentUser: Bool
+    let participantAvatarIDs: [String]
+
+    var participantCount: Int {
+        participantAvatarIDs.count
+    }
 }
 
 struct MapSocialClusterPresentation: Equatable {
@@ -446,7 +451,8 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
             badgeView.configure(
                 category: outing.category,
                 profileColorHex: outing.profileColorHex,
-                isCurrentUser: outing.isCurrentUser
+                isCurrentUser: outing.isCurrentUser,
+                participantAvatarIDs: outing.participantAvatarIDs
             )
             return badgeView
         }
@@ -578,15 +584,24 @@ private final class MapSocialClusterRowControl: UIControl {
         case .outing(let outing):
             memberID = .outing(outing.id)
             titleLabel.text = outing.placeName
-            subtitleLabel.text = outing.isCurrentUser
+            let outingDescription = outing.isCurrentUser
                 ? "Votre sortie · \(outing.category.title)"
                 : "Sortie · \(outing.category.title)"
+            if outing.participantCount == 1 {
+                subtitleLabel.text = outingDescription + " · Organisateur seul"
+            } else if outing.participantCount > 1 {
+                subtitleLabel.text = outingDescription
+                    + " · \(outing.participantCount) personnes"
+            } else {
+                subtitleLabel.text = outingDescription
+            }
 
             let badgeView = OutingCategoryBadgeView()
             badgeView.configure(
                 category: outing.category,
                 profileColorHex: outing.profileColorHex,
-                isCurrentUser: outing.isCurrentUser
+                isCurrentUser: outing.isCurrentUser,
+                participantAvatarIDs: outing.participantAvatarIDs
             )
             iconView = badgeView
         }
