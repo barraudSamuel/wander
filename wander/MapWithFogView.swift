@@ -1381,6 +1381,9 @@ struct MapWithFogView: UIViewRepresentable {
             "Maintenez un doigt sur un endroit vide pour créer un événement."
 
         context.coordinator.installLongPressRecognizer(on: mapView)
+        context.coordinator.installImmediateSocialAnnotationRecognizer(
+            on: mapView
+        )
         context.coordinator.installMapOffscreenIndicatorContainer(
             on: mapView
         )
@@ -1501,6 +1504,7 @@ struct MapWithFogView: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: MKMapView, coordinator: Coordinator) {
         coordinator.removeLongPressRecognizer(from: uiView)
+        coordinator.removeImmediateSocialAnnotationRecognizer(from: uiView)
         coordinator.removeMapOffscreenIndicatorContainer()
         coordinator.tearDownSocialCluster()
     }
@@ -2049,6 +2053,13 @@ struct MapWithFogView: UIViewRepresentable {
         var onDeselectOutingPlan: (String) -> Void
         var onCreateEvent: (CLLocationCoordinate2D) -> Void
         private weak var longPressRecognizer: UILongPressGestureRecognizer?
+        private weak var immediateSocialAnnotationRecognizer:
+            UILongPressGestureRecognizer?
+        private weak var pressedSocialAnnotationView: MKAnnotationView?
+        private var pressedSocialAnnotationOriginalAlpha: CGFloat?
+        private var isPressingMapBackground = false
+        private var suppressedNativeSelectionAnnotationID: ObjectIdentifier?
+        private var suppressedNativeSelectionResetWorkItem: DispatchWorkItem?
         private weak var mapOffscreenIndicatorContainer:
             MapOffscreenIndicatorContainerView?
         private var friendOffscreenIndicatorViews:
@@ -2155,6 +2166,34 @@ struct MapWithFogView: UIViewRepresentable {
 
         func setEventCreationEnabled(_ isEnabled: Bool) {
             longPressRecognizer?.isEnabled = isEnabled
+        }
+
+        func installImmediateSocialAnnotationRecognizer(on mapView: MKMapView) {
+            guard immediateSocialAnnotationRecognizer == nil else { return }
+
+            let recognizer = UILongPressGestureRecognizer(
+                target: self,
+                action: #selector(handleImmediateSocialAnnotationPress(_:))
+            )
+            recognizer.minimumPressDuration = 0
+            recognizer.allowableMovement = 10
+            recognizer.numberOfTouchesRequired = 1
+            recognizer.cancelsTouchesInView = false
+            recognizer.delaysTouchesBegan = false
+            recognizer.delaysTouchesEnded = false
+            recognizer.delegate = self
+            mapView.addGestureRecognizer(recognizer)
+            immediateSocialAnnotationRecognizer = recognizer
+        }
+
+        func removeImmediateSocialAnnotationRecognizer(from mapView: MKMapView) {
+            guard let immediateSocialAnnotationRecognizer else { return }
+            restorePressedSocialAnnotationAppearance(animated: false)
+            suppressedNativeSelectionResetWorkItem?.cancel()
+            suppressedNativeSelectionResetWorkItem = nil
+            suppressedNativeSelectionAnnotationID = nil
+            mapView.removeGestureRecognizer(immediateSocialAnnotationRecognizer)
+            self.immediateSocialAnnotationRecognizer = nil
         }
 
         func isFocusedSocialAnnotation(
@@ -3308,6 +3347,14 @@ struct MapWithFogView: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldReceive touch: UITouch
         ) -> Bool {
+            if gestureRecognizer === immediateSocialAnnotationRecognizer {
+                return immediateSocialPressTarget(from: touch.view) != nil
+            }
+
+            guard gestureRecognizer === longPressRecognizer else {
+                return true
+            }
+
             var touchedView = touch.view
 
             while let view = touchedView {
@@ -3321,6 +3368,202 @@ struct MapWithFogView: UIViewRepresentable {
             }
 
             eventCreationFeedback.prepare()
+            return true
+        }
+
+        private enum ImmediateSocialPressTarget {
+            case annotation(MKAnnotationView)
+            case mapBackground
+        }
+
+        private func immediateSocialPressTarget(
+            from touchedView: UIView?
+        ) -> ImmediateSocialPressTarget? {
+            var currentView = touchedView
+
+            while let view = currentView {
+                if view is UIControl {
+                    return nil
+                }
+                if let annotationView = view as? MKAnnotationView {
+                    return supportsImmediateActivation(annotationView)
+                        ? .annotation(annotationView)
+                        : nil
+                }
+                if view.accessibilityTraits.contains(.button) {
+                    return nil
+                }
+                if view === immediateSocialAnnotationRecognizer?.view {
+                    return .mapBackground
+                }
+                currentView = view.superview
+            }
+
+            return nil
+        }
+
+        private func supportsImmediateActivation(
+            _ annotationView: MKAnnotationView
+        ) -> Bool {
+            if annotationView.annotation is UserLocationAnnotation
+                || annotationView.annotation is FriendLocationAnnotation
+                || annotationView.annotation is OutingPlanAnnotation {
+                return true
+            }
+            guard annotationView.annotation
+                    is MapSocialProximityGroupAnnotation,
+                  let clusterView = annotationView
+                    as? MapSocialClusterAnnotationView else {
+                return false
+            }
+            return !clusterView.isExpanded
+        }
+
+        @objc private func handleImmediateSocialAnnotationPress(
+            _ recognizer: UILongPressGestureRecognizer
+        ) {
+            guard let mapView = recognizer.view as? MKMapView else { return }
+
+            switch recognizer.state {
+            case .began:
+                let touchedView = mapView.hitTest(
+                    recognizer.location(in: mapView),
+                    with: nil
+                )
+                guard let pressTarget = immediateSocialPressTarget(
+                    from: touchedView
+                ) else {
+                    return
+                }
+
+                switch pressTarget {
+                case .annotation(let annotationView):
+                    pressedSocialAnnotationView = annotationView
+                    pressedSocialAnnotationOriginalAlpha = annotationView.alpha
+                    UIView.animate(
+                        withDuration: 0.06,
+                        delay: 0,
+                        options: [.beginFromCurrentState, .allowUserInteraction]
+                    ) {
+                        annotationView.alpha *= 0.72
+                    }
+                case .mapBackground:
+                    isPressingMapBackground = true
+                }
+
+            case .ended:
+                if isPressingMapBackground {
+                    isPressingMapBackground = false
+                    dismissSelectedSocialAnnotations(on: mapView)
+                    return
+                }
+
+                guard let annotationView = pressedSocialAnnotationView,
+                      let annotation = annotationView.annotation,
+                      mapView.view(for: annotation) === annotationView else {
+                    restorePressedSocialAnnotationAppearance(animated: true)
+                    return
+                }
+
+                let point = recognizer.location(in: annotationView)
+                guard annotationView.point(inside: point, with: nil) else {
+                    restorePressedSocialAnnotationAppearance(animated: true)
+                    return
+                }
+
+                restorePressedSocialAnnotationAppearance(animated: true)
+                guard !mapView.selectedAnnotations.contains(where: {
+                    ($0 as AnyObject) === (annotation as AnyObject)
+                }) else {
+                    return
+                }
+                activateSocialAnnotation(
+                    annotation,
+                    view: annotationView,
+                    on: mapView
+                )
+                suppressNextNativeSelection(for: annotation)
+                mapView.selectAnnotation(annotation, animated: false)
+
+            case .cancelled, .failed:
+                restorePressedSocialAnnotationAppearance(animated: true)
+
+            default:
+                break
+            }
+        }
+
+        private func restorePressedSocialAnnotationAppearance(animated: Bool) {
+            isPressingMapBackground = false
+            guard let annotationView = pressedSocialAnnotationView,
+                  let originalAlpha = pressedSocialAnnotationOriginalAlpha else {
+                pressedSocialAnnotationView = nil
+                pressedSocialAnnotationOriginalAlpha = nil
+                return
+            }
+
+            pressedSocialAnnotationView = nil
+            pressedSocialAnnotationOriginalAlpha = nil
+            let changes = {
+                annotationView.alpha = originalAlpha
+            }
+            if animated {
+                UIView.animate(
+                    withDuration: 0.08,
+                    delay: 0,
+                    options: [.beginFromCurrentState, .allowUserInteraction],
+                    animations: changes
+                )
+            } else {
+                changes()
+            }
+        }
+
+        private func dismissSelectedSocialAnnotations(on mapView: MKMapView) {
+            let selectedSocialAnnotations = mapView.selectedAnnotations.filter {
+                $0 is UserLocationAnnotation
+                    || $0 is FriendLocationAnnotation
+                    || $0 is OutingPlanAnnotation
+                    || $0 is MapSocialProximityGroupAnnotation
+            }
+
+            for annotation in selectedSocialAnnotations {
+                mapView.deselectAnnotation(annotation, animated: false)
+            }
+        }
+
+        private func suppressNextNativeSelection(
+            for annotation: any MKAnnotation
+        ) {
+            suppressedNativeSelectionResetWorkItem?.cancel()
+            let annotationID = ObjectIdentifier(annotation as AnyObject)
+            suppressedNativeSelectionAnnotationID = annotationID
+
+            let workItem = DispatchWorkItem { [weak self] in
+                guard self?.suppressedNativeSelectionAnnotationID
+                        == annotationID else {
+                    return
+                }
+                self?.suppressedNativeSelectionAnnotationID = nil
+                self?.suppressedNativeSelectionResetWorkItem = nil
+            }
+            suppressedNativeSelectionResetWorkItem = workItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + 1,
+                execute: workItem
+            )
+        }
+
+        private func consumeSuppressedNativeSelection(
+            for annotation: any MKAnnotation
+        ) -> Bool {
+            guard suppressedNativeSelectionAnnotationID
+                    == ObjectIdentifier(annotation as AnyObject) else {
+                return false
+            }
+            suppressedNativeSelectionResetWorkItem?.cancel()
+            suppressedNativeSelectionResetWorkItem = nil
+            suppressedNativeSelectionAnnotationID = nil
             return true
         }
 
@@ -3544,13 +3787,25 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            if let cluster = view.annotation
+            guard let annotation = view.annotation else { return }
+            if consumeSuppressedNativeSelection(for: annotation) {
+                return
+            }
+            activateSocialAnnotation(annotation, view: view, on: mapView)
+        }
+
+        private func activateSocialAnnotation(
+            _ selectedAnnotation: any MKAnnotation,
+            view: MKAnnotationView,
+            on mapView: MKMapView
+        ) {
+            if let cluster = selectedAnnotation
                 as? MapSocialProximityGroupAnnotation {
                 expandSocialCluster(cluster, on: mapView)
                 return
             }
 
-            if let userAnnotation = view.annotation
+            if let userAnnotation = selectedAnnotation
                 as? UserLocationAnnotation {
                 if pendingSocialSelection == .currentUser {
                     pendingSocialSelection = nil
@@ -3575,7 +3830,8 @@ struct MapWithFogView: UIViewRepresentable {
                 return
             }
 
-            if let friendAnnotation = view.annotation as? FriendLocationAnnotation {
+            if let friendAnnotation = selectedAnnotation
+                as? FriendLocationAnnotation {
                 if pendingSocialSelection == .friend(friendAnnotation.userID) {
                     pendingSocialSelection = nil
                 }
@@ -3600,7 +3856,8 @@ struct MapWithFogView: UIViewRepresentable {
                 return
             }
 
-            guard let annotation = view.annotation as? OutingPlanAnnotation else {
+            guard let annotation = selectedAnnotation
+                as? OutingPlanAnnotation else {
                 return
             }
 

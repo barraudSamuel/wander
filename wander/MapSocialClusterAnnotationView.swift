@@ -196,6 +196,10 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
         if expanded {
             expandedContainer.isHidden = false
             expandedContainer.accessibilityElementsHidden = false
+            expandedContainer.alpha = 1
+            for row in expandedRows {
+                row.alpha = 1
+            }
             isAccessibilityElement = true
             accessibilityElements = nil
         } else {
@@ -237,7 +241,7 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
 
         if animated && !UIAccessibility.isReduceMotionEnabled {
             UIView.animate(
-                withDuration: 0.36,
+                withDuration: 0.18,
                 delay: 0,
                 usingSpringWithDamping: 0.84,
                 initialSpringVelocity: 0,

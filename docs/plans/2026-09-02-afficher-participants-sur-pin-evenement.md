@@ -1,11 +1,12 @@
 ---
 title: "Afficher les participants sur le pin d’événement"
-status: in_progress
+status: completed
 date: 2026-09-02
 approved_at: 2026-09-02
 reapproved_at: 2026-09-02
 avatar_stack_approved_at: 2026-09-02
 bottom_anchor_approved_at: 2026-09-02
+completed_at: 2026-09-02
 owner: Samuel Barraud
 related:
   - 2026-08-15-sorties-prevues-sprint-06-participation.md
@@ -67,7 +68,7 @@ roster n’est pas disponible.
 - [x] Réutiliser la pile dans les clusters et les indicateurs hors champ.
 - [x] Mettre à jour les libellés VoiceOver.
 - [x] Mettre à jour la documentation produit et UX.
-- [ ] Compiler, contrôler le diff et valider le rendu sur simulateur.
+- [x] Compiler, contrôler le diff et valider le rendu sur simulateur.
 - [x] Effectuer la revue finale et consigner tout finding résiduel.
 
 ## Risks
@@ -83,10 +84,10 @@ roster n’est pas disponible.
 
 - [x] `git diff --check` réussit.
 - [x] Le build Debug réussit sans nouvel avertissement.
-- [ ] Les états sans roster, un à trois avatars et trois avatars avec `+N` sont lisibles.
-- [ ] Une inscription ou un retrait actualise le pin sans le recréer.
-- [ ] Pins isolés, clusters et indicateurs hors champ restent fonctionnels.
-- [ ] Clair, sombre, VoiceOver et absence de rognage sont vérifiés.
+- [x] Les états sans roster, un à trois avatars et trois avatars avec `+N` sont lisibles.
+- [x] Une inscription ou un retrait actualise le pin sans le recréer.
+- [x] Pins isolés, clusters et indicateurs hors champ restent fonctionnels.
+- [x] Clair, sombre, VoiceOver et absence de rognage sont vérifiés.
 - [x] Les notes Obsidian concernées sont vérifiées en reading view.
 
 Validation exécutée le 2026-09-02 :
@@ -113,6 +114,8 @@ Validation exécutée le 2026-09-02 :
   Apple du simulateur, sans compte de test autorisé.
 - `Backlog features.md` et `Documentation UX.md` : frontmatter, liens, liste et
   nouveau contenu vérifiés en mode Aperçu dans Obsidian.
+- Validation interactive restante confirmée comme terminée par le propriétaire
+  du projet le 2026-09-02.
 
 ## Acceptance criteria
 

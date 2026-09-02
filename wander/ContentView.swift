@@ -464,7 +464,7 @@ struct ContentView: View {
                     .transition(
                         accessibilityReduceMotion
                             ? .identity
-                            : .move(edge: .top).combined(with: .opacity)
+                            : .scale(scale: 0.96, anchor: .top)
                     )
                     .zIndex(1)
                 } else {
@@ -486,7 +486,7 @@ struct ContentView: View {
             .animation(
                 accessibilityReduceMotion
                     ? nil
-                    : .spring(response: 0.42, dampingFraction: 0.86),
+                    : .spring(response: 0.18, dampingFraction: 0.9),
                 value: selectedOutingPlanEventID
             )
             .safeAreaInset(edge: .bottom, spacing: 0) {
