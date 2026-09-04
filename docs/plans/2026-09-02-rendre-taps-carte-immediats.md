@@ -114,6 +114,10 @@ Validation exécutée le 2026-09-02 :
   sortie ni nouvel avertissement ; le binaire a été réinstallé et relancé. Les
   `MKAnnotationView` sont désormais reconnues avant l'exclusion générique du
   trait `.button`, tandis que les `UIControl` enfants restent exclus.
+- Rebuild après remplacement du reconnaisseur actif par un observateur passif :
+  réussi avec seulement les deux avertissements `CFBundleVersion` préexistants ;
+  le binaire a été réinstallé et relancé. L'observateur termine en `.failed` et
+  ne peut ni prévenir ni être prévenu par un geste MapKit.
 - Validation des annotations bloquée par l'écran de connexion Apple du
   simulateur, sans compte de test autorisé.
 - Le vault Obsidian est lisible mais non modifiable depuis l'environnement.

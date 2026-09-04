@@ -134,12 +134,17 @@ enum SharedPlaceInputLoader {
 final class SharedPlaceResolver {
     func resolve(_ input: SharedPlaceInput) async throws -> ResolvedSharedPlace {
         let finalURL = await resolvedURL(from: input.url)
-        let sharedTextDetails = placeDetails(from: input.text)
+        let resolvedPlaceName = naverPlaceName(from: finalURL ?? input.url)
+        let sharedTextDetails = placeDetails(
+            from: input.text,
+            knownName: resolvedPlaceName
+        )
 
         if let coordinate = coordinate(from: finalURL ?? input.url) {
             return await place(
                 at: coordinate,
-                fallbackName: sharedTextDetails.name
+                fallbackName: resolvedPlaceName
+                    ?? sharedTextDetails.name
                     ?? queryValue(named: ["name", "title"], in: finalURL ?? input.url),
                 fallbackAddress: sharedTextDetails.address
             )
@@ -290,8 +295,34 @@ final class SharedPlaceResolver {
         return String(queryName.prefix(240))
     }
 
-    private func placeDetails(from text: String?) -> (name: String?, address: String?) {
+    private func placeDetails(
+        from text: String?,
+        knownName: String? = nil
+    ) -> (name: String?, address: String?) {
         let lines = meaningfulTextLines(in: text)
+
+        if let knownName = knownName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !knownName.isEmpty {
+            guard let firstLine = lines.first else {
+                return (knownName, nil)
+            }
+
+            if let nameRange = firstLine.range(
+                of: knownName,
+                options: [.anchored, .caseInsensitive, .diacriticInsensitive]
+            ), nameRange.upperBound == firstLine.endIndex
+                || firstLine[nameRange.upperBound].isWhitespace {
+                let inlineAddress = firstLine[nameRange.upperBound...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return (
+                    knownName,
+                    inlineAddress.isEmpty ? lines.dropFirst().first : inlineAddress
+                )
+            }
+
+            return (knownName, firstLine)
+        }
+
         return (
             lines.first,
             lines.dropFirst().first
@@ -299,14 +330,54 @@ final class SharedPlaceResolver {
     }
 
     private func meaningfulTextLines(in text: String?) -> [String] {
-        text?
+        guard let text else { return [] }
+        return removingWebURLs(from: text)
             .split(whereSeparator: { $0.isNewline })
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map {
+                removingGenericNaverPrefix(
+                    from: String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
             .filter { line in
                 !line.isEmpty
                     && URL(string: line)?.scheme == nil
                     && !isGenericNaverTitle(line)
-            } ?? []
+            }
+    }
+
+    private func removingWebURLs(from text: String) -> String {
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else {
+            return text
+        }
+
+        var result = text
+        let range = NSRange(text.startIndex..., in: text)
+        let matches = detector.matches(in: text, range: range).reversed()
+
+        for match in matches {
+            guard let url = match.url,
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http",
+                  let matchRange = Range(match.range, in: result) else {
+                continue
+            }
+            result.replaceSubrange(matchRange, with: "\n")
+        }
+        return result
+    }
+
+    private func removingGenericNaverPrefix(from value: String) -> String {
+        let pattern = #"^\s*(?:[\[【]\s*)?(?:NAVER\s+MAPS?|네이버\s*지도)(?=\s|[\]】]|$)(?:\s*[\]】])?\s*"#
+        guard let range = value.range(
+            of: pattern,
+            options: [.regularExpression, .caseInsensitive]
+        ) else {
+            return value
+        }
+        return String(value[range.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func queryValue(named names: Set<String>, in url: URL?) -> String? {
@@ -327,8 +398,21 @@ final class SharedPlaceResolver {
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .trimmingCharacters(in: surroundingCharacters)
         return normalized == "naver map"
+            || normalized == "naver maps"
             || normalized == "네이버 지도"
             || normalized == "naver"
+    }
+
+    private func naverPlaceName(from url: URL?) -> String? {
+        guard let url,
+              let host = url.host?.lowercased(),
+              host == "naver.me" || host == "naver.com" || host.hasSuffix(".naver.com"),
+              let name = queryValue(named: ["name", "title"], in: url),
+              !name.isEmpty,
+              !isGenericNaverTitle(name) else {
+            return nil
+        }
+        return name
     }
 
     private func localSearch(_ request: MKLocalSearch.Request) async throws -> MKLocalSearch.Response {

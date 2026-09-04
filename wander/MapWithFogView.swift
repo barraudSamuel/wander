@@ -11,6 +11,122 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import UIKit.UIGestureRecognizerSubclass
+
+private final class PassiveMapTapObserver: UIGestureRecognizer {
+    var onTouchBegan: ((CGPoint) -> Void)?
+    var onTapEnded: ((CGPoint) -> Void)?
+    var onTouchCancelled: (() -> Void)?
+
+    private let maximumMovement: CGFloat
+    private weak var trackedTouch: UITouch?
+    private var initialPoint: CGPoint?
+
+    init(maximumMovement: CGFloat) {
+        self.maximumMovement = maximumMovement
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard trackedTouch == nil,
+              touches.count == 1,
+              let touch = touches.first,
+              let view else {
+            cancelTracking()
+            return
+        }
+
+        trackedTouch = touch
+        let point = touch.location(in: view)
+        initialPoint = point
+        onTouchBegan?(point)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let trackedTouch,
+              touches.contains(trackedTouch),
+              let view,
+              let initialPoint else {
+            return
+        }
+
+        let point = trackedTouch.location(in: view)
+        guard hypot(
+            point.x - initialPoint.x,
+            point.y - initialPoint.y
+        ) <= maximumMovement else {
+            cancelTracking()
+            return
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let trackedTouch,
+              touches.contains(trackedTouch),
+              let view,
+              let initialPoint else {
+            return
+        }
+
+        let point = trackedTouch.location(in: view)
+        let stayedWithinTapTolerance = hypot(
+            point.x - initialPoint.x,
+            point.y - initialPoint.y
+        ) <= maximumMovement
+        self.trackedTouch = nil
+        self.initialPoint = nil
+        state = .failed
+
+        if stayedWithinTapTolerance {
+            onTapEnded?(point)
+        } else {
+            onTouchCancelled?()
+        }
+    }
+
+    override func touchesCancelled(
+        _ touches: Set<UITouch>,
+        with event: UIEvent
+    ) {
+        cancelTracking()
+    }
+
+    override func reset() {
+        trackedTouch = nil
+        initialPoint = nil
+        super.reset()
+    }
+
+    override func canPrevent(
+        _ preventedGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
+    }
+
+    override func canBePrevented(
+        by preventingGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
+    }
+
+    private func cancelTracking() {
+        guard trackedTouch != nil || initialPoint != nil else {
+            state = .failed
+            return
+        }
+        trackedTouch = nil
+        initialPoint = nil
+        onTouchCancelled?()
+        state = .failed
+    }
+}
 
 struct MapUserCalloutInfo: Equatable {
     let displayName: String
@@ -2054,7 +2170,7 @@ struct MapWithFogView: UIViewRepresentable {
         var onCreateEvent: (CLLocationCoordinate2D) -> Void
         private weak var longPressRecognizer: UILongPressGestureRecognizer?
         private weak var immediateSocialAnnotationRecognizer:
-            UILongPressGestureRecognizer?
+            PassiveMapTapObserver?
         private weak var pressedSocialAnnotationView: MKAnnotationView?
         private var pressedSocialAnnotationOriginalAlpha: CGFloat?
         private var isPressingMapBackground = false
@@ -2171,16 +2287,18 @@ struct MapWithFogView: UIViewRepresentable {
         func installImmediateSocialAnnotationRecognizer(on mapView: MKMapView) {
             guard immediateSocialAnnotationRecognizer == nil else { return }
 
-            let recognizer = UILongPressGestureRecognizer(
-                target: self,
-                action: #selector(handleImmediateSocialAnnotationPress(_:))
-            )
-            recognizer.minimumPressDuration = 0
-            recognizer.allowableMovement = 10
-            recognizer.numberOfTouchesRequired = 1
-            recognizer.cancelsTouchesInView = false
-            recognizer.delaysTouchesBegan = false
-            recognizer.delaysTouchesEnded = false
+            let recognizer = PassiveMapTapObserver(maximumMovement: 10)
+            recognizer.onTouchBegan = { [weak self, weak mapView] point in
+                guard let self, let mapView else { return }
+                self.beginImmediateSocialPress(at: point, on: mapView)
+            }
+            recognizer.onTapEnded = { [weak self, weak mapView] point in
+                guard let self, let mapView else { return }
+                self.endImmediateSocialPress(at: point, on: mapView)
+            }
+            recognizer.onTouchCancelled = { [weak self] in
+                self?.restorePressedSocialAnnotationAppearance(animated: true)
+            }
             recognizer.delegate = self
             mapView.addGestureRecognizer(recognizer)
             immediateSocialAnnotationRecognizer = recognizer
@@ -3419,78 +3537,72 @@ struct MapWithFogView: UIViewRepresentable {
             return !clusterView.isExpanded
         }
 
-        @objc private func handleImmediateSocialAnnotationPress(
-            _ recognizer: UILongPressGestureRecognizer
+        private func beginImmediateSocialPress(
+            at point: CGPoint,
+            on mapView: MKMapView
         ) {
-            guard let mapView = recognizer.view as? MKMapView else { return }
-
-            switch recognizer.state {
-            case .began:
-                let touchedView = mapView.hitTest(
-                    recognizer.location(in: mapView),
-                    with: nil
-                )
-                guard let pressTarget = immediateSocialPressTarget(
-                    from: touchedView
-                ) else {
-                    return
-                }
-
-                switch pressTarget {
-                case .annotation(let annotationView):
-                    pressedSocialAnnotationView = annotationView
-                    pressedSocialAnnotationOriginalAlpha = annotationView.alpha
-                    UIView.animate(
-                        withDuration: 0.06,
-                        delay: 0,
-                        options: [.beginFromCurrentState, .allowUserInteraction]
-                    ) {
-                        annotationView.alpha *= 0.72
-                    }
-                case .mapBackground:
-                    isPressingMapBackground = true
-                }
-
-            case .ended:
-                if isPressingMapBackground {
-                    isPressingMapBackground = false
-                    dismissSelectedSocialAnnotations(on: mapView)
-                    return
-                }
-
-                guard let annotationView = pressedSocialAnnotationView,
-                      let annotation = annotationView.annotation,
-                      mapView.view(for: annotation) === annotationView else {
-                    restorePressedSocialAnnotationAppearance(animated: true)
-                    return
-                }
-
-                let point = recognizer.location(in: annotationView)
-                guard annotationView.point(inside: point, with: nil) else {
-                    restorePressedSocialAnnotationAppearance(animated: true)
-                    return
-                }
-
-                restorePressedSocialAnnotationAppearance(animated: true)
-                guard !mapView.selectedAnnotations.contains(where: {
-                    ($0 as AnyObject) === (annotation as AnyObject)
-                }) else {
-                    return
-                }
-                activateSocialAnnotation(
-                    annotation,
-                    view: annotationView,
-                    on: mapView
-                )
-                suppressNextNativeSelection(for: annotation)
-                mapView.selectAnnotation(annotation, animated: false)
-
-            case .cancelled, .failed:
-                restorePressedSocialAnnotationAppearance(animated: true)
-
-            default:
-                break
+            let touchedView = mapView.hitTest(point, with: nil)
+            guard let pressTarget = immediateSocialPressTarget(
+                from: touchedView
+            ) else {
+                return
             }
+
+            switch pressTarget {
+            case .annotation(let annotationView):
+                pressedSocialAnnotationView = annotationView
+                pressedSocialAnnotationOriginalAlpha = annotationView.alpha
+                UIView.animate(
+                    withDuration: 0.06,
+                    delay: 0,
+                    options: [.beginFromCurrentState, .allowUserInteraction]
+                ) {
+                    annotationView.alpha *= 0.72
+                }
+            case .mapBackground:
+                isPressingMapBackground = true
+            }
+        }
+
+        private func endImmediateSocialPress(
+            at mapPoint: CGPoint,
+            on mapView: MKMapView
+        ) {
+            if isPressingMapBackground {
+                isPressingMapBackground = false
+                dismissSelectedSocialAnnotations(on: mapView)
+                return
+            }
+
+            guard let annotationView = pressedSocialAnnotationView,
+                  let annotation = annotationView.annotation,
+                  mapView.view(for: annotation) === annotationView else {
+                restorePressedSocialAnnotationAppearance(animated: true)
+                return
+            }
+
+            let annotationPoint = annotationView.convert(
+                mapPoint,
+                from: mapView
+            )
+            guard annotationView.point(inside: annotationPoint, with: nil) else {
+                restorePressedSocialAnnotationAppearance(animated: true)
+                return
+            }
+
+            restorePressedSocialAnnotationAppearance(animated: true)
+            guard !mapView.selectedAnnotations.contains(where: {
+                ($0 as AnyObject) === (annotation as AnyObject)
+            }) else {
+                return
+            }
+            activateSocialAnnotation(
+                annotation,
+                view: annotationView,
+                on: mapView
+            )
+            suppressNextNativeSelection(for: annotation)
+            mapView.selectAnnotation(annotation, animated: false)
         }
 
         private func restorePressedSocialAnnotationAppearance(animated: Bool) {

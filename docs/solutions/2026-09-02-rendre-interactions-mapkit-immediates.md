@@ -18,11 +18,14 @@ groupe et de 420 ms pour une fiche événement amplifiaient ensuite cette lenteu
 
 ## Résolution
 
-`MapWithFogView.Coordinator` installe un `UILongPressGestureRecognizer` public
-avec une durée minimale nulle, limité par son delegate aux vues d'annotations
-sociales compactes. Il fournit un retour d'opacité dès le début du toucher,
-s'annule lorsque le doigt dépasse la tolérance de mouvement, puis active
-l'annotation au relâchement avant de demander sa sélection à MapKit.
+`MapWithFogView.Coordinator` installe un sous-type passif de
+`UIGestureRecognizer`, limité par son delegate aux vues d'annotations sociales
+compactes et au fond de carte. Il fournit un retour d'opacité dès le début du
+toucher, s'annule lorsque le doigt dépasse la tolérance de mouvement, puis
+active l'annotation au relâchement avant de demander sa sélection à MapKit.
+L'observateur exécute ses callbacks puis termine toujours dans l'état `.failed` ;
+ses méthodes `canPrevent` et `canBePrevented` renvoient également `false`. Il ne
+peut donc pas voler le premier tap au reconnaisseur double tap de MapKit.
 
 Le même chemin d'activation reste appelé par `didSelect` pour VoiceOver et les
 sélections programmatiques. Un identifiant d'annotation absorbe uniquement le
