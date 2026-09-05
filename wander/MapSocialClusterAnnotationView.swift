@@ -6,12 +6,6 @@
 import MapKit
 import UIKit
 
-enum MapSocialClusterMemberID: Hashable {
-    case currentUser
-    case friend(String)
-    case outing(String)
-}
-
 struct MapSocialClusterPersonPresentation: Equatable {
     let id: String
     let displayName: String

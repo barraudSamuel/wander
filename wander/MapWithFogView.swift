@@ -1556,7 +1556,6 @@ struct MapWithFogView: UIViewRepresentable {
         updateOutingPlanAnnotations(on: uiView, context: context)
         context.coordinator.synchronizeSocialProximityAnnotations(on: uiView)
         updateDraftOutingAnnotation(on: uiView, context: context)
-        context.coordinator.refreshSocialClusterAnnotationViews(on: uiView)
         context.coordinator.refreshMapOffscreenIndicators(on: uiView)
         synchronizeOutingPlanSelection(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
@@ -1622,7 +1621,7 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.removeLongPressRecognizer(from: uiView)
         coordinator.removeImmediateSocialAnnotationRecognizer(from: uiView)
         coordinator.removeMapOffscreenIndicatorContainer()
-        coordinator.tearDownSocialCluster()
+        coordinator.socialProximityController.tearDown()
     }
 
     private var visibleDiscoveredCellIDs: Set<String> {
@@ -1665,10 +1664,7 @@ struct MapWithFogView: UIViewRepresentable {
         let nextUserCoordinate = locationTracker.lastLocation?.coordinate
 
         guard let coordinate = nextUserCoordinate else {
-            if let annotation = coordinator.userLocationAnnotation {
-                mapView.removeAnnotation(annotation)
-                coordinator.userLocationAnnotation = nil
-            }
+            coordinator.userLocationAnnotation = nil
             mapView.view(for: mapView.userLocation)?.isHidden = false
             return
         }
@@ -1704,9 +1700,7 @@ struct MapWithFogView: UIViewRepresentable {
             .filter { !currentIDs.contains($0) }
             .sorted()
         for userID in removedIDs {
-            if let annotation = coordinator.friendAnnotations.removeValue(forKey: userID) {
-                mapView.removeAnnotation(annotation)
-            }
+            coordinator.friendAnnotations.removeValue(forKey: userID)
             coordinator.friendAvatarIDByUserID.removeValue(forKey: userID)
             coordinator.friendProfileColorHexByUserID.removeValue(forKey: userID)
             coordinator.friendCalloutInfoByUserID.removeValue(forKey: userID)
@@ -1779,11 +1773,7 @@ struct MapWithFogView: UIViewRepresentable {
             .sorted()
 
         for eventID in removedEventIDs {
-            if let annotation = coordinator.outingPlanAnnotations.removeValue(
-                forKey: eventID
-            ) {
-                mapView.removeAnnotation(annotation)
-            }
+            coordinator.outingPlanAnnotations.removeValue(forKey: eventID)
         }
 
         for eventID in outingPlans.keys.sorted() {
@@ -2002,8 +1992,8 @@ struct MapWithFogView: UIViewRepresentable {
             return
         }
 
-        context.coordinator.selectOutingPlanAnnotation(
-            eventID: selectedOutingPlanEventID,
+        context.coordinator.socialProximityController.select(
+            .outing(selectedOutingPlanEventID),
             on: mapView
         )
     }
@@ -2018,8 +2008,8 @@ struct MapWithFogView: UIViewRepresentable {
 
         if let coordinate = friendLocations[userID]?.coordinate {
             setFocusedRegion(on: mapView, center: coordinate, animated: true)
-            context.coordinator.selectFriendAnnotation(
-                userID: userID,
+            context.coordinator.socialProximityController.select(
+                .friend(userID),
                 on: mapView
             )
         }
@@ -2041,8 +2031,8 @@ struct MapWithFogView: UIViewRepresentable {
             center: annotation.coordinate,
             animated: true
         )
-        context.coordinator.selectOutingPlanAnnotation(
-            eventID: eventID,
+        context.coordinator.socialProximityController.select(
+            .outing(eventID),
             on: mapView
         )
     }
@@ -2182,58 +2172,23 @@ struct MapWithFogView: UIViewRepresentable {
             [String: FriendOffscreenIndicatorView] = [:]
         private var outingOffscreenIndicatorViews:
             [String: OutingOffscreenIndicatorView] = [:]
-        private var expandedSocialCluster:
-            MapSocialProximityGroupAnnotation?
-        private weak var expandedSocialClusterView:
-            MapSocialClusterAnnotationView?
-        private var expandedSocialClusterMemberIDs:
-            Set<MapSocialClusterMemberID> = []
-        private var focusedSocialAnnotation: (any MKAnnotation)?
-        private var isRestoringSocialFocus = false
-        private var isPerformingSocialRegionChange = false
-        private var socialRegionChangeResetWorkItem: DispatchWorkItem?
-        private var pendingSocialSelection: MapSocialClusterMemberID?
-        private var socialProximityGroupEntries:
-            [String: SocialProximityGroupEntry] = [:]
-        private var retainedSocialProximityPairs:
-            Set<SocialProximityPair> = []
-        private var lastSocialSourceSnapshot:
-            [SocialSourceSnapshot]?
-        private var lastSocialSnapshotFocusedMemberID:
-            MapSocialClusterMemberID?
+        fileprivate lazy var socialProximityController = MapSocialProximityController(
+            presentation: { [weak self] group in
+                self?.socialClusterPresentation(for: group)
+                    ?? MapSocialClusterPresentation(people: [], outings: [])
+            },
+            setFocusAppearance: { isFocused, view in
+                if let locationView = view as? UserLocationAnnotationView {
+                    locationView.setSocialClusterFocus(isFocused)
+                } else if let outingView = view as? OutingPlanAnnotationView {
+                    outingView.setSocialClusterFocus(isFocused)
+                }
+            }
+        )
         private let eventCreationFeedback = UIImpactFeedbackGenerator(
             style: .medium
         )
         private static let friendPinSize: CGFloat = 88
-
-        private static let socialGroupingDistance: CLLocationDistance = 20
-        private static let socialGroupingExitDistance: CLLocationDistance = 25
-
-        private struct SocialSourceSnapshot: Equatable {
-            let id: MapSocialClusterMemberID
-            let latitude: CLLocationDegrees
-            let longitude: CLLocationDegrees
-        }
-
-        private struct SocialProximityGroupEntry {
-            let memberIDs: Set<MapSocialClusterMemberID>
-            let annotation: MapSocialProximityGroupAnnotation
-        }
-
-        private struct SocialProximityPair: Hashable {
-            let firstKey: String
-            let secondKey: String
-
-            init(_ firstKey: String, _ secondKey: String) {
-                if firstKey < secondKey {
-                    self.firstKey = firstKey
-                    self.secondKey = secondKey
-                } else {
-                    self.firstKey = secondKey
-                    self.secondKey = firstKey
-                }
-            }
-        }
 
         private enum OffscreenTarget {
             case friend(String)
@@ -2314,459 +2269,18 @@ struct MapWithFogView: UIViewRepresentable {
             self.immediateSocialAnnotationRecognizer = nil
         }
 
-        func isFocusedSocialAnnotation(
-            _ annotation: any MKAnnotation
-        ) -> Bool {
-            guard let focusedSocialAnnotation else { return false }
-            return (focusedSocialAnnotation as AnyObject)
-                === (annotation as AnyObject)
-        }
-
         func synchronizeSocialProximityAnnotations(on mapView: MKMapView) {
-            let sourceAnnotations = allSocialAnnotations().sorted {
-                socialAnnotationStableKey($0)
-                    < socialAnnotationStableKey($1)
+            var sources: [MapSocialClusterMemberID: any MKAnnotation] = [:]
+            for (userID, annotation) in friendAnnotations {
+                sources[.friend(userID)] = annotation
             }
-            let sourceSnapshot = sourceAnnotations.compactMap { annotation in
-                socialClusterMemberID(for: annotation).map {
-                    SocialSourceSnapshot(
-                        id: $0,
-                        latitude: annotation.coordinate.latitude,
-                        longitude: annotation.coordinate.longitude
-                    )
-                }
+            for (eventID, annotation) in outingPlanAnnotations {
+                sources[.outing(eventID)] = annotation
             }
-            let focusedMemberID = focusedSocialAnnotation.flatMap {
-                socialClusterMemberID(for: $0)
-            }
-            guard sourceSnapshot != lastSocialSourceSnapshot
-                    || focusedMemberID != lastSocialSnapshotFocusedMemberID
-            else {
-                return
-            }
-            lastSocialSourceSnapshot = sourceSnapshot
-            lastSocialSnapshotFocusedMemberID = focusedMemberID
-
-            let distanceByPair = socialDistancesByPair(
-                in: sourceAnnotations
-            )
-            retainedSocialProximityPairs = Set(
-                retainedSocialProximityPairs.filter {
-                    guard let distance = distanceByPair[$0] else {
-                        return false
-                    }
-                    return distance <= Self.socialGroupingExitDistance
-                }
-            )
-
-            let groupableAnnotations = sourceAnnotations.filter {
-                !isFocusedSocialAnnotation($0)
-                    && CLLocationCoordinate2DIsValid($0.coordinate)
-            }
-            var proximityGroups = makeSocialProximityGroups(
-                from: groupableAnnotations,
-                distanceByPair: distanceByPair
-            )
-            proximityGroups.append(contentsOf: sourceAnnotations.filter {
-                !isFocusedSocialAnnotation($0)
-                    && !CLLocationCoordinate2DIsValid($0.coordinate)
-            }.map { [$0] })
-            proximityGroups.sort {
-                socialGroupStableKey($0) < socialGroupStableKey($1)
-            }
-
-            var desiredAnnotations: [any MKAnnotation] = []
-            var nextGroupEntries:
-                [String: SocialProximityGroupEntry] = [:]
-            var reusedGroupIdentifiers: Set<String> = []
-
-            for group in proximityGroups {
-                guard group.count > 1 else {
-                    desiredAnnotations.append(contentsOf: group)
-                    continue
-                }
-
-                let memberIDs = Set(group.compactMap {
-                    socialClusterMemberID(for: $0)
-                })
-                let reusableEntry = reusableSocialProximityGroupEntry(
-                    for: memberIDs,
-                    excluding: reusedGroupIdentifiers
-                )
-                let groupAnnotation: MapSocialProximityGroupAnnotation
-                if let reusableEntry {
-                    groupAnnotation = reusableEntry.annotation
-                    groupAnnotation.update(memberAnnotations: group)
-                    reusedGroupIdentifiers.insert(
-                        groupAnnotation.identifier
-                    )
-                } else {
-                    groupAnnotation = MapSocialProximityGroupAnnotation(
-                        memberAnnotations: group
-                    )
-                }
-                let entry = SocialProximityGroupEntry(
-                    memberIDs: memberIDs,
-                    annotation: groupAnnotation
-                )
-                nextGroupEntries[groupAnnotation.identifier] = entry
-                desiredAnnotations.append(groupAnnotation)
-                retainSocialProximityPairs(in: group)
-            }
-
-            if let focusedSocialAnnotation,
-               sourceAnnotations.contains(where: {
-                   ($0 as AnyObject)
-                       === (focusedSocialAnnotation as AnyObject)
-               }) {
-                desiredAnnotations.append(focusedSocialAnnotation)
-            }
-
-            let desiredIdentifiers = Set(desiredAnnotations.map {
-                ObjectIdentifier($0 as AnyObject)
-            })
-            let attachedSocialAnnotations = mapView.annotations.filter {
-                socialClusterMemberID(for: $0) != nil
-                    || $0 is MapSocialProximityGroupAnnotation
-            }
-            let annotationsToRemove = attachedSocialAnnotations.filter {
-                !desiredIdentifiers.contains(
-                    ObjectIdentifier($0 as AnyObject)
-                )
-            }
-            if !annotationsToRemove.isEmpty {
-                mapView.removeAnnotations(annotationsToRemove)
-            }
-
-            let attachedIdentifiers = Set(mapView.annotations.map {
-                ObjectIdentifier($0 as AnyObject)
-            })
-            let annotationsToAdd = desiredAnnotations.filter {
-                !attachedIdentifiers.contains(
-                    ObjectIdentifier($0 as AnyObject)
-                )
-            }
-            socialProximityGroupEntries = nextGroupEntries
-            if !annotationsToAdd.isEmpty {
-                mapView.addAnnotations(annotationsToAdd)
-            }
-        }
-
-        private func makeSocialProximityGroups(
-            from annotations: [any MKAnnotation],
-            distanceByPair: [SocialProximityPair: CLLocationDistance]
-        ) -> [[any MKAnnotation]] {
-            var groups = annotations.map { [$0] }
-
-            while groups.count > 1 {
-                var bestMerge:
-                    (first: Int, second: Int,
-                     preservesExistingGroup: Bool,
-                     distance: CLLocationDistance,
-                     stableKey: String)?
-
-                for firstIndex in groups.indices {
-                    for secondIndex in groups.indices
-                    where secondIndex > firstIndex {
-                        guard let compatibility = compatibleMerge(
-                            groups[firstIndex],
-                            groups[secondIndex],
-                            distanceByPair: distanceByPair
-                        ) else { continue }
-                        let mergeKey = socialGroupStableKey(
-                            groups[firstIndex] + groups[secondIndex]
-                        )
-                        if let current = bestMerge,
-                           current.preservesExistingGroup
-                            && !compatibility.preservesExistingGroup
-                            || (current.preservesExistingGroup
-                                == compatibility.preservesExistingGroup
-                                && current.distance
-                                    < compatibility.distance)
-                            || (current.preservesExistingGroup
-                                == compatibility.preservesExistingGroup
-                                && current.distance
-                                    == compatibility.distance
-                                && current.stableKey <= mergeKey) {
-                            continue
-                        }
-                        bestMerge = (
-                            firstIndex,
-                            secondIndex,
-                            compatibility.preservesExistingGroup,
-                            compatibility.distance,
-                            mergeKey
-                        )
-                    }
-                }
-
-                guard let bestMerge else { break }
-                groups[bestMerge.first].append(
-                    contentsOf: groups[bestMerge.second]
-                )
-                groups[bestMerge.first].sort {
-                    socialAnnotationStableKey($0)
-                        < socialAnnotationStableKey($1)
-                }
-                groups.remove(at: bestMerge.second)
-            }
-            return groups
-        }
-
-        private func compatibleMerge(
-            _ firstGroup: [any MKAnnotation],
-            _ secondGroup: [any MKAnnotation],
-            distanceByPair: [SocialProximityPair: CLLocationDistance]
-        ) -> (
-            distance: CLLocationDistance,
-            preservesExistingGroup: Bool
-        )? {
-            var maximumDistance: CLLocationDistance = 0
-            var preservesExistingGroup = true
-            for first in firstGroup {
-                for second in secondGroup {
-                    guard let firstID = socialClusterMemberID(for: first),
-                          let secondID = socialClusterMemberID(for: second)
-                    else { return nil }
-                    let pair = SocialProximityPair(
-                        stableKey(for: firstID),
-                        stableKey(for: secondID)
-                    )
-                    guard let distance = distanceByPair[pair] else {
-                        return nil
-                    }
-                    let isRetained = retainedSocialProximityPairs.contains(
-                        pair
-                    )
-                    let limit = isRetained
-                        ? Self.socialGroupingExitDistance
-                        : Self.socialGroupingDistance
-                    guard distance <= limit else { return nil }
-                    preservesExistingGroup = preservesExistingGroup
-                        && isRetained
-                    maximumDistance = max(maximumDistance, distance)
-                }
-            }
-            return (maximumDistance, preservesExistingGroup)
-        }
-
-        private func retainSocialProximityPairs(
-            in annotations: [any MKAnnotation]
-        ) {
-            guard annotations.count > 1 else { return }
-            for firstIndex in annotations.indices {
-                for secondIndex in annotations.indices
-                where secondIndex > firstIndex {
-                    guard let firstID = socialClusterMemberID(
-                        for: annotations[firstIndex]
-                    ), let secondID = socialClusterMemberID(
-                        for: annotations[secondIndex]
-                    ) else { continue }
-                    retainedSocialProximityPairs.insert(
-                        SocialProximityPair(
-                            stableKey(for: firstID),
-                            stableKey(for: secondID)
-                        )
-                    )
-                }
-            }
-        }
-
-        private func socialDistance(
-            between first: any MKAnnotation,
-            and second: any MKAnnotation
-        ) -> CLLocationDistance? {
-            guard CLLocationCoordinate2DIsValid(first.coordinate),
-                  CLLocationCoordinate2DIsValid(second.coordinate) else {
-                return nil
-            }
-            return CLLocation(
-                latitude: first.coordinate.latitude,
-                longitude: first.coordinate.longitude
-            ).distance(
-                from: CLLocation(
-                    latitude: second.coordinate.latitude,
-                    longitude: second.coordinate.longitude
-                )
-            )
-        }
-
-        private func socialDistancesByPair(
-            in annotations: [any MKAnnotation]
-        ) -> [SocialProximityPair: CLLocationDistance] {
-            guard annotations.count > 1 else { return [:] }
-            var result: [SocialProximityPair: CLLocationDistance] = [:]
-            for firstIndex in annotations.indices {
-                for secondIndex in annotations.indices
-                where secondIndex > firstIndex {
-                    let first = annotations[firstIndex]
-                    let second = annotations[secondIndex]
-                    guard let firstID = socialClusterMemberID(for: first),
-                          let secondID = socialClusterMemberID(for: second),
-                          let distance = socialDistance(
-                              between: first,
-                              and: second
-                          ) else { continue }
-                    result[
-                        SocialProximityPair(
-                            stableKey(for: firstID),
-                            stableKey(for: secondID)
-                        )
-                    ] = distance
-                }
-            }
-            return result
-        }
-
-        private func socialGroupStableKey(
-            _ annotations: [any MKAnnotation]
-        ) -> String {
-            annotations.compactMap { socialClusterMemberID(for: $0) }
-                .map { stableKey(for: $0) }
-                .sorted()
-                .joined(separator: "|")
-        }
-
-        private func reusableSocialProximityGroupEntry(
-            for memberIDs: Set<MapSocialClusterMemberID>,
-            excluding reusedIdentifiers: Set<String>
-        ) -> SocialProximityGroupEntry? {
-            socialProximityGroupEntries.values
-                .filter {
-                    !reusedIdentifiers.contains($0.annotation.identifier)
-                        && !$0.memberIDs.isDisjoint(with: memberIDs)
-                }
-                .sorted { first, second in
-                    let firstIsExact = first.memberIDs == memberIDs
-                    let secondIsExact = second.memberIDs == memberIDs
-                    if firstIsExact != secondIsExact {
-                        return firstIsExact
-                    }
-                    let firstOverlap = first.memberIDs
-                        .intersection(memberIDs).count
-                    let secondOverlap = second.memberIDs
-                        .intersection(memberIDs).count
-                    if firstOverlap != secondOverlap {
-                        return firstOverlap > secondOverlap
-                    }
-                    return first.annotation.identifier
-                        < second.annotation.identifier
-                }
-                .first
-        }
-
-        private func allSocialAnnotations() -> [any MKAnnotation] {
-            var annotations = friendAnnotations.values.map {
-                $0 as any MKAnnotation
-            }
-            annotations.append(
-                contentsOf: outingPlanAnnotations.values.map {
-                    $0 as any MKAnnotation
-                }
-            )
             if let userLocationAnnotation {
-                annotations.append(userLocationAnnotation)
+                sources[.currentUser] = userLocationAnnotation
             }
-            return annotations
-        }
-
-        private func stableKey(
-            for memberID: MapSocialClusterMemberID
-        ) -> String {
-            switch memberID {
-            case .currentUser:
-                "0:current-user"
-            case .friend(let userID):
-                "1:friend:\(userID)"
-            case .outing(let eventID):
-                "2:outing:\(eventID)"
-            }
-        }
-
-        private func socialAnnotationStableKey(
-            _ annotation: any MKAnnotation
-        ) -> String {
-            guard let memberID = socialClusterMemberID(for: annotation) else {
-                return ""
-            }
-            return stableKey(for: memberID)
-        }
-
-        func refreshSocialClusterAnnotationViews(on mapView: MKMapView) {
-            var socialAnnotations = friendAnnotations.values.map {
-                $0 as any MKAnnotation
-            }
-            socialAnnotations.append(
-                contentsOf: outingPlanAnnotations.values.map {
-                    $0 as any MKAnnotation
-                }
-            )
-            if let userLocationAnnotation {
-                socialAnnotations.append(userLocationAnnotation)
-            }
-            for annotation in socialAnnotations {
-                guard let annotationView = mapView.view(for: annotation) else {
-                    continue
-                }
-                annotationView.isAccessibilityElement = annotationView.cluster
-                    == nil
-            }
-
-            let clusters = mapView.annotations.compactMap {
-                $0 as? MapSocialProximityGroupAnnotation
-            }
-            if !isPerformingSocialRegionChange,
-               let expandedSocialCluster,
-               !clusters.contains(where: { $0 === expandedSocialCluster }) {
-                if let replacementCluster = clusters.first(where: {
-                    socialClusterMemberIDs(for: $0)
-                        == expandedSocialClusterMemberIDs
-                }) {
-                    self.expandedSocialCluster = replacementCluster
-                    expandedSocialClusterView = mapView.view(
-                        for: replacementCluster
-                    ) as? MapSocialClusterAnnotationView
-                } else {
-                    collapseExpandedSocialCluster(
-                        on: mapView,
-                        animated: false
-                    )
-                }
-            }
-
-            for cluster in clusters {
-                guard let annotationView = mapView.view(for: cluster)
-                    as? MapSocialClusterAnnotationView else {
-                    continue
-                }
-                configureSocialClusterView(
-                    annotationView,
-                    for: cluster,
-                    on: mapView
-                )
-            }
-        }
-
-        func collapseSocialClusterIfNeeded(on mapView: MKMapView) {
-            collapseExpandedSocialCluster(on: mapView, animated: false)
-            restoreFocusedSocialAnnotation(on: mapView)
-            pendingSocialSelection = nil
-        }
-
-        func tearDownSocialCluster() {
-            expandedSocialClusterView?.setExpanded(false, animated: false)
-            expandedSocialCluster = nil
-            expandedSocialClusterView = nil
-            expandedSocialClusterMemberIDs.removeAll()
-            focusedSocialAnnotation = nil
-            pendingSocialSelection = nil
-            socialProximityGroupEntries.removeAll()
-            retainedSocialProximityPairs.removeAll()
-            lastSocialSourceSnapshot = nil
-            lastSocialSnapshotFocusedMemberID = nil
-            socialRegionChangeResetWorkItem?.cancel()
-            socialRegionChangeResetWorkItem = nil
-            isPerformingSocialRegionChange = false
+            socialProximityController.update(sources: sources, on: mapView)
         }
 
         private func socialClusterPresentation(
@@ -2850,246 +2364,6 @@ struct MapWithFogView: UIViewRepresentable {
                 people: people,
                 outings: outings
             )
-        }
-
-        private func configureSocialClusterView(
-            _ annotationView: MapSocialClusterAnnotationView,
-            for cluster: MapSocialProximityGroupAnnotation,
-            on mapView: MKMapView
-        ) {
-            annotationView.configure(
-                with: socialClusterPresentation(for: cluster)
-            )
-            annotationView.onSelectMember = {
-                [weak self, weak mapView, weak cluster] memberID in
-                guard let self, let mapView, let cluster else { return }
-                self.selectSocialClusterMember(
-                    memberID,
-                    from: cluster,
-                    on: mapView
-                )
-            }
-            annotationView.setExpanded(
-                expandedSocialCluster === cluster,
-                animated: false
-            )
-            if expandedSocialCluster === cluster {
-                expandedSocialClusterMemberIDs = socialClusterMemberIDs(
-                    for: cluster
-                )
-            }
-        }
-
-        private func expandSocialCluster(
-            _ cluster: MapSocialProximityGroupAnnotation,
-            on mapView: MKMapView
-        ) {
-            guard cluster.memberAnnotations.count > 1,
-                  let annotationView = mapView.view(for: cluster)
-                    as? MapSocialClusterAnnotationView else {
-                return
-            }
-
-            if expandedSocialCluster === cluster {
-                return
-            }
-            collapseExpandedSocialCluster(on: mapView, animated: false)
-            configureSocialClusterView(
-                annotationView,
-                for: cluster,
-                on: mapView
-            )
-            expandedSocialCluster = cluster
-            expandedSocialClusterView = annotationView
-            expandedSocialClusterMemberIDs = socialClusterMemberIDs(
-                for: cluster
-            )
-
-            let anchorPoint = mapView.convert(
-                cluster.coordinate,
-                toPointTo: mapView
-            )
-            let safeBounds = mapView.bounds
-                .inset(by: mapView.safeAreaInsets)
-                .insetBy(dx: 12, dy: 12)
-            if !safeBounds.contains(
-                annotationView.projectedExpandedFrame(at: anchorPoint)
-            ) {
-                beginSocialRegionChange()
-                mapView.setCenter(
-                    cluster.coordinate,
-                    animated: !UIAccessibility.isReduceMotionEnabled
-                )
-            }
-
-            annotationView.setExpanded(true, animated: true)
-        }
-
-        private func collapseExpandedSocialCluster(
-            on mapView: MKMapView,
-            animated: Bool
-        ) {
-            guard expandedSocialCluster != nil
-                    || expandedSocialClusterView != nil else {
-                return
-            }
-            let cluster = expandedSocialCluster
-            let annotationView = expandedSocialClusterView
-            expandedSocialCluster = nil
-            expandedSocialClusterView = nil
-            expandedSocialClusterMemberIDs.removeAll()
-            annotationView?.setExpanded(false, animated: animated)
-            if let cluster,
-               mapView.selectedAnnotations.contains(where: {
-                   ($0 as AnyObject) === cluster
-               }) {
-                mapView.deselectAnnotation(cluster, animated: false)
-            }
-        }
-
-        private func selectSocialClusterMember(
-            _ memberID: MapSocialClusterMemberID,
-            from cluster: MapSocialProximityGroupAnnotation,
-            on mapView: MKMapView
-        ) {
-            guard cluster.memberAnnotations.contains(where: {
-                socialClusterMemberID(for: $0) == memberID
-            }) else {
-                collapseExpandedSocialCluster(
-                    on: mapView,
-                    animated: true
-                )
-                return
-            }
-
-            collapseExpandedSocialCluster(on: mapView, animated: true)
-            centerMap(onSocialMember: memberID, on: mapView)
-        }
-
-        private func socialClusterMemberID(
-            for annotation: any MKAnnotation
-        ) -> MapSocialClusterMemberID? {
-            if annotation is UserLocationAnnotation {
-                return .currentUser
-            }
-            if let friend = annotation as? FriendLocationAnnotation {
-                return .friend(friend.userID)
-            }
-            if let outing = annotation as? OutingPlanAnnotation {
-                return .outing(outing.eventID)
-            }
-            return nil
-        }
-
-        private func socialClusterMemberIDs(
-            for cluster: MapSocialProximityGroupAnnotation
-        ) -> Set<MapSocialClusterMemberID> {
-            Set(cluster.memberAnnotations.compactMap(socialClusterMemberID))
-        }
-
-        private func annotation(
-            for memberID: MapSocialClusterMemberID
-        ) -> (any MKAnnotation)? {
-            switch memberID {
-            case .currentUser:
-                userLocationAnnotation
-            case .friend(let userID):
-                friendAnnotations[userID]
-            case .outing(let eventID):
-                outingPlanAnnotations[eventID]
-            }
-        }
-
-        private func centerMap(
-            onSocialMember memberID: MapSocialClusterMemberID,
-            on mapView: MKMapView
-        ) {
-            guard let annotation = annotation(for: memberID) else { return }
-
-            mapView.setUserTrackingMode(.none, animated: false)
-            pendingSocialSelection = memberID
-            beginSocialRegionChange()
-            let region = MKCoordinateRegion(
-                center: annotation.coordinate,
-                latitudinalMeters: 800,
-                longitudinalMeters: 800
-            )
-            mapView.setRegion(
-                region,
-                animated: !UIAccessibility.isReduceMotionEnabled
-            )
-            selectPendingSocialAnnotationIfVisible(on: mapView)
-        }
-
-        private func focusSocialAnnotation(
-            _ annotation: any MKAnnotation,
-            on mapView: MKMapView
-        ) {
-            if isFocusedSocialAnnotation(annotation) { return }
-            restoreFocusedSocialAnnotation(on: mapView)
-            focusedSocialAnnotation = annotation
-            synchronizeSocialProximityAnnotations(on: mapView)
-        }
-
-        @discardableResult
-        private func focusDirectlySelectedSocialAnnotation(
-            _ annotation: any MKAnnotation,
-            view: MKAnnotationView,
-            on mapView: MKMapView
-        ) -> Bool {
-            guard !isFocusedSocialAnnotation(annotation) else {
-                return false
-            }
-
-            restoreFocusedSocialAnnotation(on: mapView)
-            focusedSocialAnnotation = annotation
-            setSocialClusterFocus(true, on: view)
-            return true
-        }
-
-        private func setSocialClusterFocus(
-            _ isFocused: Bool,
-            on view: MKAnnotationView
-        ) {
-            if let locationView = view as? UserLocationAnnotationView {
-                locationView.setSocialClusterFocus(isFocused)
-            } else if let outingView = view as? OutingPlanAnnotationView {
-                outingView.setSocialClusterFocus(isFocused)
-            }
-        }
-
-        private func restoreFocusedSocialAnnotation(on mapView: MKMapView) {
-            guard !isRestoringSocialFocus,
-                  let annotation = focusedSocialAnnotation else {
-                return
-            }
-
-            isRestoringSocialFocus = true
-            focusedSocialAnnotation = nil
-            mapView.deselectAnnotation(annotation, animated: false)
-            synchronizeSocialProximityAnnotations(on: mapView)
-            isRestoringSocialFocus = false
-        }
-
-        private func beginSocialRegionChange() {
-            socialRegionChangeResetWorkItem?.cancel()
-            isPerformingSocialRegionChange = true
-
-            let workItem = DispatchWorkItem { [weak self] in
-                self?.isPerformingSocialRegionChange = false
-                self?.socialRegionChangeResetWorkItem = nil
-            }
-            socialRegionChangeResetWorkItem = workItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + 1,
-                execute: workItem
-            )
-        }
-
-        private func finishSocialRegionChange() {
-            socialRegionChangeResetWorkItem?.cancel()
-            socialRegionChangeResetWorkItem = nil
-            isPerformingSocialRegionChange = false
         }
 
         func installMapOffscreenIndicatorContainer(on mapView: MKMapView) {
@@ -3268,7 +2542,7 @@ struct MapWithFogView: UIViewRepresentable {
             let indicatorView = FriendOffscreenIndicatorView(userID: userID)
             indicatorView.onActivate = { [weak self, weak mapView] userID in
                 guard let self, let mapView else { return }
-                self.centerMap(onFriend: userID, on: mapView)
+                self.socialProximityController.center(on: .friend(userID), on: mapView)
             }
             container.addSubview(indicatorView)
             friendOffscreenIndicatorViews[userID] = indicatorView
@@ -3287,7 +2561,7 @@ struct MapWithFogView: UIViewRepresentable {
             let indicatorView = OutingOffscreenIndicatorView(eventID: eventID)
             indicatorView.onActivate = { [weak self, weak mapView] eventID in
                 guard let self, let mapView else { return }
-                self.centerMap(onOutingPlan: eventID, on: mapView)
+                self.socialProximityController.center(on: .outing(eventID), on: mapView)
             }
             container.addSubview(indicatorView)
             outingOffscreenIndicatorViews[eventID] = indicatorView
@@ -3373,71 +2647,6 @@ struct MapWithFogView: UIViewRepresentable {
                 y: mapView.bounds.midY
                     - CGFloat(cos(relativeBearing)) * distance
             )
-        }
-
-        func selectFriendAnnotation(
-            userID: String,
-            on mapView: MKMapView
-        ) {
-            pendingSocialSelection = .friend(userID)
-            selectPendingSocialAnnotationIfVisible(on: mapView)
-        }
-
-        func selectOutingPlanAnnotation(
-            eventID: String,
-            on mapView: MKMapView
-        ) {
-            pendingSocialSelection = .outing(eventID)
-            selectPendingSocialAnnotationIfVisible(on: mapView)
-        }
-
-        private func centerMap(onFriend userID: String, on mapView: MKMapView) {
-            centerMap(onSocialMember: .friend(userID), on: mapView)
-        }
-
-        private func centerMap(
-            onOutingPlan eventID: String,
-            on mapView: MKMapView
-        ) {
-            centerMap(onSocialMember: .outing(eventID), on: mapView)
-        }
-
-        private func selectPendingSocialAnnotationIfVisible(
-            on mapView: MKMapView
-        ) {
-            guard let memberID = pendingSocialSelection else {
-                return
-            }
-            guard let annotation = annotation(for: memberID) else {
-                pendingSocialSelection = nil
-                return
-            }
-            guard revealAndSelectSocialAnnotation(
-                annotation,
-                on: mapView
-            ) else {
-                return
-            }
-
-            pendingSocialSelection = nil
-        }
-
-        private func revealAndSelectSocialAnnotation(
-            _ annotation: any MKAnnotation,
-            on mapView: MKMapView
-        ) -> Bool {
-            if !isFocusedSocialAnnotation(annotation) {
-                focusSocialAnnotation(annotation, on: mapView)
-                return false
-            }
-
-            guard let annotationView = mapView.view(for: annotation),
-                  annotationView.cluster == nil else { return false }
-
-            DispatchQueue.main.async { [weak mapView] in
-                mapView?.selectAnnotation(annotation, animated: true)
-            }
-            return true
         }
 
         func gestureRecognizer(
@@ -3705,26 +2914,22 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
-            refreshSocialClusterAnnotationViews(on: mapView)
+            socialProximityController.visibleRegionDidChange(on: mapView)
             refreshMapOffscreenIndicators(on: mapView)
-            selectPendingSocialAnnotationIfVisible(on: mapView)
         }
 
         func mapView(
             _ mapView: MKMapView,
             regionWillChangeAnimated animated: Bool
         ) {
-            guard !isPerformingSocialRegionChange else { return }
-            collapseSocialClusterIfNeeded(on: mapView)
+            socialProximityController.regionWillChange(on: mapView)
         }
 
         func mapView(
             _ mapView: MKMapView,
             regionDidChangeAnimated animated: Bool
         ) {
-            finishSocialRegionChange()
-            refreshSocialClusterAnnotationViews(on: mapView)
-            selectPendingSocialAnnotationIfVisible(on: mapView)
+            socialProximityController.regionDidChange(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -3771,7 +2976,7 @@ struct MapWithFogView: UIViewRepresentable {
                     )
                 )
                 annotationView.setSocialClusterFocus(
-                    isFocusedSocialAnnotation(annotation)
+                    socialProximityController.isFocused(annotation)
                 )
                 return annotationView
             }
@@ -3789,7 +2994,7 @@ struct MapWithFogView: UIViewRepresentable {
                             .reuseIdentifier
                     )
                 annotationView.annotation = annotation
-                configureSocialClusterView(
+                socialProximityController.configure(
                     annotationView,
                     for: cluster,
                     on: mapView
@@ -3837,7 +3042,7 @@ struct MapWithFogView: UIViewRepresentable {
                 annotationView.annotation = annotation
                 annotationView.configure(with: outingPlanAnnotation)
                 annotationView.setSocialClusterFocus(
-                    isFocusedSocialAnnotation(annotation)
+                    socialProximityController.isFocused(annotation)
                 )
                 return annotationView
             }
@@ -3882,7 +3087,7 @@ struct MapWithFogView: UIViewRepresentable {
                 isRefreshingLocation: refreshingFriendUserIDs.contains(userID)
             )
             annotationView.setSocialClusterFocus(
-                isFocusedSocialAnnotation(annotation)
+                socialProximityController.isFocused(annotation)
             )
             return annotationView
         }
@@ -3891,11 +3096,7 @@ struct MapWithFogView: UIViewRepresentable {
             for view in views where view.annotation is MKUserLocation {
                 view.isHidden = userLocationAnnotation != nil
             }
-            DispatchQueue.main.async { [weak self, weak mapView] in
-                guard let self, let mapView else { return }
-                self.refreshSocialClusterAnnotationViews(on: mapView)
-            }
-            selectPendingSocialAnnotationIfVisible(on: mapView)
+            socialProximityController.didAddViews(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
@@ -3907,112 +3108,31 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func activateSocialAnnotation(
-            _ selectedAnnotation: any MKAnnotation,
+            _ annotation: any MKAnnotation,
             view: MKAnnotationView,
             on mapView: MKMapView
         ) {
-            if let cluster = selectedAnnotation
-                as? MapSocialProximityGroupAnnotation {
-                expandSocialCluster(cluster, on: mapView)
-                return
-            }
-
-            if let userAnnotation = selectedAnnotation
-                as? UserLocationAnnotation {
-                if pendingSocialSelection == .currentUser {
-                    pendingSocialSelection = nil
-                }
-                let shouldRecenter = focusDirectlySelectedSocialAnnotation(
-                    userAnnotation,
-                    view: view,
-                    on: mapView
-                )
-                if shouldRecenter {
-                    beginSocialRegionChange()
-                }
-                if mapView.userTrackingMode != .none {
-                    mapView.setUserTrackingMode(.none, animated: false)
-                }
-                if shouldRecenter {
-                    mapView.setCenter(
-                        userAnnotation.coordinate,
-                        animated: !UIAccessibility.isReduceMotionEnabled
-                    )
-                }
-                return
-            }
-
-            if let friendAnnotation = selectedAnnotation
-                as? FriendLocationAnnotation {
-                if pendingSocialSelection == .friend(friendAnnotation.userID) {
-                    pendingSocialSelection = nil
-                }
-                let shouldRecenter = focusDirectlySelectedSocialAnnotation(
-                    friendAnnotation,
-                    view: view,
-                    on: mapView
-                )
-                if shouldRecenter {
-                    beginSocialRegionChange()
-                }
-                if mapView.userTrackingMode != .none {
-                    mapView.setUserTrackingMode(.none, animated: false)
-                }
-                if shouldRecenter {
-                    mapView.setCenter(
-                        friendAnnotation.coordinate,
-                        animated: !UIAccessibility.isReduceMotionEnabled
-                    )
-                }
-                onSelectFriend(friendAnnotation.userID)
-                return
-            }
-
-            guard let annotation = selectedAnnotation
-                as? OutingPlanAnnotation else {
-                return
-            }
-
-            if pendingSocialSelection == .outing(annotation.eventID) {
-                pendingSocialSelection = nil
-            }
-
-            let shouldRecenter = focusDirectlySelectedSocialAnnotation(
+            guard let memberID = socialProximityController.activate(
                 annotation,
                 view: view,
                 on: mapView
-            )
-            if shouldRecenter {
-                beginSocialRegionChange()
+            ) else { return }
+            switch memberID {
+            case .currentUser:
+                break
+            case .friend(let userID):
+                onSelectFriend(userID)
+            case .outing(let eventID):
+                onSelectOutingPlan(eventID)
             }
-            if mapView.userTrackingMode != .none {
-                mapView.setUserTrackingMode(.none, animated: false)
-            }
-            if shouldRecenter {
-                mapView.setCenter(
-                    annotation.coordinate,
-                    animated: !UIAccessibility.isReduceMotionEnabled
-                )
-            }
-            onSelectOutingPlan(annotation.eventID)
         }
 
         func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
             guard let annotation = view.annotation else { return }
-            if annotation is MapSocialProximityGroupAnnotation {
-                collapseExpandedSocialCluster(
-                    on: mapView,
-                    animated: true
-                )
-                return
-            }
             if let outing = annotation as? OutingPlanAnnotation {
                 onDeselectOutingPlan(outing.eventID)
             }
-            if !isRestoringSocialFocus,
-               isFocusedSocialAnnotation(annotation) {
-                restoreFocusedSocialAnnotation(on: mapView)
-            }
+            socialProximityController.didDeselect(annotation, on: mapView)
         }
 
         func mapView(

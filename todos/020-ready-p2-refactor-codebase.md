@@ -49,3 +49,22 @@ et non comme une réécriture globale.
 
 Dette explicitement demandée par le propriétaire le 2026-09-01. Aucun refactor
 n’est inclus dans la création de ce finding.
+
+### Sprint 01 — 5 septembre 2026
+
+Le [sprint de carte sociale](../docs/plans/2026-09-05-architecture-carte-sociale-sprint-01.md)
+est approuvé et implémenté localement. Les règles, l'identité des groupes et
+le focus appartiennent désormais à `MapSocialProximityState` ; les annotations
+MapKit, l'ouverture, la sélection et la restauration à
+`MapSocialProximityController`. Le Coordinator conserve l'assemblage de la
+présentation, les gestes et le reste du rendu cartographique.
+
+La cible XCTest ajoute 18 tests de règles et 7 tests avec un vrai `MKMapView`.
+Les 25 tests, l'analyse Xcode et la compilation des tests réussissent ; les
+revues de simplification et de code n'ont pas de défaut restant à corriger.
+La validation interactive est encore ouverte car le simulateur demande une
+connexion Apple. Le plan conserve les scénarios et les preuves manquantes.
+
+Ce premier incrément ne clôt pas la dette globale : `ContentView` et
+`FriendSyncService` n'ont pas été refactorisés et aucun sprint suivant n'est
+autorisé.

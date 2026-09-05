@@ -11,6 +11,8 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
 *.xcodeproj/xcshareddata/xcschemes/*.xcscheme
+# Keep the shared app/test scheme reproducible.
+!wander.xcodeproj/xcshareddata/xcschemes/wander.xcscheme
 *.moved-aside
 *.pbxuser
 !default.pbxuser

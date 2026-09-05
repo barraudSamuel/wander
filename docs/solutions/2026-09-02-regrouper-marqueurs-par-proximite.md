@@ -1,6 +1,7 @@
 ---
 title: "Regrouper les marqueurs sociaux par proximité géographique"
 date: 2026-09-02
+last_updated: 2026-09-05
 category: architecture
 tags: [solution, mapkit, clustering, core-location, annotations, ux]
 related_plan: "../plans/2026-09-02-garantir-clusters-h3-visibles.md"
@@ -29,9 +30,13 @@ stable doit être une annotation applicative ordinaire.
 
 ## Solution
 
-`MapWithFogView.Coordinator` conserve les annotations sources séparément des
-représentants attachés à la carte. À chaque changement de composition ou de
-coordonnées sociales :
+Depuis l'extraction locale du sprint 01, `MapSocialProximityState` possède les
+règles, l'historique des paires, l'identité des groupes et le membre sélectionné.
+`MapSocialProximityController` conserve les annotations sources séparément des
+représentants attachés à la carte et possède la sélection/restauration native.
+`MapWithFogView.Coordinator` assemble les sources et les présentations puis lui
+transmet les callbacks, sans conserver un second état des groupes.
+À chaque changement de composition ou de coordonnées sociales :
 
 1. les distances Core Location de chaque paire sont calculées une seule fois ;
 2. les groupes sont fusionnés de façon déterministe seulement si chaque paire
@@ -47,9 +52,12 @@ coordonnées sociales :
 7. un représentant existant est réutilisé selon le recouvrement de ses membres
    pour conserver l'état ouvert et éviter les clignotements.
 
-La signature des sources et le membre éventuellement sélectionné sont mis en
-cache. Un panoramique ou un zoom ne relance donc ni les calculs de distance ni
-la synchronisation MapKit.
+Les sources sont comparées dans un ordre canonique. Leurs distances de paires
+sont réutilisées lors des changements de focus ; la révision de l'état évite
+de réappliquer une composition inchangée à MapKit. Les callbacks de caméra
+rafraîchissent les vues sans recalculer la proximité. Un geste qui désélectionne
+un membre peut toutefois restaurer sa composition : l'indépendance au zoom ne
+signifie pas que toute action de caméra doit ignorer le cycle de sélection.
 
 Toutes les vues sociales ont `clusteringIdentifier = nil` et une priorité
 requise. `MapSocialClusterAnnotationView` conserve sa pile compacte et sa liste
@@ -71,7 +79,7 @@ les autres membres gardent leur représentant et le groupe complet est restauré
 - Des `MKClusterAnnotation` construites par l'application : leur gestion interne
   appartient à MapKit.
 
-## Validation
+## Validation historique du 2 septembre 2026
 
 - Build Debug réussi pour le simulateur iOS.
 - Fixture temporaire validée sur l'iPhone 17 Simulator iOS 26.3 puis retirée.
@@ -85,6 +93,29 @@ les autres membres gardent leur représentant et le groupe complet est restauré
   réinstallée et lancée normalement sur le simulateur actif.
 - `git diff --check` réussi après la revue finale.
 
+## Validation de l'extraction du 5 septembre 2026
+
+La cible `wanderTests` contient 18 tests de règles et 7 tests d'intégration
+utilisant un vrai `MKMapView`, les annotations et les vues de groupe. Les
+25 tests et l'analyse Xcode passent sur l'iPhone 17 Pro existant, iOS 26.3.
+La compilation finale des tests ne produit plus de diagnostic Swift.
+
+Les tests ont révélé deux contraintes du cycle natif : une annotation déjà
+visible ne produit pas forcément de callback `didAdd` lors de sa sélection,
+et la libération d'un contrôleur à destruction isolée synthétisée peut planter
+sur le runtime utilisé. La sélection reprend donc immédiatement si la vue
+existe ; un `nonisolated deinit` explicite évite le chemin Swift défaillant,
+tandis que `tearDown` conserve le nettoyage sur l'acteur principal.
+La trace et le contournement correspondent à
+[swiftlang/swift#88036](https://github.com/swiftlang/swift/issues/88036).
+
+Ces tests ne passent pas par l'observateur de taps du Coordinator ni par les
+callbacks produit de `ContentView`. Les gestes réels et VoiceOver restent à
+confirmer : le lancement normal du simulateur affiche la connexion Apple.
+Cette validation partielle et les commandes exactes sont consignées dans
+le [plan du sprint 01](../plans/2026-09-05-architecture-carte-sociale-sprint-01.md).
+L'extraction est locale, sans commit ni publication à ce stade.
+
 ## Reusable lesson and prevention
 
 Une notion produit exprimée en mètres doit être modélisée en mètres, pas avec
@@ -92,6 +123,13 @@ la collision de vues ni une grille choisie pour un autre domaine. Pré-calculer
 les distances de paires, imposer une contrainte complète au groupe et séparer
 les seuils d'entrée et de sortie donne un regroupement stable, testable et
 indépendant de la caméra.
+
+La frontière d'extraction doit inclure les transitions sources, groupes,
+sélection et restauration. Isoler uniquement le calcul laisserait au
+Coordinator les états interdépendants qui compliquent l'ajout de fonctionnalités.
+Les tests des règles protègent la géométrie ; les tests avec de vrais objets
+MapKit protègent le cycle natif. Aucun des deux ne remplace les vérifications
+des gestes de l'écran complet.
 
 Aucune règle supplémentaire n'est ajoutée à `AGENTS.md` : les seuils et le
 comportement restent spécifiques à la carte sociale de Wander.
