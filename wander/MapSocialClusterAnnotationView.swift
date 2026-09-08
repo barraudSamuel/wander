@@ -531,7 +531,7 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     }
 }
 
-private final class MapSocialClusterRowControl: UIControl {
+private final class MapSocialClusterRowControl: UIControl, UIGestureRecognizerDelegate {
     fileprivate let memberID: MapSocialClusterMemberID
     private let iconView: UIView
     private let titleLabel = UILabel()
@@ -679,6 +679,23 @@ private final class MapSocialClusterRowControl: UIControl {
         addSubview(separatorView)
 
         addTarget(self, action: #selector(activate), for: .touchUpInside)
+
+        // Resolve the row's tap before MapKit handles the same touch as a tap
+        // on its annotation. Activating the row can remove that annotation.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(activate))
+        tap.cancelsTouchesInView = true
+        tap.delegate = self
+        addGestureRecognizer(tap)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        guard otherGestureRecognizer is UITapGestureRecognizer,
+              let ancestor = otherGestureRecognizer.view,
+              ancestor !== self else { return false }
+        return isDescendant(of: ancestor)
     }
 
     @objc private func activate() {

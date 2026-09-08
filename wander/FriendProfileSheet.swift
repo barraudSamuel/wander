@@ -64,16 +64,28 @@ struct FriendProfileSheet: View {
                             Text(displayName)
                                 .font(.title2.bold())
 
-                            Label("Ami", systemImage: "person.2.fill")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            if isGhostModeEnabled {
+                                Text("👻 Indisponible")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityLabel(
+                                        "Indisponible, mode fantôme activé"
+                                    )
+                            } else {
+                                Label("Ami", systemImage: "person.2.fill")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     .padding(.vertical, 8)
                 }
 
                 Section {
-                    if let location {
+                    if isGhostModeEnabled {
+                        Text("Cet ami a activé le mode fantôme.")
+                            .foregroundStyle(.secondary)
+                    } else if let location {
                         LabeledContent(
                             isLocationFresh
                                 ? "Dernière mise à jour"
@@ -109,6 +121,7 @@ struct FriendProfileSheet: View {
                     }
 
                     Button {
+                        guard location != nil else { return }
                         opensDirectionsAfterDismiss = true
                         dismiss()
                     } label: {
@@ -125,7 +138,9 @@ struct FriendProfileSheet: View {
                     Text("Position")
                 } footer: {
                     Text(
-                        "L’action Itinéraire utilise la dernière position connue, même si elle n’a pas été actualisée récemment."
+                        isGhostModeEnabled
+                            ? "Sa position est masquée. L’itinéraire et l’actualisation sont indisponibles jusqu’à son retour."
+                            : "L’action Itinéraire utilise la dernière position connue, même si elle n’a pas été actualisée récemment."
                     )
                 }
             }
@@ -144,8 +159,13 @@ struct FriendProfileSheet: View {
                 dismiss()
             }
         }
+        .onChange(of: location) {
+            if location == nil {
+                opensDirectionsAfterDismiss = false
+            }
+        }
         .onDisappear {
-            guard opensDirectionsAfterDismiss else { return }
+            guard opensDirectionsAfterDismiss, location != nil else { return }
             Task { @MainActor in
                 await Task.yield()
                 onOpenDirections()
@@ -158,7 +178,12 @@ struct FriendProfileSheet: View {
     }
 
     private var location: FriendLocation? {
-        service.friendLocations[userID]
+        isGhostModeEnabled ? nil : service.friendLocation(for: userID)
+    }
+
+    private var isGhostModeEnabled: Bool {
+        friend?.isGhostModeEnabled == true
+            || service.ghostFriendUserIDs.contains(userID)
     }
 
     private var isFriendAccepted: Bool {

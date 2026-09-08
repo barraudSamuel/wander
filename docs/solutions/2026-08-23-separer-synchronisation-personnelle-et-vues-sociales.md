@@ -1,6 +1,7 @@
 ---
 title: "Séparer la synchronisation personnelle des vues d'exploration sociales"
 date: 2026-08-23
+last_updated: 2026-09-05
 tags: [solution, firestore, synchronization, friends, performance]
 related:
   - "../plans/2026-08-23-carte-exploration-personnelle.md"
@@ -19,14 +20,19 @@ tous les amis et se répète lors de certaines nouvelles écoutes ou reconnexion
 
 Conserver deux responsabilités distinctes :
 
-- la synchronisation de l'exploration du compte connecté reste permanente afin
-  de restaurer sa scratch map et d'envoyer ses nouvelles cellules ;
+- la synchronisation de l'exploration du compte connecté reste indépendante des
+  vues sociales afin de restaurer sa scratch map et d'envoyer ses nouvelles
+  cellules ; le mode fantôme suspend explicitement les nouveaux envois jusqu'à
+  sa désactivation, tout en préservant l'exploration locale ;
 - aucune exploration d'ami n'est observée par le socle social tant qu'aucune vue
   produit explicite ne la demande.
 
 La carte, les profils et les résumés d'amis ne transportent donc plus de modèle,
 de progression ou de compteur de cellules sociales. Les profils, positions,
 sorties et itinéraires restent indépendants et continuent de fonctionner.
+
+Le contrat de suspension est détaillé dans
+[Suspendre le partage sans écritures en vol](2026-09-05-suspendre-partage-position-sans-regles.md).
 
 ## Pourquoi cette séparation fonctionne
 

@@ -30,7 +30,13 @@ final class LocationPushService: ObservableObject {
     private var isSharingEligible = false
     private var isMonitoringLocationPushes = false
     private var serviceSession: CLServiceSession?
+    private var registrationRevision = UUID()
+    private var monitoringAttemptID: UUID?
+    private var registrationTask: Task<Void, Never>?
+    private var registrationOperationID = UUID()
+    private var unavailableFriendUserIDs: Set<String> = []
     private var refreshBaselineByUserID: [String: Date] = [:]
+    private var refreshRequestIDsByUserID: [String: String] = [:]
     private var refreshTimeoutTasks: [String: Task<Void, Never>] = [:]
 
     private init(
@@ -59,34 +65,46 @@ final class LocationPushService: ObservableObject {
         userID: String?,
         trackingEnabled: Bool,
         backgroundTrackingEnabled: Bool,
+        locationSharingAllowed: Bool,
         authorizationStatus: CLAuthorizationStatus
     ) {
-        currentUserID = userID
         let shouldMonitor = userID != nil
             && trackingEnabled
             && backgroundTrackingEnabled
+            && locationSharingAllowed
             && authorizationStatus == .authorizedAlways
 
+        if currentUserID != userID || isSharingEligible != shouldMonitor {
+            revokeRegistration()
+            currentUserID = userID
+            isSharingEligible = shouldMonitor
+        }
+
         if shouldMonitor {
-            isSharingEligible = true
-            sharedDefaults?.set(
-                true,
-                forKey: LocationPushSharedConfiguration.sharingEnabledKey
-            )
             sharedDefaults?.set(
                 userID,
                 forKey: LocationPushSharedConfiguration.ownerIDKey
+            )
+            if sharedDefaults?.bool(
+                forKey: LocationPushSharedConfiguration.sharingEnabledKey
+            ) != true {
+                sharedDefaults?.set(
+                    UUID().uuidString,
+                    forKey: LocationPushSharedConfiguration.consentRevisionKey
+                )
+            }
+            sharedDefaults?.set(
+                true,
+                forKey: LocationPushSharedConfiguration.sharingEnabledKey
             )
             if !isMonitoringLocationPushes {
                 startMonitoringLocationPushes()
             }
         } else {
             disableSharedConsent()
-            if isSharingEligible
-                || isMonitoringLocationPushes
-                || defaults.string(forKey: Self.registeredOwnerIDKey) != nil {
-                isSharingEligible = false
-                stopMonitoringAndRemoveRegistration()
+            if let ownerID = defaults.string(forKey: Self.registeredOwnerIDKey),
+               registrationTask == nil {
+                enqueueRegistrationRemoval(for: ownerID)
             }
         }
     }
@@ -96,6 +114,7 @@ final class LocationPushService: ObservableObject {
         currentLocation: FriendLocation?
     ) {
         guard !friendUserID.isEmpty,
+              !unavailableFriendUserIDs.contains(friendUserID),
               !refreshingFriendUserIDs.contains(friendUserID) else {
             return
         }
@@ -103,10 +122,12 @@ final class LocationPushService: ObservableObject {
         refreshingFriendUserIDs.insert(friendUserID)
         refreshBaselineByUserID[friendUserID] =
             currentLocation?.updatedAt ?? .distantPast
-        scheduleTimeout(for: friendUserID)
-
         let requestID = UUID().uuidString.lowercased()
+        refreshRequestIDsByUserID[friendUserID] = requestID
+        scheduleTimeout(for: friendUserID, requestID: requestID)
         Task {
+            guard refreshRequestIDsByUserID[friendUserID] == requestID,
+                  !unavailableFriendUserIDs.contains(friendUserID) else { return }
             do {
                 let result = try await functions
                     .httpsCallable("requestFriendLocationRefresh")
@@ -117,12 +138,19 @@ final class LocationPushService: ObservableObject {
                 guard let payload = result.data as? [String: Any],
                       let status = payload["status"] as? String,
                       status == "sent" else {
-                    finishRefresh(for: friendUserID)
+                    finishRefresh(for: friendUserID, requestID: requestID)
                     return
                 }
             } catch {
-                finishRefresh(for: friendUserID)
+                finishRefresh(for: friendUserID, requestID: requestID)
             }
+        }
+    }
+
+    func receiveUnavailableFriends(_ userIDs: Set<String>) {
+        unavailableFriendUserIDs = userIDs
+        for userID in refreshingFriendUserIDs.intersection(userIDs) {
+            finishRefresh(for: userID)
         }
     }
 
@@ -138,13 +166,15 @@ final class LocationPushService: ObservableObject {
     }
 
     func prepareForSignOut() async {
-        try? await removeCurrentRegistration()
+        let removal = revokeRegistration()
         resetLocalState()
+        await removal?.value
     }
 
     func prepareForAccountDeletion() async {
-        try? await removeCurrentRegistration()
+        let removal = revokeRegistration()
         resetLocalState()
+        await removal?.value
     }
 
     // MARK: - Registration
@@ -152,69 +182,105 @@ final class LocationPushService: ObservableObject {
     private func startMonitoringLocationPushes() {
         guard !isMonitoringLocationPushes else { return }
         isMonitoringLocationPushes = true
+        let attemptID = UUID()
+        let revision = registrationRevision
+        monitoringAttemptID = attemptID
         serviceSession?.invalidate()
         serviceSession = CLServiceSession(authorization: .always)
 
         locationManager.startMonitoringLocationPushes { [weak self] token, error in
+            guard let self else { return }
             Task { @MainActor in
-                guard let self else { return }
+                guard self.monitoringAttemptID == attemptID,
+                      self.registrationRevision == revision else { return }
                 guard self.isSharingEligible,
                       error == nil,
                       let token,
                       !token.isEmpty else {
                     self.isMonitoringLocationPushes = false
+                    self.monitoringAttemptID = nil
+                    self.serviceSession?.invalidate()
+                    self.serviceSession = nil
                     return
                 }
-                await self.persist(token: token)
+                self.enqueueRegistration(token: token, revision: revision)
             }
         }
     }
 
-    private func stopMonitoringAndRemoveRegistration() {
-        locationManager.stopMonitoringLocationPushes()
-        isMonitoringLocationPushes = false
-        serviceSession?.invalidate()
-        serviceSession = nil
-
-        Task {
-            try? await removeCurrentRegistrationDocument()
-        }
-    }
-
-    private func persist(token: Data) async {
-        guard let userID = currentUserID,
-              isSharingEligible else { return }
-
-        do {
-            try await registrationReference(for: userID).setData([
-                "token": token.map { String(format: "%02x", $0) }.joined(),
-                "environment": Self.apnsEnvironment,
-                "updatedAt": FieldValue.serverTimestamp()
-            ])
-            defaults.set(userID, forKey: Self.registeredOwnerIDKey)
-        } catch {
-            // Registration is opportunistic. Existing location sharing remains active.
-        }
-    }
-
-    private func removeCurrentRegistration() async throws {
-        locationManager.stopMonitoringLocationPushes()
-        isMonitoringLocationPushes = false
+    @discardableResult
+    private func revokeRegistration() -> Task<Void, Never>? {
+        // Capture owners before changing account state. Serialize deletion behind
+        // any in-flight token write, and before a later registration.
+        let ownerIDs = Set([
+            currentUserID,
+            defaults.string(forKey: Self.registeredOwnerIDKey)
+        ].compactMap { $0 })
+        registrationRevision = UUID()
+        monitoringAttemptID = nil
         isSharingEligible = false
         disableSharedConsent()
+        locationManager.stopMonitoringLocationPushes()
+        isMonitoringLocationPushes = false
         serviceSession?.invalidate()
         serviceSession = nil
-        try await removeCurrentRegistrationDocument()
+
+        for ownerID in ownerIDs {
+            enqueueRegistrationRemoval(for: ownerID)
+        }
+        return registrationTask
     }
 
-    private func removeCurrentRegistrationDocument() async throws {
-        guard let ownerID = defaults.string(
-            forKey: Self.registeredOwnerIDKey
-        ) else {
-            return
+    private func enqueueRegistration(token: Data, revision: UUID) {
+        guard let userID = currentUserID,
+              isSharingEligible,
+              registrationRevision == revision else { return }
+
+        enqueueRegistrationOperation { [self] in
+            guard currentUserID == userID,
+                  isSharingEligible,
+                  registrationRevision == revision else { return }
+            do {
+                try await registrationReference(for: userID).setData([
+                    "token": token.map { String(format: "%02x", $0) }.joined(),
+                    "environment": Self.apnsEnvironment,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ])
+                // A revocation queued during this write will remove this owner
+                // next. Remember it even if that deletion needs a later retry.
+                defaults.set(userID, forKey: Self.registeredOwnerIDKey)
+            } catch {
+                // Registration is opportunistic; publication checks consent separately.
+            }
         }
-        try await registrationReference(for: ownerID).delete()
-        defaults.removeObject(forKey: Self.registeredOwnerIDKey)
+    }
+
+    private func enqueueRegistrationRemoval(for ownerID: String) {
+        enqueueRegistrationOperation { [self] in
+            do {
+                try await registrationReference(for: ownerID).delete()
+                if defaults.string(forKey: Self.registeredOwnerIDKey) == ownerID {
+                    defaults.removeObject(forKey: Self.registeredOwnerIDKey)
+                }
+            } catch {
+                // Keep the saved owner so a later synchronization can retry.
+            }
+        }
+    }
+
+    private func enqueueRegistrationOperation(
+        _ operation: @escaping @MainActor () async -> Void
+    ) {
+        let previousTask = registrationTask
+        let operationID = UUID()
+        registrationOperationID = operationID
+        registrationTask = Task { [self] in
+            await previousTask?.value
+            await operation()
+            if registrationOperationID == operationID {
+                registrationTask = nil
+            }
+        }
     }
 
     private func registrationReference(for userID: String) -> DocumentReference {
@@ -235,20 +301,24 @@ final class LocationPushService: ObservableObject {
 
     // MARK: - Refresh lifecycle
 
-    private func scheduleTimeout(for friendUserID: String) {
+    private func scheduleTimeout(for friendUserID: String, requestID: String) {
         refreshTimeoutTasks[friendUserID]?.cancel()
         refreshTimeoutTasks[friendUserID] = Task { [weak self] in
             try? await Task.sleep(for: Self.refreshTimeout)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                self?.finishRefresh(for: friendUserID)
+                self?.finishRefresh(for: friendUserID, requestID: requestID)
             }
         }
     }
 
-    private func finishRefresh(for friendUserID: String) {
+    private func finishRefresh(for friendUserID: String, requestID: String? = nil) {
+        if let requestID, refreshRequestIDsByUserID[friendUserID] != requestID {
+            return
+        }
         refreshingFriendUserIDs.remove(friendUserID)
         refreshBaselineByUserID.removeValue(forKey: friendUserID)
+        refreshRequestIDsByUserID.removeValue(forKey: friendUserID)
         refreshTimeoutTasks.removeValue(forKey: friendUserID)?.cancel()
     }
 
@@ -259,7 +329,9 @@ final class LocationPushService: ObservableObject {
         }
         refreshTimeoutTasks.removeAll()
         refreshBaselineByUserID.removeAll()
+        refreshRequestIDsByUserID.removeAll()
         refreshingFriendUserIDs.removeAll()
+        unavailableFriendUserIDs.removeAll()
     }
 
     private func disableSharedConsent() {
@@ -269,6 +341,9 @@ final class LocationPushService: ObservableObject {
         )
         sharedDefaults?.removeObject(
             forKey: LocationPushSharedConfiguration.ownerIDKey
+        )
+        sharedDefaults?.removeObject(
+            forKey: LocationPushSharedConfiguration.consentRevisionKey
         )
     }
 }

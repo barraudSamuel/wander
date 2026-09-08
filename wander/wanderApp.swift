@@ -14,19 +14,21 @@ struct wanderApp: App {
     private var appDelegate
 
     let container: ModelContainer
-    @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
-    @StateObject private var authenticationService = FirebaseService.shared
-    @StateObject private var friendSyncService = FriendSyncService.shared
-
-    private var showsOnboardingPreview: Bool {
-        #if DEBUG
-        ProcessInfo.processInfo.arguments.contains("-preview-onboarding")
-        #else
-        false
-        #endif
-    }
 
     init() {
+        #if DEBUG && targetEnvironment(simulator)
+        if DebugSocialMapScenario.isEnabled {
+            do {
+                container = try ModelContainer(
+                    for: DiscoveredCell.self,
+                    configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+                )
+            } catch {
+                fatalError("Failed to create scenario container: \(error)")
+            }
+            return
+        }
+        #endif
         do {
             container = try ModelContainer(for: DiscoveredCell.self, migrationPlan: WanderMigrationPlan.self)
         } catch {
@@ -39,32 +41,58 @@ struct wanderApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if showsOnboardingPreview {
-                    OnboardingView(isRestoringExistingProfile: false)
-                } else if !authenticationService.isAuthenticationResolved {
-                    ProgressView("Connexion…")
-                } else if authenticationService.currentUserId == nil {
-                    AuthenticationView(
-                        authenticationService: authenticationService
-                    )
-                } else if onboardingCompleted {
-                    ContentView()
-                } else if !friendSyncService.isAccountBootstrapResolved {
-                    AccountBootstrapView(service: friendSyncService)
-                } else {
-                    OnboardingView(
-                        isRestoringExistingProfile:
-                            friendSyncService.accountProfileOrigin == .existing
-                    )
-                }
+            #if DEBUG && targetEnvironment(simulator)
+            if DebugSocialMapScenario.isEnabled {
+                DebugSocialMapScenarioView()
+            } else {
+                WanderAuthenticatedRootView()
             }
-            .animation(
-                .default,
-                value: authenticationService.currentUserId
-            )
+            #else
+            WanderAuthenticatedRootView()
+            #endif
         }
         .modelContainer(container)
+    }
+}
+
+private struct WanderAuthenticatedRootView: View {
+    @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
+    @StateObject private var authenticationService = FirebaseService.shared
+    @StateObject private var friendSyncService = FriendSyncService.shared
+
+    private var showsOnboardingPreview: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-preview-onboarding")
+        #else
+        false
+        #endif
+    }
+
+    var body: some View {
+        Group {
+            if showsOnboardingPreview {
+                OnboardingView(isRestoringExistingProfile: false)
+            } else if !authenticationService.isAuthenticationResolved {
+                ProgressView("Connexion…")
+            } else if authenticationService.currentUserId == nil {
+                AuthenticationView(
+                    authenticationService: authenticationService
+                )
+            } else if onboardingCompleted {
+                ContentView()
+            } else if !friendSyncService.isAccountBootstrapResolved {
+                AccountBootstrapView(service: friendSyncService)
+            } else {
+                OnboardingView(
+                    isRestoringExistingProfile:
+                        friendSyncService.accountProfileOrigin == .existing
+                )
+            }
+        }
+        .animation(
+            .default,
+            value: authenticationService.currentUserId
+        )
     }
 }
 

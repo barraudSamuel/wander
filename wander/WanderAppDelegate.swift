@@ -14,6 +14,9 @@ final class WanderAppDelegate: NSObject, UIApplicationDelegate {
             UIApplication.LaunchOptionsKey: Any
         ]? = nil
     ) -> Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if DebugSocialMapScenario.isEnabled { return true }
+        #endif
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
         NotificationService.shared.configure(application: application)

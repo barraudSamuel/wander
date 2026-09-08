@@ -1,5 +1,6 @@
 import MapKit
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import XCTest
 @testable import wander
 
@@ -97,6 +98,182 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertTrue(fixture.mapView.view(for: friend) === view)
     }
 
+    func testActivatingAnotherEventKeepsBothMembersAttachedWithoutRestoringTheirGroup() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let walk = fixture.annotation("Balade", meters: 0)
+        let coffee = fixture.annotation("Café", meters: 5)
+        fixture.update([.outing("walk"): walk, .outing("coffee"): coffee])
+        XCTAssertEqual(fixture.groups.count, 1)
+
+        fixture.controller.select(.outing("walk"), on: fixture.mapView)
+        try await eventually("The first event is selected and the second has a view") {
+            fixture.isSelected(walk) && fixture.mapView.view(for: coffee) != nil
+        }
+        let coffeeView = try XCTUnwrap(fixture.mapView.view(for: coffee))
+
+        // The passive tap observer calls activate before native selection finishes.
+        XCTAssertEqual(
+            fixture.controller.activate(coffee, view: coffeeView, on: fixture.mapView),
+            .outing("coffee")
+        )
+
+        XCTAssertTrue(fixture.controller.isFocused(coffee))
+        XCTAssertFalse(fixture.controller.isFocused(walk))
+        XCTAssertEqual(fixture.attachedCount(of: coffee), 1)
+        XCTAssertEqual(fixture.attachedCount(of: walk), 1)
+        XCTAssertTrue(fixture.groups.isEmpty)
+        XCTAssertEqual(fixture.socialAnnotations.count, 2)
+
+        fixture.controller.didDeselect(walk, on: fixture.mapView)
+        await flushMainQueue()
+
+        XCTAssertTrue(fixture.controller.isFocused(coffee))
+        XCTAssertEqual(fixture.attachedCount(of: coffee), 1)
+        XCTAssertEqual(fixture.attachedCount(of: walk), 1)
+        XCTAssertTrue(fixture.groups.isEmpty)
+    }
+
+    func testRemovingFirstEventSelectedThroughItsRowKeepsTheCoincidentSecondEvent() async throws {
+        try await assertSelectingAndRemovingCoincidentEvent(at: 0)
+    }
+
+    func testRemovingSecondEventSelectedThroughItsRowKeepsTheCoincidentFirstEvent() async throws {
+        try await assertSelectingAndRemovingCoincidentEvent(at: 1)
+    }
+
+    func testRapidMemberSelectionsLeaveOnlyTheLatestEventSelected() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let friend = fixture.annotation("Amina", meters: 0)
+        let outing = fixture.annotation("Balade", meters: 5)
+        fixture.update([.friend("amina"): friend, .outing("walk"): outing])
+
+        fixture.controller.select(.friend("amina"), on: fixture.mapView)
+        try await eventually("The friend is selected and both member views are available") {
+            fixture.isSelected(friend) && fixture.mapView.view(for: outing) != nil
+        }
+
+        // Queue competing native selections without yielding to the main queue.
+        fixture.controller.select(.outing("walk"), on: fixture.mapView)
+        fixture.controller.select(.friend("amina"), on: fixture.mapView)
+        fixture.controller.select(.outing("walk"), on: fixture.mapView)
+        try await eventually("Only the latest requested member is selected") {
+            fixture.isSelected(outing) && !fixture.isSelected(friend)
+        }
+
+        fixture.controller.didDeselect(friend, on: fixture.mapView)
+        await flushMainQueue()
+
+        XCTAssertTrue(fixture.controller.isFocused(outing))
+        XCTAssertFalse(fixture.controller.isFocused(friend))
+        XCTAssertEqual(fixture.attachedCount(of: outing), 1)
+        XCTAssertEqual(fixture.attachedCount(of: friend), 1)
+        XCTAssertTrue(fixture.groups.isEmpty)
+        XCTAssertEqual(fixture.mapView.selectedAnnotations.count, 1)
+    }
+
+    func testActivatingGroupClearsMemberFocusAndClosesItsPresentationOnce() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let sources = fixture.mixedSources()
+        let friend = try XCTUnwrap(sources[.friend("amina")])
+        fixture.update(sources)
+        fixture.controller.select(.friend("amina"), on: fixture.mapView)
+        try await eventually("The member is selected beside the remaining group") {
+            fixture.isSelected(friend) && fixture.groups.first.flatMap { fixture.groupView(for: $0) } != nil
+        }
+        let group = try XCTUnwrap(fixture.groups.first)
+        let groupView = try XCTUnwrap(fixture.groupView(for: group))
+
+        // Queue native deselection before the tap observer activates the group.
+        fixture.mapView.deselectAnnotation(friend, animated: false)
+        fixture.controller.activate(group, view: groupView, on: fixture.mapView)
+        await flushMainQueue()
+
+        XCTAssertFalse(fixture.controller.isFocused(friend))
+        XCTAssertFalse(fixture.isSelected(friend))
+        XCTAssertEqual(fixture.attachedCount(of: friend), 0)
+        XCTAssertTrue(fixture.groups.first === group)
+        XCTAssertEqual(group.memberAnnotations.count, 3)
+        XCTAssertEqual(fixture.socialAnnotations.count, 1)
+        XCTAssertTrue(groupView.isExpanded)
+        XCTAssertTrue(groupView.accessibilityTraits.contains(.selected))
+        XCTAssertEqual(fixture.deselectedMembers, [.friend("amina")])
+    }
+
+    func testActivatingDistantSingletonClosesThePreviouslyExpandedGroup() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let outing = fixture.annotation("Café", meters: 150)
+        fixture.update([
+            .currentUser: fixture.annotation("Vous", meters: 0),
+            .friend("amina"): fixture.annotation("Amina", meters: 5),
+            .outing("coffee"): outing
+        ])
+        let group = try XCTUnwrap(fixture.groups.first)
+        try await eventually("The group and distant event have views") {
+            fixture.groupView(for: group) != nil && fixture.mapView.view(for: outing) != nil
+        }
+        let groupView = try XCTUnwrap(fixture.groupView(for: group))
+        let outingView = try XCTUnwrap(fixture.mapView.view(for: outing))
+        fixture.mapView.selectAnnotation(group, animated: false)
+        try await eventually("The initial group is expanded") { groupView.isExpanded }
+
+        // The old group's callback must not be responsible for closing its view.
+        fixture.mapView.deselectAnnotation(group, animated: false)
+        XCTAssertEqual(
+            fixture.controller.activate(outing, view: outingView, on: fixture.mapView),
+            .outing("coffee")
+        )
+        await flushMainQueue()
+
+        XCTAssertFalse(groupView.isExpanded)
+        XCTAssertFalse(groupView.accessibilityTraits.contains(.selected))
+        XCTAssertNil(groupView.accessibilityCustomActions)
+        XCTAssertTrue(fixture.controller.isFocused(outing))
+        XCTAssertEqual(fixture.attachedCount(of: outing), 1)
+        XCTAssertTrue(fixture.groups.first === group)
+        XCTAssertEqual(group.memberAnnotations.count, 2)
+        XCTAssertEqual(fixture.socialAnnotations.count, 2)
+        XCTAssertTrue(fixture.deselectedMembers.isEmpty)
+    }
+
+    func testAutomaticRecenteringPreservesSelectionUntilUserMovesTheMap() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let sources = fixture.mixedSources()
+        let friend = try XCTUnwrap(sources[.friend("amina")])
+        fixture.update(sources)
+        let group = try XCTUnwrap(fixture.groups.first)
+
+        fixture.controller.center(on: .friend("amina"), on: fixture.mapView)
+        // MapKit can finish one camera update before reporting the next one.
+        fixture.controller.regionDidChange(on: fixture.mapView)
+        fixture.controller.regionWillChange(on: fixture.mapView, userInitiated: false)
+        fixture.controller.visibleRegionDidChange(on: fixture.mapView, userInitiated: false)
+        try await eventually("Automatic camera callbacks preserve the requested selection") {
+            fixture.isSelected(friend)
+        }
+
+        XCTAssertTrue(fixture.controller.isFocused(friend))
+        XCTAssertEqual(fixture.attachedCount(of: friend), 1)
+        XCTAssertTrue(fixture.deselectedMembers.isEmpty)
+
+        fixture.controller.regionWillChange(on: fixture.mapView, userInitiated: true)
+        fixture.controller.visibleRegionDidChange(on: fixture.mapView, userInitiated: true)
+        fixture.controller.regionWillChange(on: fixture.mapView, userInitiated: true)
+        await flushMainQueue()
+
+        XCTAssertFalse(fixture.isSelected(friend))
+        XCTAssertFalse(fixture.controller.isFocused(friend))
+        XCTAssertEqual(fixture.attachedCount(of: friend), 0)
+        XCTAssertTrue(fixture.groups.first === group)
+        XCTAssertEqual(group.memberAnnotations.count, 3)
+        XCTAssertEqual(fixture.socialAnnotations.count, 1)
+        XCTAssertEqual(fixture.deselectedMembers, [.friend("amina")])
+    }
+
     func testAddingNearbySourcesPreservesSelectionAndRemovingSelectedSourceClearsIt() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -120,6 +297,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
             !fixture.isSelected(friend) && fixture.attachedCount(of: friend) == 0
         }
         fixture.controller.didDeselect(friend, on: fixture.mapView)
+        await flushMainQueue()
 
         XCTAssertTrue(fixture.groups.first === remainingGroup)
         XCTAssertEqual(fixture.socialAnnotations.count, 1)
@@ -163,6 +341,39 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertEqual(fixture.mapView.view(for: replacement)?.annotation?.title ?? nil, "Amina actualisée")
     }
 
+    func testReplacingFocusedSourcePreservesNativeSelectionAndIgnoresOldCallbacks() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        var sources = fixture.mixedSources()
+        let previousFriend = try XCTUnwrap(sources[.friend("amina")])
+        fixture.update(sources)
+        fixture.controller.select(.friend("amina"), on: fixture.mapView)
+        try await eventually("The original friend is selected") { fixture.isSelected(previousFriend) }
+        let previousView = try XCTUnwrap(fixture.mapView.view(for: previousFriend))
+        let remainingGroup = try XCTUnwrap(fixture.groups.first)
+
+        let replacement = fixture.annotation("Amina actualisée", meters: 5)
+        sources[.friend("amina")] = replacement
+        fixture.update(sources)
+        try await eventually("The replacement inherits the native selection") {
+            fixture.isSelected(replacement) && !fixture.isSelected(previousFriend)
+        }
+
+        fixture.controller.didDeselect(previousFriend, on: fixture.mapView)
+        XCTAssertNil(fixture.controller.activate(previousFriend, view: previousView, on: fixture.mapView))
+        await flushMainQueue()
+
+        XCTAssertTrue(fixture.controller.isFocused(replacement))
+        XCTAssertFalse(fixture.controller.isFocused(previousFriend))
+        XCTAssertTrue(fixture.isSelected(replacement))
+        XCTAssertEqual(fixture.attachedCount(of: previousFriend), 0)
+        XCTAssertEqual(fixture.attachedCount(of: replacement), 1)
+        XCTAssertTrue(fixture.groups.first === remainingGroup)
+        XCTAssertEqual(remainingGroup.memberAnnotations.count, 2)
+        XCTAssertEqual(fixture.socialAnnotations.count, 2)
+        XCTAssertTrue(fixture.deselectedMembers.isEmpty)
+    }
+
     func testLateDeselectionOfReplacedGroupDoesNotCloseNewGroup() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -192,6 +403,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         try await eventually("The replacement group expands") { replacementView.isExpanded }
 
         fixture.controller.didDeselect(previousGroup, on: fixture.mapView)
+        await flushMainQueue()
 
         XCTAssertTrue(replacementView.isExpanded)
         XCTAssertTrue(replacementView.accessibilityTraits.contains(.selected))
@@ -215,15 +427,185 @@ final class MapSocialProximityControllerTests: XCTestCase {
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
         fixture.controller.tearDown()
         // The selection block is enqueued before this continuation, with no blocking wait.
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async { continuation.resume() }
-        }
+        await flushMainQueue()
 
         XCTAssertFalse(fixture.isSelected(friend))
         XCTAssertFalse(fixture.controller.isFocused(friend))
     }
 
+    func testCollapseCancelsSelectionAlreadyScheduledOnMainQueue() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let friend = fixture.annotation("Amina", meters: 0)
+        fixture.update([.friend("amina"): friend])
+        try await eventually("The singleton view appears") { fixture.mapView.view(for: friend) != nil }
+
+        fixture.controller.select(.friend("amina"), on: fixture.mapView)
+        fixture.controller.collapse(on: fixture.mapView)
+        await flushMainQueue()
+
+        XCTAssertFalse(fixture.isSelected(friend))
+        XCTAssertFalse(fixture.controller.isFocused(friend))
+        XCTAssertEqual(fixture.attachedCount(of: friend), 1)
+        XCTAssertEqual(fixture.socialAnnotations.count, 1)
+    }
+
+    // MARK: - Passive touch observer callbacks
+
+    func testPassiveTapObserverReportsConsecutiveTouchCallbacks() {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let observer = PassiveMapTapObserver(maximumMovement: 12)
+        view.addGestureRecognizer(observer)
+        let event = UIEvent()
+        let openingPoint = CGPoint(x: 20, y: 20)
+        let backgroundPoint = CGPoint(x: 120, y: 90)
+        var beganPoints: [CGPoint] = []
+        var endedPoints: [CGPoint] = []
+        var cancellationCount = 0
+        observer.onTouchBegan = { beganPoints.append($0) }
+        observer.onTapEnded = { endedPoints.append($0) }
+        observer.onTouchCancelled = { cancellationCount += 1 }
+
+        // Check callback bookkeeping only; this bypasses UIKit gesture arbitration.
+        let openingTouch = ObserverTestTouch(point: openingPoint)
+        observer.touchesBegan([openingTouch], with: event)
+        observer.touchesEnded([openingTouch], with: event)
+        let backgroundTouch = ObserverTestTouch(point: backgroundPoint)
+        observer.touchesBegan([backgroundTouch], with: event)
+        observer.touchesEnded([backgroundTouch], with: event)
+
+        XCTAssertEqual(beganPoints, [openingPoint, backgroundPoint])
+        XCTAssertEqual(endedPoints, [openingPoint, backgroundPoint])
+        XCTAssertEqual(cancellationCount, 0)
+    }
+
+    func testPassiveTapObserverCancelsDragOnceWithoutReportingATap() {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let observer = PassiveMapTapObserver(maximumMovement: 12)
+        view.addGestureRecognizer(observer)
+        let event = UIEvent()
+        let touch = ObserverTestTouch(point: CGPoint(x: 20, y: 20))
+        var tapCount = 0
+        var cancellationCount = 0
+        observer.onTapEnded = { _ in tapCount += 1 }
+        observer.onTouchCancelled = { cancellationCount += 1 }
+
+        observer.touchesBegan([touch], with: event)
+        touch.point = CGPoint(x: 40, y: 20)
+        observer.touchesMoved([touch], with: event)
+        observer.touchesEnded([touch], with: event)
+        observer.touchesCancelled([touch], with: event)
+
+        XCTAssertEqual(tapCount, 0)
+        XCTAssertEqual(cancellationCount, 1)
+    }
+
+    func testPassiveTapObserverCancelsSecondFingerOnceWithoutReportingATap() {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let observer = PassiveMapTapObserver(maximumMovement: 12)
+        view.addGestureRecognizer(observer)
+        let event = UIEvent()
+        let firstTouch = ObserverTestTouch(point: CGPoint(x: 20, y: 20))
+        let secondTouch = ObserverTestTouch(point: CGPoint(x: 60, y: 60))
+        var beganCount = 0
+        var tapCount = 0
+        var cancellationCount = 0
+        observer.onTouchBegan = { _ in beganCount += 1 }
+        observer.onTapEnded = { _ in tapCount += 1 }
+        observer.onTouchCancelled = { cancellationCount += 1 }
+
+        observer.touchesBegan([firstTouch], with: event)
+        observer.touchesBegan([secondTouch], with: event)
+        observer.touchesEnded([firstTouch, secondTouch], with: event)
+        observer.touchesCancelled([firstTouch, secondTouch], with: event)
+
+        XCTAssertEqual(beganCount, 1)
+        XCTAssertEqual(tapCount, 0)
+        XCTAssertEqual(cancellationCount, 1)
+    }
+
     // MARK: - Bounded native view waits
+
+    private func assertSelectingAndRemovingCoincidentEvent(at rowIndex: Int) async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let events: [(id: MapSocialClusterMemberID, annotation: MKPointAnnotation)] = [
+            (.outing("a-walk"), fixture.annotation("Balade", meters: 0)),
+            (.outing("b-coffee"), fixture.annotation("Café", meters: 0))
+        ]
+        let selected = events[rowIndex]
+        let remaining = events[1 - rowIndex]
+        XCTAssertEqual(selected.annotation.coordinate.latitude, remaining.annotation.coordinate.latitude)
+        XCTAssertEqual(selected.annotation.coordinate.longitude, remaining.annotation.coordinate.longitude)
+        fixture.update(Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0.annotation) }))
+        XCTAssertEqual(fixture.groups.count, 1)
+        let group = try XCTUnwrap(fixture.groups.first)
+        try await eventually("The coincident event group has a view") {
+            fixture.groupView(for: group) != nil
+        }
+        let groupView = try XCTUnwrap(fixture.groupView(for: group))
+        fixture.mapView.selectAnnotation(group, animated: false)
+        try await eventually("The coincident event list opens") { groupView.isExpanded }
+        groupView.layoutIfNeeded()
+
+        let rows = fixture.memberRows(in: groupView)
+        XCTAssertEqual(rows.map(\.accessibilityLabel), ["Balade", "Café"])
+        let row = try XCTUnwrap(rows.indices.contains(rowIndex) ? rows[rowIndex] : nil)
+        let center = row.convert(CGPoint(x: row.bounds.midX, y: row.bounds.midY), to: groupView)
+        XCTAssertTrue(groupView.hitTest(center, with: nil) === row)
+
+        // The row must own a tap even where it overlaps the native marker's bounds.
+        let rowTap = try XCTUnwrap(row.gestureRecognizers?.compactMap { $0 as? UITapGestureRecognizer }.first)
+        let ancestorTap = UITapGestureRecognizer()
+        fixture.mapView.addGestureRecognizer(ancestorTap)
+        let scrollPan = UIPanGestureRecognizer()
+        fixture.mapView.addGestureRecognizer(scrollPan)
+        XCTAssertEqual(rowTap.delegate?.gestureRecognizer?(rowTap, shouldBeRequiredToFailBy: ancestorTap), true)
+        XCTAssertEqual(rowTap.delegate?.gestureRecognizer?(rowTap, shouldBeRequiredToFailBy: scrollPan), false)
+        XCTAssertTrue(rowTap.cancelsTouchesInView, "A recognized tap must not also fire touchUpInside.")
+
+        // Exercise the real row target/action instead of calling controller.select directly.
+        // This does not synthesize a finger gesture or MapKit's competing gesture callbacks.
+        row.sendActions(for: .touchUpInside)
+        try await eventually("The chosen row selects its own event") {
+            fixture.isSelected(selected.annotation) && fixture.controller.isFocused(selected.annotation)
+        }
+
+        XCTAssertFalse(fixture.controller.isFocused(remaining.annotation))
+        XCTAssertFalse(fixture.isSelected(remaining.annotation))
+        XCTAssertEqual(fixture.mapView.selectedAnnotations.count, 1)
+        XCTAssertTrue(fixture.groups.isEmpty)
+        XCTAssertEqual(fixture.attachedCount(of: group), 0)
+        XCTAssertEqual(fixture.attachedCount(of: selected.annotation), 1)
+        XCTAssertEqual(fixture.attachedCount(of: remaining.annotation), 1)
+        XCTAssertEqual(fixture.socialAnnotations.count, 2)
+        XCTAssertTrue(fixture.deselectedMembers.isEmpty)
+
+        fixture.update([remaining.id: remaining.annotation])
+        try await eventually("Removing the chosen event leaves one unselected singleton") {
+            fixture.socialAnnotations.count == 1 && fixture.mapView.selectedAnnotations.isEmpty
+        }
+        // Repeated source snapshots must not dismiss the product presentation a second time.
+        fixture.update([remaining.id: remaining.annotation])
+        await flushMainQueue()
+
+        XCTAssertFalse(fixture.controller.isFocused(selected.annotation))
+        XCTAssertFalse(fixture.controller.isFocused(remaining.annotation))
+        XCTAssertFalse(fixture.controller.hasActivePresentation)
+        XCTAssertTrue(fixture.mapView.selectedAnnotations.isEmpty)
+        XCTAssertTrue(fixture.groups.isEmpty)
+        XCTAssertEqual(fixture.attachedCount(of: group), 0)
+        XCTAssertEqual(fixture.attachedCount(of: selected.annotation), 0)
+        XCTAssertEqual(fixture.attachedCount(of: remaining.annotation), 1)
+        XCTAssertEqual(fixture.socialAnnotations.count, 1)
+        XCTAssertEqual(fixture.deselectedMembers, [selected.id])
+    }
+
+    private func flushMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
 
     private func makeFixture() async throws -> MapFixture {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -260,12 +642,28 @@ final class MapSocialProximityControllerTests: XCTestCase {
     }
 }
 
+/// Supplies coordinates to the observer's public touch callbacks; it does not inject OS events.
+@MainActor
+private final class ObserverTestTouch: UITouch {
+    var point: CGPoint
+
+    init(point: CGPoint) {
+        self.point = point
+        super.init()
+    }
+
+    override func location(in view: UIView?) -> CGPoint {
+        point
+    }
+}
+
 @MainActor
 private final class MapFixture: NSObject, MKMapViewDelegate {
     private let window: UIWindow
     private weak var previousKeyWindow: UIWindow?
     private var sources: [MapSocialClusterMemberID: MKPointAnnotation] = [:]
     private(set) var hasSettledInitialRegion = false
+    private(set) var deselectedMembers: [MapSocialClusterMemberID] = []
     let mapView = MKMapView(frame: .zero)
 
     lazy var controller = MapSocialProximityController(
@@ -274,6 +672,9 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         },
         setFocusAppearance: { focused, view in
             (view as? MKMarkerAnnotationView)?.markerTintColor = focused ? .systemOrange : .systemBlue
+        },
+        onDeselectMember: { [weak self] memberID in
+            self?.deselectedMembers.append(memberID)
         }
     )
 
@@ -340,6 +741,22 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
 
     func groupView(for group: MapSocialProximityGroupAnnotation) -> MapSocialClusterAnnotationView? {
         mapView.view(for: group) as? MapSocialClusterAnnotationView
+    }
+
+    func memberRows(in view: MapSocialClusterAnnotationView) -> [UIControl] {
+        func controls(in parent: UIView) -> [UIControl] {
+            parent.subviews.flatMap { child -> [UIControl] in
+                if let control = child as? UIControl,
+                   control.allControlEvents.contains(.touchUpInside),
+                   control.accessibilityLabel != nil {
+                    return [control]
+                }
+                return controls(in: child)
+            }
+        }
+        return controls(in: view).sorted {
+            $0.convert($0.bounds, to: view).minY < $1.convert($1.bounds, to: view).minY
+        }
     }
 
     func isSelected(_ annotation: any MKAnnotation) -> Bool {

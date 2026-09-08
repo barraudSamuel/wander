@@ -13,6 +13,7 @@ struct FriendContact: Identifiable, Equatable {
     let displayName: String
     let avatarID: String
     let profileColorHex: String
+    var isGhostModeEnabled = false
 
     var id: String { userID }
 }
@@ -78,6 +79,10 @@ struct FriendLocation: Equatable {
         let age = referenceDate.timeIntervalSince(sampledAt)
         return age.isFinite && age >= -maximumFutureTimestampSkew
     }
+
+    static func isAfterSharingResume(sampledAt: Date, resumedAt: Date?) -> Bool {
+        resumedAt.map { sampledAt >= $0 } ?? true
+    }
 }
 
 enum OwnExplorationSyncState: Equatable {
@@ -97,6 +102,8 @@ private struct RemoteProfile {
     let displayName: String
     let avatarID: String
     let profileColorHex: String
+    var isGhostModeEnabled = false
+    var locationSharingResumedAt: Date? = nil
 }
 
 private struct FriendshipRecord {
@@ -132,6 +139,23 @@ final class FriendSyncService: ObservableObject {
     @Published private(set) var isProcessingFriendAction = false
     @Published private(set) var isAccountDeletionPending = false
     @Published var errorMessage: String?
+    @Published private(set) var ghostModeState = GhostModeState()
+    @Published private(set) var ghostFriendUserIDs: Set<String> = []
+    @Published private(set) var ghostModeErrorMessage: String?
+    @Published private(set) var ghostModeConflictMessage: String?
+
+    var isGhostModeEnabled: Bool { ghostModeState.isEnabled }
+    var isGhostModePending: Bool {
+        ghostModeState.pendingChange != nil
+            || (hasLoadedOwnProfileFromServer && ghostModeState.confirmedEnabled == nil)
+    }
+    var isLocationSharingAllowed: Bool {
+        currentUserID != nil && !isAccountDeletionPending
+            && ghostModeState.allowsSharing
+    }
+    var canChangeGhostMode: Bool {
+        currentUserID != nil && isProfileReady && !isAccountDeletionPending
+    }
 
     var isAccountBootstrapResolved: Bool {
         hasLoadedOwnProfileFromServer
@@ -139,7 +163,13 @@ final class FriendSyncService: ObservableObject {
     }
 
     var friendLocations: [String: FriendLocation] {
-        receivedFriendLocations
+        ghostFriendUserIDs.isEmpty
+            ? receivedFriendLocations
+            : receivedFriendLocations.filter { !ghostFriendUserIDs.contains($0.key) }
+    }
+
+    func friendLocation(for userID: String) -> FriendLocation? {
+        ghostFriendUserIDs.contains(userID) ? nil : receivedFriendLocations[userID]
     }
 
     private var db = Firestore.firestore()
@@ -166,6 +196,7 @@ final class FriendSyncService: ObservableObject {
     private var friendshipsListener: ListenerRegistration?
     private var profileListeners: [String: ListenerRegistration] = [:]
     private var locationListeners: [String: ListenerRegistration] = [:]
+    private var locationSubscriptionIDs: [String: UUID] = [:]
     private var locationFreshnessTimers: [String: Timer] = [:]
     private var friendshipAccessChecksInFlight: Set<String> = []
     private var profileUpdateTask: Task<Void, Never>?
@@ -199,6 +230,204 @@ final class FriendSyncService: ObservableObject {
         spotEnteredAt: Date?
     )?
     private var shouldDeleteLocationWhenAuthenticated = false
+    private var ghostModeRequestInFlight = false
+    private var ghostModeRetryTask: Task<Void, Never>?
+
+    // MARK: - Ghost mode
+
+    func setGhostModeEnabled(_ enabled: Bool) {
+        guard canChangeGhostMode,
+              ghostModeState.pendingChange != nil
+                || ghostModeState.confirmedEnabled != enabled else { return }
+
+        ghostModeState.request(enabled)
+        ghostModeErrorMessage = nil
+        ghostModeConflictMessage = nil
+        persistGhostModeState()
+        suspendLocalLocationPublication()
+        flushGhostModeChange()
+    }
+
+    func retryGhostModeChange() {
+        ghostModeRetryTask?.cancel()
+        ghostModeRetryTask = nil
+        flushGhostModeChange()
+    }
+
+    func resumeGhostModeSynchronization() {
+        retryGhostModeChange()
+        uploadMissingExplorationCellsIfNeeded()
+    }
+
+    private func suspendLocalLocationPublication() {
+        latestLocationForSharing = nil
+        lastLocationPush = nil
+        let defaults = UserDefaults(suiteName: LocationPushSharedConfiguration.appGroupID)
+        defaults?.set(false, forKey: LocationPushSharedConfiguration.sharingEnabledKey)
+    }
+
+    private func ghostModeStorageKey(_ component: String, for userID: String) -> String {
+        "ghostMode.\(userID).\(component)"
+    }
+
+    private func persistGhostModeState() {
+        guard let currentUserID else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(
+            ghostModeState.rememberedEnabled,
+            forKey: ghostModeStorageKey("enabled", for: currentUserID)
+        )
+        defaults.set(
+            ghostModeState.rememberedRevision,
+            forKey: ghostModeStorageKey("revision", for: currentUserID)
+        )
+        let key = ghostModeStorageKey("pending", for: currentUserID)
+        if let pending = ghostModeState.pendingChange,
+           let data = try? JSONEncoder().encode(pending) {
+            defaults.set(data, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    private func receiveGhostModeProfile(_ data: [String: Any]) {
+        var nextState = ghostModeState
+        nextState.receive(
+            enabled: LocationSharingPolicy.ghostModeEnabled(in: data),
+            revision: data[LocationSharingPolicy.revisionKey] as? String,
+            resumedAt: (data[LocationSharingPolicy.resumedAtKey] as? Timestamp)?.dateValue()
+        )
+        if nextState != ghostModeState {
+            ghostModeState = nextState
+            persistGhostModeState()
+        }
+        if !isLocationSharingAllowed {
+            suspendLocalLocationPublication()
+        }
+        if !isGhostModePending {
+            ghostModeErrorMessage = nil
+            ghostModeRetryTask?.cancel()
+            ghostModeRetryTask = nil
+        }
+        flushGhostModeChange()
+        uploadMissingExplorationCellsIfNeeded()
+    }
+
+    private func flushGhostModeChange() {
+        if hasLoadedOwnProfileFromServer,
+           ghostModeState.confirmedEnabled == nil,
+           ghostModeState.pendingChange == nil {
+            refreshGhostModeFromServer()
+            return
+        }
+        guard let userID = currentUserID,
+              !isAccountDeletionPending,
+              hasLoadedOwnProfileFromServer,
+              let change = ghostModeState.pendingChange,
+              !ghostModeRequestInFlight else { return }
+
+        ghostModeRequestInFlight = true
+        let generation = authenticationGeneration
+        let profileReference = db.collection("users").document(userID)
+        let locationReference = db.collection("locations").document(userID)
+        db.runTransaction({ transaction, errorPointer -> Any? in
+            do {
+                let profile = try transaction.getDocument(profileReference)
+                guard profile.exists,
+                      profile.data()?["deletionRequestedAt"] == nil else {
+                    return false
+                }
+                let data = profile.data() ?? [:]
+                if let rawRevision = data[LocationSharingPolicy.revisionKey],
+                   (rawRevision as? String)?.isEmpty != false {
+                    return GhostModeState.ChangeOutcome.conflict.rawValue
+                }
+                let outcome = change.outcome(
+                    currentRevision: data[LocationSharingPolicy.revisionKey] as? String,
+                    currentEnabled: LocationSharingPolicy.ghostModeEnabled(in: data)
+                )
+                // Idempotent after relaunch: keep the original resume timestamp.
+                if outcome == .applied {
+                    var values: [String: Any] = [
+                        LocationSharingPolicy.ghostModeKey: change.enabled,
+                        LocationSharingPolicy.revisionKey: change.revision
+                    ]
+                    if !change.enabled {
+                        values[LocationSharingPolicy.resumedAtKey] = FieldValue.serverTimestamp()
+                    }
+                    transaction.updateData(values, forDocument: profileReference)
+                    transaction.deleteDocument(locationReference)
+                }
+                return outcome.rawValue
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+        }) { [weak self] result, error in
+            DispatchQueue.main.async {
+                guard let self, self.currentUserID == userID,
+                      self.authenticationGeneration == generation else { return }
+                self.ghostModeRequestInFlight = false
+                guard self.ghostModeState.pendingChange?.revision == change.revision else {
+                    self.flushGhostModeChange()
+                    return
+                }
+                guard error == nil, let rawOutcome = result as? String,
+                      let outcome = GhostModeState.ChangeOutcome(rawValue: rawOutcome) else {
+                    self.ghostModeErrorMessage =
+                        "Le changement est en attente. Tes nouveaux partages sont suspendus sur cet appareil. Réessaie avec une connexion."
+                    self.scheduleGhostModeRetry()
+                    return
+                }
+                if outcome == .conflict {
+                    self.ghostModeState.discardConflictingChange(change)
+                    self.ghostModeErrorMessage = nil
+                    self.ghostModeConflictMessage =
+                        "Le mode fantôme a changé sur un autre appareil. Ton ancien choix a été annulé pour conserver le dernier état du compte."
+                    self.persistGhostModeState()
+                    self.suspendLocalLocationPublication()
+                    self.refreshGhostModeFromServer()
+                    return
+                }
+                self.ghostModeState.acknowledge(change)
+                self.persistGhostModeState()
+                self.refreshGhostModeFromServer()
+            }
+        }
+    }
+
+    private func refreshGhostModeFromServer() {
+        guard let userID = currentUserID, !ghostModeRequestInFlight,
+              !isAccountDeletionPending else { return }
+        ghostModeRequestInFlight = true
+        let generation = authenticationGeneration
+        db.collection("users").document(userID).getDocument(source: .server) { [weak self] snapshot, error in
+            DispatchQueue.main.async {
+                guard let self, self.currentUserID == userID,
+                      self.authenticationGeneration == generation else { return }
+                self.ghostModeRequestInFlight = false
+                if error == nil, let data = snapshot?.data(),
+                   snapshot?.metadata.hasPendingWrites == false {
+                    if data["deletionRequestedAt"] != nil {
+                        self.suspendSynchronizationForAccountDeletion()
+                    } else {
+                        self.receiveGhostModeProfile(data)
+                    }
+                } else {
+                    self.scheduleGhostModeRetry()
+                }
+            }
+        }
+    }
+
+    private func scheduleGhostModeRetry() {
+        ghostModeRetryTask?.cancel()
+        ghostModeRetryTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            guard !Task.isCancelled else { return }
+            self?.flushGhostModeChange()
+        }
+    }
 
     private init() {
         let storedAvatarID = UserDefaults.standard.string(
@@ -672,7 +901,7 @@ final class FriendSyncService: ObservableObject {
         displayName: String,
         spotEnteredAt: Date?
     ) {
-        guard !isAccountDeletionPending else { return }
+        guard isLocationSharingAllowed else { return }
 
         guard location.horizontalAccuracy > 0,
               location.horizontalAccuracy <= 1_000,
@@ -813,7 +1042,35 @@ final class FriendSyncService: ObservableObject {
         removeAllListeners()
         profileUpdateTask?.cancel()
         profileUpdateTask = nil
+        ghostModeRetryTask?.cancel()
+        ghostModeRetryTask = nil
+        ghostModeRequestInFlight = false
+        suspendLocalLocationPublication()
         currentUserID = userID
+        if let userID {
+            let pendingData = UserDefaults.standard.data(
+                forKey: ghostModeStorageKey("pending", for: userID)
+            )
+            let pending = pendingData.flatMap {
+                try? JSONDecoder().decode(GhostModeState.Change.self, from: $0)
+            }
+            ghostModeState = GhostModeState(
+                rememberedEnabled: UserDefaults.standard.bool(
+                    forKey: ghostModeStorageKey("enabled", for: userID)
+                ),
+                rememberedRevision: UserDefaults.standard.string(
+                    forKey: ghostModeStorageKey("revision", for: userID)
+                ),
+                pendingChange: pendingData != nil && pending == nil
+                    ? .init(enabled: true, revision: UUID().uuidString)
+                    : pending
+            )
+        } else {
+            ghostModeState = GhostModeState()
+        }
+        ghostModeErrorMessage = nil
+        ghostModeConflictMessage = nil
+        ghostFriendUserIDs = []
         friendCode = nil
         isProfileReady = false
         isPreparingProfile =
@@ -1140,7 +1397,8 @@ final class FriendSyncService: ObservableObject {
                     self.lastKnownProfileAvatarID = remoteAvatarID
                     self.lastKnownProfileColorHex = remoteProfileColorHex
 
-                    guard !snapshot.metadata.isFromCache else {
+                    guard !snapshot.metadata.isFromCache,
+                          !snapshot.metadata.hasPendingWrites else {
                         // A cached profile is useful for rendering, but it must
                         // not unlock outbound writes on a fresh installation.
                         return
@@ -1197,6 +1455,7 @@ final class FriendSyncService: ObservableObject {
                     self.shouldAdoptRemoteAvatar = false
                     self.shouldAdoptRemoteProfileColor = false
                     self.hasLoadedOwnProfileFromServer = true
+                    self.receiveGhostModeProfile(data)
                     self.accountBootstrapErrorMessage = nil
                     self.hasPendingDisplayNameEditBeforeProfileHydration = false
                     self.hasPendingAvatarEditBeforeProfileHydration = false
@@ -1419,7 +1678,7 @@ final class FriendSyncService: ObservableObject {
     }
 
     private func uploadMissingExplorationCellsIfNeeded() {
-        guard !isAccountDeletionPending,
+        guard isLocationSharingAllowed,
               let currentUserID,
               hasLoadedOwnExploration,
               !isUploadingExploration else {
@@ -1432,19 +1691,31 @@ final class FriendSyncService: ObservableObject {
         // future metadata writes without changing the batching contract.
         let batchCellIDs = Array(pendingExplorationCellIDs.prefix(450))
         let generation = authenticationGeneration
-        let batch = db.batch()
+        let expectedRevision = ghostModeState.confirmedRevision
+        let profileReference = db.collection("users").document(currentUserID)
         let collection = explorationCellsCollection(for: currentUserID)
-
-        for cellID in batchCellIDs {
-            batch.setData(
-                ["sharedAt": FieldValue.serverTimestamp()],
-                forDocument: collection.document(cellID)
-            )
-        }
 
         isUploadingExploration = true
         uploadingExplorationCellIDs = Set(batchCellIDs)
-        batch.commit { [weak self] error in
+        db.runTransaction({ transaction, errorPointer -> Any? in
+            do {
+                let profile = try transaction.getDocument(profileReference)
+                guard let data = profile.data(),
+                      LocationSharingPolicy.allowsPublication(
+                        profile: data, expectedRevision: expectedRevision
+                      ) else { return false }
+                for cellID in batchCellIDs {
+                    transaction.setData(
+                        ["sharedAt": FieldValue.serverTimestamp()],
+                        forDocument: collection.document(cellID)
+                    )
+                }
+                return true
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+        }) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self,
                       self.currentUserID == currentUserID,
@@ -1455,10 +1726,21 @@ final class FriendSyncService: ObservableObject {
                 self.isUploadingExploration = false
                 self.uploadingExplorationCellIDs = []
                 if let error {
+                    guard self.isLocationSharingAllowed,
+                          self.ghostModeState.confirmedRevision == expectedRevision else { return }
                     self.errorMessage = self.friendlyMessage(
                         for: error,
                         fallback: "Impossible de partager ta carte découverte."
                     )
+                    return
+                }
+
+                guard result as? Bool == true else {
+                    // A remote transition won the transaction. Keep these cells
+                    // pending until the profile listener permits a new attempt.
+                    if self.ghostModeState.confirmedRevision != expectedRevision {
+                        self.uploadMissingExplorationCellsIfNeeded()
+                    }
                     return
                 }
 
@@ -1565,7 +1847,9 @@ final class FriendSyncService: ObservableObject {
                 return record.otherUserID(for: currentUserID)
             }
         )
-        reconcileLocationListeners(for: acceptedUserIDs)
+        reconcileLocationListeners(for: acceptedUserIDs.filter {
+            profilesByUserID[$0] != nil && !ghostFriendUserIDs.contains($0)
+        })
     }
 
     private func reconcileProfileListeners(for requiredUserIDs: Set<String>) {
@@ -1576,6 +1860,7 @@ final class FriendSyncService: ObservableObject {
         for userID in removedUserIDs {
             profileListeners.removeValue(forKey: userID)?.remove()
             profilesByUserID.removeValue(forKey: userID)
+            ghostFriendUserIDs.remove(userID)
         }
 
         for userID in requiredUserIDs where profileListeners[userID] == nil {
@@ -1610,12 +1895,34 @@ final class FriendSyncService: ObservableObject {
                             (data?["profileColorHex"] as? String).flatMap(
                                 ProfileColor.normalizedHex
                             ) ?? ProfileColor.generatedHex(seed: userID)
+                        let resumedAt = (data?[LocationSharingPolicy.resumedAtKey]).map {
+                            ($0 as? Timestamp)?.dateValue() ?? Date.distantFuture
+                        }
                         let profile = RemoteProfile(
                             displayName: displayName,
                             avatarID: avatarID,
-                            profileColorHex: profileColorHex
+                            profileColorHex: profileColorHex,
+                            isGhostModeEnabled: LocationSharingPolicy.ghostModeEnabled(in: data ?? [:]),
+                            locationSharingResumedAt: resumedAt
                         )
+                        let previousProfile = self.profilesByUserID[userID]
                         self.profilesByUserID[userID] = profile
+                        if profile.isGhostModeEnabled {
+                            if !self.ghostFriendUserIDs.contains(userID) {
+                                self.ghostFriendUserIDs.insert(userID)
+                            }
+                            self.removeFriendLocation(for: userID)
+                        } else if self.ghostFriendUserIDs.contains(userID) {
+                            self.ghostFriendUserIDs.remove(userID)
+                        }
+
+                        if let currentLocation = self.receivedFriendLocations[userID],
+                           !FriendLocation.isAfterSharingResume(
+                            sampledAt: currentLocation.sampledAt,
+                            resumedAt: profile.locationSharingResumedAt
+                           ) {
+                            self.removeFriendLocation(for: userID)
+                        }
 
                         if let currentLocation = self.receivedFriendLocations[userID] {
                             self.receivedFriendLocations[userID] = FriendLocation(
@@ -1628,11 +1935,17 @@ final class FriendSyncService: ObservableObject {
                                 sampledAt: currentLocation.sampledAt,
                                 updatedAt: currentLocation.updatedAt,
                                 receivedAt: currentLocation.receivedAt,
-                                spotEnteredAt: currentLocation.spotEnteredAt
+                                spotEnteredAt: currentLocation.spotEnteredAt.map {
+                                    max($0, profile.locationSharingResumedAt ?? $0)
+                                }
                             )
                         }
 
                         self.rebuildPublishedRelationships()
+                        if previousProfile == nil
+                            || previousProfile?.isGhostModeEnabled != profile.isGhostModeEnabled {
+                            self.reconcileRelatedListeners()
+                        }
                     }
                 }
         }
@@ -1667,7 +1980,8 @@ final class FriendSyncService: ObservableObject {
                         userID: otherUserID,
                         displayName: displayName,
                         avatarID: profile.avatarID,
-                        profileColorHex: profile.profileColorHex
+                        profileColorHex: profile.profileColorHex,
+                        isGhostModeEnabled: profile.isGhostModeEnabled
                     )
                 )
             } else {
@@ -1818,18 +2132,23 @@ final class FriendSyncService: ObservableObject {
         }
 
         for userID in removedUserIDs {
+            locationSubscriptionIDs.removeValue(forKey: userID)
             locationListeners.removeValue(forKey: userID)?.remove()
             removeFriendLocation(for: userID)
         }
 
         for userID in acceptedUserIDs where locationListeners[userID] == nil {
             let generation = authenticationGeneration
+            let subscriptionID = UUID()
+            locationSubscriptionIDs[userID] = subscriptionID
             locationListeners[userID] = db.collection("locations").document(userID)
                 .addSnapshotListener { [weak self] snapshot, error in
                     DispatchQueue.main.async {
                         guard let self,
                               self.authenticationGeneration == generation,
+                              self.locationSubscriptionIDs[userID] == subscriptionID,
                               self.locationListeners[userID] != nil,
+                              !self.ghostFriendUserIDs.contains(userID),
                               self.isAcceptedFriend(userID) else {
                             return
                         }
@@ -1855,6 +2174,7 @@ final class FriendSyncService: ObservableObject {
                         let receivedAt = Date()
                         let sampledAt = sampledTimestamp.dateValue()
                         let updatedAt = timestamp.dateValue()
+                        let profile = self.profilesByUserID[userID]
                         let coordinate = CLLocationCoordinate2D(
                             latitude: geoPoint.latitude,
                             longitude: geoPoint.longitude
@@ -1862,6 +2182,9 @@ final class FriendSyncService: ObservableObject {
                         guard FriendLocation.isValidLastKnown(
                             sampledAt: sampledAt,
                             at: receivedAt
+                        ), FriendLocation.isAfterSharingResume(
+                            sampledAt: sampledAt,
+                            resumedAt: profile?.locationSharingResumedAt
                         ), CLLocationCoordinate2DIsValid(coordinate),
                            coordinate.latitude.isFinite,
                            coordinate.longitude.isFinite else {
@@ -1882,7 +2205,6 @@ final class FriendSyncService: ObservableObject {
                             )
                         }
 
-                        let profile = self.profilesByUserID[userID]
                         let displayName = profile?.displayName
                             ?? (data["displayName"] as? String).map {
                                 Self.normalizedDisplayName($0)
@@ -1904,7 +2226,9 @@ final class FriendSyncService: ObservableObject {
                             sampledAt: sampledAt,
                             updatedAt: updatedAt,
                             receivedAt: receivedAt,
-                            spotEnteredAt: spotEnteredAt
+                            spotEnteredAt: spotEnteredAt.map {
+                                max($0, profile?.locationSharingResumedAt ?? $0)
+                            }
                         )
                         self.receivedFriendLocations[userID] = friendLocation
                         self.updateFreshness(
@@ -1988,7 +2312,7 @@ final class FriendSyncService: ObservableObject {
         for userID: String,
         bypassThrottle: Bool
     ) {
-        guard !isAccountDeletionPending,
+        guard isLocationSharingAllowed,
               currentUserID == userID,
               FriendLocation.isCurrentSample(
                 sampledAt: location.timestamp,
@@ -2001,7 +2325,9 @@ final class FriendSyncService: ObservableObject {
         let validSpotEnteredAt = Self.validSpotEnteredAt(
             spotEnteredAt,
             sampledAt: location.timestamp
-        )
+        ).map { max($0, ghostModeState.resumedAt ?? $0) }
+        if let resumedAt = ghostModeState.resumedAt,
+           location.timestamp < resumedAt { return }
         if !bypassThrottle, let lastLocationPush {
             let distance = location.distance(from: lastLocationPush.location)
             let elapsed = now.timeIntervalSince(lastLocationPush.attemptedAt)
@@ -2014,6 +2340,8 @@ final class FriendSyncService: ObservableObject {
 
         lastLocationPush = (location, now, validSpotEnteredAt)
         let attemptedAt = now
+        let generation = authenticationGeneration
+        let expectedRevision = ghostModeState.confirmedRevision
         var data: [String: Any] = [
             "location": GeoPoint(
                 latitude: location.coordinate.latitude,
@@ -2028,18 +2356,42 @@ final class FriendSyncService: ObservableObject {
             data["spotEnteredAt"] = Timestamp(date: validSpotEnteredAt)
         }
 
-        db.collection("locations").document(userID).setData(data) { [weak self] error in
+        let profileReference = db.collection("users").document(userID)
+        let locationReference = db.collection("locations").document(userID)
+        let locationData = data
+        db.runTransaction({ transaction, errorPointer -> Any? in
+            do {
+                let profile = try transaction.getDocument(profileReference)
+                guard let profileData = profile.data(),
+                      LocationSharingPolicy.allowsPublication(
+                        profile: profileData,
+                        expectedRevision: expectedRevision,
+                        sampledAt: location.timestamp
+                      ),
+                      FriendLocation.isCurrentSample(sampledAt: location.timestamp, at: Date())
+                else { return false }
+                transaction.setData(locationData, forDocument: locationReference)
+                return true
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+        }) { [weak self] result, error in
             DispatchQueue.main.async {
-                guard let self, self.currentUserID == userID else { return }
+                guard let self, self.currentUserID == userID,
+                      self.authenticationGeneration == generation else { return }
 
-                if let error {
+                if error != nil || result as? Bool != true {
                     if self.lastLocationPush?.attemptedAt == attemptedAt {
                         self.lastLocationPush = nil
                     }
-                    self.errorMessage = self.friendlyMessage(
-                        for: error,
-                        fallback: "Impossible d’envoyer ta position."
-                    )
+                    if let error, self.isLocationSharingAllowed,
+                       self.ghostModeState.confirmedRevision == expectedRevision {
+                        self.errorMessage = self.friendlyMessage(
+                            for: error,
+                            fallback: "Impossible d’envoyer ta position."
+                        )
+                    }
                 }
             }
         }
@@ -2133,6 +2485,7 @@ final class FriendSyncService: ObservableObject {
         }
         profileListeners.removeAll()
 
+        locationSubscriptionIDs.removeAll()
         for listener in locationListeners.values {
             listener.remove()
         }

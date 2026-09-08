@@ -50,6 +50,13 @@
 			remoteGlobalIDString = 37F8D0D42FE28F0200AA042A;
 			remoteInfo = wander;
 		};
+		D10000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 37F8D0CD2FE28F0200AA042A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 37F8D0D42FE28F0200AA042A;
+			remoteInfo = wander;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -78,6 +85,7 @@
 		B20000000000000000000002 /* WanderLocationPushExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WanderLocationPushExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000003 /* wander/LocationPushSharedConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = wander/LocationPushSharedConfiguration.swift; sourceTree = SOURCE_ROOT; };
 		C20000000000000000000001 /* wanderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wanderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D20000000000000000000001 /* wanderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wanderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -134,6 +142,11 @@
 			path = wanderTests;
 			sourceTree = "<group>";
 		};
+		D30000000000000000000001 /* wanderUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = wanderUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -174,6 +187,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D40000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -189,6 +209,7 @@
 			children = (
 				37F8D0D72FE28F0200AA042A /* wander */,
 				C30000000000000000000001 /* wanderTests */,
+				D30000000000000000000001 /* wanderUITests */,
 				A30000000000000000000002 /* WanderShareExtension */,
 				B30000000000000000000002 /* WanderLocationPushExtension */,
 				A50000000000000000000001 /* Extension Shared Files */,
@@ -202,6 +223,7 @@
 			children = (
 				37F8D0D52FE28F0200AA042A /* wander.app */,
 				C20000000000000000000001 /* wanderTests.xctest */,
+				D20000000000000000000001 /* wanderUITests.xctest */,
 				A20000000000000000000001 /* WanderShareExtension.appex */,
 				B20000000000000000000002 /* WanderLocationPushExtension.appex */,
 			);
@@ -325,6 +347,29 @@
 			productReference = C20000000000000000000001 /* wanderTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		D50000000000000000000001 /* wanderUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D80000000000000000000001 /* Build configuration list for PBXNativeTarget "wanderUITests" */;
+			buildPhases = (
+				D40000000000000000000002 /* Sources */,
+				D40000000000000000000001 /* Frameworks */,
+				D40000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D60000000000000000000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				D30000000000000000000001 /* wanderUITests */,
+			);
+			name = wanderUITests;
+			packageProductDependencies = (
+			);
+			productName = wanderUITests;
+			productReference = D20000000000000000000001 /* wanderUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -403,6 +448,7 @@
 			targets = (
 				37F8D0D42FE28F0200AA042A /* wander */,
 				C50000000000000000000001 /* wanderTests */,
+				D50000000000000000000001 /* wanderUITests */,
 				A60000000000000000000001 /* WanderShareExtension */,
 				B50000000000000000000001 /* WanderLocationPushExtension */,
 			);
@@ -434,6 +480,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C40000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D40000000000000000000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -477,6 +530,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D40000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -494,6 +554,11 @@
 			isa = PBXTargetDependency;
 			target = 37F8D0D42FE28F0200AA042A /* wander */;
 			targetProxy = C10000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		D60000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 37F8D0D42FE28F0200AA042A /* wander */;
+			targetProxy = D10000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -626,7 +691,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 36;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -660,7 +725,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 36;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -863,6 +928,60 @@
 			};
 			name = Release;
 		};
+		D70000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MDSH9S69B9;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iterar.wander.wander.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = wander;
+			};
+			name = Debug;
+		};
+		D70000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MDSH9S69B9;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.iterar.wander.wander.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = wander;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -907,6 +1026,15 @@
 			buildConfigurations = (
 				C70000000000000000000001 /* Debug */,
 				C70000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D80000000000000000000001 /* Build configuration list for PBXNativeTarget "wanderUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D70000000000000000000001 /* Debug */,
+				D70000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

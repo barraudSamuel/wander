@@ -13,7 +13,7 @@ import MapKit
 import CoreLocation
 import UIKit.UIGestureRecognizerSubclass
 
-private final class PassiveMapTapObserver: UIGestureRecognizer {
+final class PassiveMapTapObserver: UIGestureRecognizer {
     var onTouchBegan: ((CGPoint) -> Void)?
     var onTapEnded: ((CGPoint) -> Void)?
     var onTouchCancelled: (() -> Void)?
@@ -82,11 +82,13 @@ private final class PassiveMapTapObserver: UIGestureRecognizer {
         ) <= maximumMovement
         self.trackedTouch = nil
         self.initialPoint = nil
-        state = .failed
 
         if stayedWithinTapTolerance {
+            // This observer reports taps without recognizing a UIKit gesture.
+            // Keep receiving touches while MapKit resolves the same event sequence.
             onTapEnded?(point)
         } else {
+            state = .failed
             onTouchCancelled?()
         }
     }
@@ -1459,6 +1461,7 @@ struct MapWithFogView: UIViewRepresentable {
     /// Event whose detail card is currently visible.
     var selectedOutingPlanEventID: String?
 
+    var showsSystemUserLocation = true
     var showsHeatMap = false
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
     /// Monotonic token that must change whenever heat-map values change.
@@ -1489,7 +1492,7 @@ struct MapWithFogView: UIViewRepresentable {
             elevationStyle: .flat,
             emphasisStyle: .muted
         )
-        mapView.showsUserLocation = true
+        mapView.showsUserLocation = showsSystemUserLocation
         mapView.showsCompass = true
         mapView.userTrackingMode = .none
         mapView.accessibilityLabel = "Carte d’exploration"
@@ -2164,6 +2167,7 @@ struct MapWithFogView: UIViewRepresentable {
         private weak var pressedSocialAnnotationView: MKAnnotationView?
         private var pressedSocialAnnotationOriginalAlpha: CGFloat?
         private var isPressingMapBackground = false
+        private var socialPressGeneration: UInt64 = 0
         private var suppressedNativeSelectionAnnotationID: ObjectIdentifier?
         private var suppressedNativeSelectionResetWorkItem: DispatchWorkItem?
         private weak var mapOffscreenIndicatorContainer:
@@ -2182,6 +2186,11 @@ struct MapWithFogView: UIViewRepresentable {
                     locationView.setSocialClusterFocus(isFocused)
                 } else if let outingView = view as? OutingPlanAnnotationView {
                     outingView.setSocialClusterFocus(isFocused)
+                }
+            },
+            onDeselectMember: { [weak self] memberID in
+                if case .outing(let eventID) = memberID {
+                    self?.onDeselectOutingPlan(eventID)
                 }
             }
         )
@@ -2750,6 +2759,7 @@ struct MapWithFogView: UIViewRepresentable {
             at point: CGPoint,
             on mapView: MKMapView
         ) {
+            socialPressGeneration &+= 1
             let touchedView = mapView.hitTest(point, with: nil)
             guard let pressTarget = immediateSocialPressTarget(
                 from: touchedView
@@ -2779,7 +2789,17 @@ struct MapWithFogView: UIViewRepresentable {
         ) {
             if isPressingMapBackground {
                 isPressingMapBackground = false
-                dismissSelectedSocialAnnotations(on: mapView)
+                // MapKit can reselect the previous annotation while finishing
+                // this same touch event. Apply the user's dismissal afterward.
+                let generation = socialPressGeneration
+                let presentationRevision = socialProximityController.presentationRevision
+                DispatchQueue.main.async { [weak self, weak mapView] in
+                    guard let self, let mapView,
+                          self.socialPressGeneration == generation,
+                          self.socialProximityController.presentationRevision
+                            == presentationRevision else { return }
+                    self.dismissSelectedSocialAnnotations(on: mapView)
+                }
                 return
             }
 
@@ -2810,6 +2830,7 @@ struct MapWithFogView: UIViewRepresentable {
                 view: annotationView,
                 on: mapView
             )
+            guard mapView.view(for: annotation) === annotationView else { return }
             suppressNextNativeSelection(for: annotation)
             mapView.selectAnnotation(annotation, animated: false)
         }
@@ -2848,6 +2869,8 @@ struct MapWithFogView: UIViewRepresentable {
                     || $0 is MapSocialProximityGroupAnnotation
             }
 
+            // Cancel pending selection even when MapKit has not selected its view yet.
+            socialProximityController.collapse(on: mapView)
             for annotation in selectedSocialAnnotations {
                 mapView.deselectAnnotation(annotation, animated: false)
             }
@@ -2914,7 +2937,11 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
-            socialProximityController.visibleRegionDidChange(on: mapView)
+            socialProximityController.visibleRegionDidChange(
+                on: mapView,
+                userInitiated: socialProximityController.hasActivePresentation
+                    && hasActiveMapGesture(in: mapView)
+            )
             refreshMapOffscreenIndicators(on: mapView)
         }
 
@@ -2922,7 +2949,29 @@ struct MapWithFogView: UIViewRepresentable {
             _ mapView: MKMapView,
             regionWillChangeAnimated animated: Bool
         ) {
-            socialProximityController.regionWillChange(on: mapView)
+            socialProximityController.regionWillChange(
+                on: mapView,
+                userInitiated: socialProximityController.hasActivePresentation
+                    && hasActiveMapGesture(in: mapView)
+            )
+        }
+
+        private func hasActiveMapGesture(in view: UIView) -> Bool {
+            // Scrolling a group's list or touching its controls is not a map gesture.
+            guard !(view is MKAnnotationView), !(view is UIControl) else { return false }
+            if view.gestureRecognizers?.contains(where: {
+                guard $0 !== immediateSocialAnnotationRecognizer,
+                      $0 !== longPressRecognizer else { return false }
+                if let tap = $0 as? UITapGestureRecognizer {
+                    // An ordinary annotation tap can itself trigger a recentre.
+                    return tap.state == .ended
+                        && (tap.numberOfTapsRequired > 1 || tap.numberOfTouchesRequired > 1)
+                }
+                return $0.state == .began || $0.state == .changed
+            }) == true {
+                return true
+            }
+            return view.subviews.contains { hasActiveMapGesture(in: $0) }
         }
 
         func mapView(
@@ -3100,7 +3149,11 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            guard let annotation = view.annotation else { return }
+            guard let annotation = view.annotation,
+                  mapView.view(for: annotation) === view,
+                  mapView.selectedAnnotations.contains(where: {
+                      ($0 as AnyObject) === (annotation as AnyObject)
+                  }) else { return }
             if consumeSuppressedNativeSelection(for: annotation) {
                 return
             }
@@ -3129,9 +3182,6 @@ struct MapWithFogView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
             guard let annotation = view.annotation else { return }
-            if let outing = annotation as? OutingPlanAnnotation {
-                onDeselectOutingPlan(outing.eventID)
-            }
             socialProximityController.didDeselect(annotation, on: mapView)
         }
 

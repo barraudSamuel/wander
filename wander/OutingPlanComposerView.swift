@@ -9,6 +9,28 @@ import SwiftUI
 import UIKit
 
 @MainActor
+struct OutingPlanComposerOperations {
+    let fetchEvent: @MainActor (String) async throws -> OutingPlan?
+    let publish: @MainActor (OutingPlanDraft, OutingPlan?) async throws -> OutingPlan
+    let cancel: @MainActor (String) async throws -> Void
+
+    static let live = Self(
+        fetchEvent: { eventID in
+            try await OutingPlanService.shared.fetchEvent(eventIDValue: eventID)
+        },
+        publish: { draft, existingPlan in
+            try await OutingPlanService.shared.publish(
+                draft,
+                existingPlan: existingPlan
+            )
+        },
+        cancel: { eventID in
+            try await OutingPlanService.shared.cancel(eventIDValue: eventID)
+        }
+    )
+}
+
+@MainActor
 struct OutingPlanComposerView: View {
     private enum LoadingState {
         case loading
@@ -19,7 +41,6 @@ struct OutingPlanComposerView: View {
     let displayName: String
 
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var notificationService = NotificationService.shared
 
     @State private var loadingState: LoadingState = .loading
     @State private var existingPlan: OutingPlan?
@@ -36,20 +57,24 @@ struct OutingPlanComposerView: View {
     @State private var reverseGeocodingRequestID: UUID?
 
     private let planningWindowStart: Date
-    private let service: OutingPlanService
+    private let operations: OutingPlanComposerOperations
+    private let showsNotificationSettings: Bool
     private let eventIDToLoad: String?
 
     init(
         displayName: String,
         initialCoordinate: CLLocationCoordinate2D?,
-        editingEvent: OutingPlan? = nil
+        editingEvent: OutingPlan? = nil,
+        operations: OutingPlanComposerOperations? = nil,
+        showsNotificationSettings: Bool = true
     ) {
         let referenceDate = Date()
         let coordinate = editingEvent?.coordinate ?? initialCoordinate
 
         self.displayName = displayName
         self.planningWindowStart = referenceDate
-        self.service = OutingPlanService.shared
+        self.operations = operations ?? .live
+        self.showsNotificationSettings = showsNotificationSettings
         self.eventIDToLoad = editingEvent?.eventIDValue
         _loadingState = State(
             initialValue: editingEvent == nil ? .loaded : .loading
@@ -206,33 +231,8 @@ struct OutingPlanComposerView: View {
                 Text("Choisis une heure dans les prochaines 24 heures.")
             }
 
-            Section {
-                Toggle(
-                    "Recevoir les notifications sociales",
-                    isOn: notificationsBinding
-                )
-
-                if notificationService.authorizationStatus == .denied {
-                    Button {
-                        openSettings()
-                    } label: {
-                        Label("Ouvrir Réglages", systemImage: "gear")
-                    }
-                }
-
-                if let errorMessage = notificationService.errorMessage {
-                    Label(
-                        errorMessage,
-                        systemImage: "exclamationmark.triangle"
-                    )
-                    .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Notifications")
-            } footer: {
-                Text(
-                    "Ce réglage ne bloque jamais la publication. Il permet de recevoir les demandes d’amis et les prochains événements de tes amis acceptés."
-                )
+            if showsNotificationSettings {
+                OutingPlanNotificationSettingsSection()
             }
 
             if let writeErrorMessage {
@@ -300,22 +300,6 @@ struct OutingPlanComposerView: View {
         return category != existingPlan.category || !plannedMinuteIsUnchanged
     }
 
-    private var notificationsBinding: Binding<Bool> {
-        Binding(
-            get: { notificationService.isEnabled },
-            set: { isEnabled in
-                notificationService.clearError()
-                Task {
-                    if isEnabled {
-                        await notificationService.enableNotifications()
-                    } else {
-                        await notificationService.disableNotifications()
-                    }
-                }
-            }
-        )
-    }
-
     private func loadEvent() async {
         guard let eventIDToLoad else {
             loadingState = .loaded
@@ -328,9 +312,7 @@ struct OutingPlanComposerView: View {
         writeErrorMessage = nil
 
         do {
-            guard let plan = try await service.fetchEvent(
-                eventIDValue: eventIDToLoad
-            ) else {
+            guard let plan = try await operations.fetchEvent(eventIDToLoad) else {
                 loadingState = .failed("Cet événement n’existe plus.")
                 return
             }
@@ -408,9 +390,9 @@ struct OutingPlanComposerView: View {
 
         Task {
             do {
-                _ = try await service.publish(
+                _ = try await operations.publish(
                     draft,
-                    existingPlan: existingPlan
+                    existingPlan
                 )
                 dismiss()
             } catch {
@@ -428,22 +410,13 @@ struct OutingPlanComposerView: View {
         Task {
             do {
                 guard let eventID = existingPlan?.eventIDValue else { return }
-                try await service.cancel(eventIDValue: eventID)
+                try await operations.cancel(eventID)
                 dismiss()
             } catch {
                 isWriting = false
                 writeErrorMessage = error.localizedDescription
             }
         }
-    }
-
-    private func openSettings() {
-        guard let settingsURL = URL(
-            string: UIApplication.openSettingsURLString
-        ) else {
-            return
-        }
-        UIApplication.shared.open(settingsURL)
     }
 
     private func cancelReverseGeocoding() {
@@ -502,5 +475,66 @@ struct OutingPlanComposerView: View {
             coordinate.latitude,
             coordinate.longitude
         )
+    }
+}
+
+@MainActor
+private struct OutingPlanNotificationSettingsSection: View {
+    @ObservedObject private var notificationService = NotificationService.shared
+
+    var body: some View {
+        Section {
+            Toggle(
+                "Recevoir les notifications sociales",
+                isOn: notificationsBinding
+            )
+
+            if notificationService.authorizationStatus == .denied {
+                Button {
+                    openSettings()
+                } label: {
+                    Label("Ouvrir Réglages", systemImage: "gear")
+                }
+            }
+
+            if let errorMessage = notificationService.errorMessage {
+                Label(
+                    errorMessage,
+                    systemImage: "exclamationmark.triangle"
+                )
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            Text(
+                "Ce réglage ne bloque jamais la publication. Il permet de recevoir les demandes d’amis et les prochains événements de tes amis acceptés."
+            )
+        }
+    }
+
+    private var notificationsBinding: Binding<Bool> {
+        Binding(
+            get: { notificationService.isEnabled },
+            set: { isEnabled in
+                notificationService.clearError()
+                Task {
+                    if isEnabled {
+                        await notificationService.enableNotifications()
+                    } else {
+                        await notificationService.disableNotifications()
+                    }
+                }
+            }
+        )
+    }
+
+    private func openSettings() {
+        guard let settingsURL = URL(
+            string: UIApplication.openSettingsURLString
+        ) else {
+            return
+        }
+        UIApplication.shared.open(settingsURL)
     }
 }

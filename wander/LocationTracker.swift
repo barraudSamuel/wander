@@ -99,6 +99,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private var spotConfirmationRequestWorkItem: DispatchWorkItem?
     private var spotConfirmationTimeoutWorkItem: DispatchWorkItem?
     private var spotConfirmationRequestCount = 0
+    private var sharedPresenceLocationManager: CLLocationManager?
+    private var sharedPresenceRequestTimeoutWorkItem: DispatchWorkItem?
 
     @Published var authorizationStatus: CLAuthorizationStatus
     @Published var lastLocation: CLLocation?
@@ -150,6 +152,17 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         locationManager.showsBackgroundLocationIndicator = true
         restoreCurrentSpotPresence()
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Local UI scenario: no persisted presence, manager delegate or tracking.
+    init(scenarioLocation: CLLocation) {
+        authorizationStatus = .notDetermined
+        trackingEnabled = false
+        backgroundTrackingEnabled = false
+        super.init()
+        lastLocation = scenarioLocation
+    }
+    #endif
 
     func configure(with context: ModelContext) {
         cellStore.configure(with: context)
@@ -320,6 +333,47 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         locationManager.stopUpdatingLocation()
         locationManager.stopMonitoringSignificantLocationChanges()
         locationManager.stopMonitoringVisits()
+    }
+
+    /// Starts a new shared presence without clearing local exploration. A
+    /// separate one-shot manager also asks for a fix when the user is stationary.
+    func resetSharedPresenceAndRequestLocation() {
+        clearCurrentSpotPresence()
+        // A queued or cached pre-resume sample must not restore the old spot.
+        latestProcessedSpotSampleAt = Date()
+
+        let status = locationManager.authorizationStatus
+        guard trackingEnabled,
+              trackingMode != .background || backgroundTrackingEnabled,
+              status == .authorizedAlways || status == .authorizedWhenInUse else {
+            return
+        }
+
+        let manager = CLLocationManager()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        manager.distanceFilter = kCLDistanceFilterNone
+        sharedPresenceLocationManager = manager
+
+        let timeoutWorkItem = DispatchWorkItem { [weak self, weak manager] in
+            guard let self, let manager,
+                  self.sharedPresenceLocationManager === manager else { return }
+            self.stopSharedPresenceLocationRequest()
+        }
+        sharedPresenceRequestTimeoutWorkItem = timeoutWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + spotConfirmationRequestTimeout,
+            execute: timeoutWorkItem
+        )
+        manager.requestLocation()
+    }
+
+    private func stopSharedPresenceLocationRequest() {
+        sharedPresenceRequestTimeoutWorkItem?.cancel()
+        sharedPresenceRequestTimeoutWorkItem = nil
+        sharedPresenceLocationManager?.stopUpdatingLocation()
+        sharedPresenceLocationManager?.delegate = nil
+        sharedPresenceLocationManager = nil
     }
 
     /// Stops location services and removes every user-owned value persisted on
@@ -634,6 +688,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func clearCurrentSpotPresence() {
         finishSpotConfirmation()
+        stopSharedPresenceLocationRequest()
         currentSpotAnchor = nil
         pendingSpotCandidate = nil
         latestProcessedSpotSampleAt = nil
@@ -775,6 +830,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let isSpotConfirmationUpdate = manager === spotConfirmationManager
+        let isSharedPresenceUpdate = manager === sharedPresenceLocationManager
         let now = Date()
         let filtered = locations
             .filter { $0.horizontalAccuracy > 0 && $0.horizontalAccuracy <= 150 }
@@ -782,6 +838,11 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+
+            if isSharedPresenceUpdate {
+                guard self.sharedPresenceLocationManager === manager else { return }
+                self.stopSharedPresenceLocationRequest()
+            }
 
             for location in filtered {
                 self.processAcceptedLocation(location, receivedAt: now)
@@ -1003,6 +1064,15 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        if manager === sharedPresenceLocationManager {
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.sharedPresenceLocationManager === manager else { return }
+                self.stopSharedPresenceLocationRequest()
+            }
+            return
+        }
+
         if manager === spotConfirmationManager {
             Task { @MainActor [weak self] in
                 self?.retrySpotConfirmationIfNeeded()

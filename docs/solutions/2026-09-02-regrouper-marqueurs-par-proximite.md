@@ -1,7 +1,7 @@
 ---
 title: "Regrouper les marqueurs sociaux par proximité géographique"
 date: 2026-09-02
-last_updated: 2026-09-05
+last_updated: 2026-09-08
 category: architecture
 tags: [solution, mapkit, clustering, core-location, annotations, ux]
 related_plan: "../plans/2026-09-02-garantir-clusters-h3-visibles.md"
@@ -116,6 +116,144 @@ Cette validation partielle et les commandes exactes sont consignées dans
 le [plan du sprint 01](../plans/2026-09-05-architecture-carte-sociale-sprint-01.md).
 L'extraction est locale, sans commit ni publication à ce stade.
 
+## Historique du correctif local du 7 septembre 2026
+
+Cette section décrit la validation disponible le 7 septembre. Les retours
+suivants ont montré que ce correctif ne suffisait pas ; la reproduction tactile
+et son résultat actuel sont consignés plus bas.
+
+Une vidéo utilisateur montre une sélection qui revient au groupe. La lecture
+du contrôleur révèle que le passage direct A → B restaure d'abord un groupe
+sans focus, ce qui retire A et B de MapKit, puis focalise B sans synchronisation.
+Les tests existants utilisaient surtout un groupe de trois membres ; ils ne
+couvraient pas cette transition d'une paire ni le remplacement de l'objet
+natif déjà sélectionné.
+
+Le correctif local dans `MapSocialProximityController` remplace cette séquence
+par `changeFocus(to:on:)` : publier le membre final, désélectionner l'ancien,
+appliquer une seule composition, puis notifier sa fermeture produit. La source
+remplaçante de même identifiant reprend la sélection native sans fermer sa fiche.
+Une génération invalide les actions différées périmées ; la demande reste
+en attente jusqu'à son activation native. La désélection native est réévaluée
+sur la file principale, après une éventuelle sélection du membre suivant.
+Le passage membre → groupe libère explicitement l'ancien focus et sa fiche ;
+le passage groupe → membre ferme explicitement le groupe ouvert. Ces transitions
+ne dépendent donc pas d'un ancien callback invalidé par la génération suivante.
+
+`MapWithFogView.Coordinator` ne ferme plus directement la fiche depuis chaque
+`didDeselect`. Il reçoit `onDeselectMember` du contrôleur. Il distingue les
+gestes actifs de la carte des recentrages automatiques ; le délai d'une seconde
+qui protégeait auparavant la caméra est supprimé. Le tap sur le fond appelle
+explicitement `collapse`, même si la sélection native est encore en attente.
+
+Sept tests de régression s'ajoutent aux sept tests d'intégration du contrôleur.
+La compilation finale de l'app et des tests réussit sans diagnostic.
+Leur exécution, la reproduction causale de la vidéo, le pont de gestes complet
+et VoiceOver restent à effectuer : Samuel a choisi de poursuivre sans tests
+sur simulateur. Les résultats du 2 et du 5 septembre ci-dessus sont historiques,
+et ne prouvent pas ce nouveau correctif. Les commandes de compilation et la revue
+sont consignées dans le plan du sprint 01 et le todo 025.
+
+## Historique de la première reprise tactile du 8 septembre 2026
+
+Cette première reprise précède le scénario local approuvé. Le retour suivant
+de Samuel signale une dégradation ; les tests cités ici ne validaient pas le
+parcours tactile complet.
+
+La nouvelle vidéo montre que la fiche du deuxième événement se referme encore
+avant l'édition. Avec deux lignes, la deuxième recouvre presque entièrement
+les bounds natifs du marqueur compact, contrairement à la première. La ligne
+et la carte peuvent donc traiter le même toucher ; une désélection native
+après activation suffit à reformer le groupe. Cet ordre précis des callbacks
+reste une hypothèse à confirmer sur l'iPhone.
+
+Chaque rangée possède maintenant un `UITapGestureRecognizer` dont le delegate
+donne priorité au tap de la rangée sur ceux de ses vues ancêtres. Le recognizer
+active la ligne et annule la livraison physique de `touchUpInside` ; le
+target/action du contrôle et les actions VoiceOver restent disponibles.
+Ce traitement n'introduit pas de temporisation et ne remplace aucun delegate
+interne MapKit. Les gestes qui ne sont pas des taps n'attendent pas la rangée.
+
+Deux nouveaux tests couvrent la sélection via chaque contrôle, la priorité
+gestuelle et le retrait de chaque événement exactement superposé. Ils sont
+compilés sans être exécutés et ne synthétisent pas le tap physique. Le rapport
+de validation exact figure dans le plan du sprint 01. Cette maintenance de la
+note ne constitue pas un nouvel apprentissage déclaré vérifié.
+
+Le retour suivant de Samuel signale un tap de fond ignoré immédiatement après
+l'ouverture du groupe. L'observateur passif se terminait en `.failed` après
+chaque tap valide, état que UIKit peut conserver jusqu'à la fin de la séquence.
+Il reste maintenant `.possible` après le callback et conserve ses échecs sur
+déplacement, second doigt et annulation. Cette modification ne force pas de
+reset UIKit et ne désactive aucun geste MapKit.
+
+Trois tests de callbacks passent sur l'iPhone avant le changement : ils ne
+reproduisent pas l'arbitrage natif et ne prouvent pas la résolution du délai.
+Après la modification, les 37 tests de carte sociale passent sur l'iPhone
+le 8 septembre à 09:58:54 et l'app est relancée sans débogueur.
+La validation physique de la fermeture immédiate reste nécessaire, avec le
+double tap, le panoramique et le pincement. Le plan conserve le résultat exact
+des suites et les limites du diagnostic.
+
+## Réouverture native reproduite sur simulateur le 8 septembre 2026
+
+Le scénario `DebugSocialMapScenario` permet de rejouer les gestes sur la vraie
+carte, avec les vraies fiches et le formulaire d'événement, y compris la
+confirmation d'annulation. Il est compilé seulement en Debug sur simulateur
+et activé par `-debug-social-map`. Les utilisateurs, événements, opérations et
+le conteneur SwiftData restent en mémoire. Les services réels et
+l'authentification restent les valeurs par défaut du lancement normal.
+
+La trace avant correction montre que `touchesEnded` reçoit le deuxième tap,
+63 ms puis 113 ms après l'ouverture. La fermeture synchrone appelle `collapse`,
+puis MapKit émet `didDeselect` et `didSelect` pour le même groupe, qui se rouvre.
+Cette trace invalide l'hypothèse d'un deuxième toucher absent. Preuve :
+`/private/tmp/wander-rapid-native-reselection-before.log`.
+
+La fermeture est désormais exécutée par `DispatchQueue.main.async`, après le
+traitement synchrone de la séquence, sans délai fixe.
+`socialPressGeneration` et `presentationRevision` empêchent une fermeture
+périmée après un nouvel appui, une sélection de membre, une action accessible
+ou le démontage de la carte. Le maintien de l'observateur en `.possible` après
+un tap valide reste en place, mais ne résolvait pas seul cette réouverture.
+Toutes les traces temporaires sont retirées du code final.
+
+La correction passe onze cycles d'ouverture et fermeture d'événements avec
+37 à 336 ms entre touches et onze cycles mixtes avec 537 à 643 ms. Les logs
+sont `/private/tmp/wander-scenario-deferred-console.log` et
+`/private/tmp/wander-scenario-mixed-console.log`. Le pilotage manuel valide
+également la sélection d'Amina puis la fermeture par le fond. Les trois
+premiers tests UI passent, avec annulation complète des événements dans les
+deux ordres et fermeture par le fond :
+`/private/tmp/wander-scenario-ui-tests.xcresult`.
+
+La compilation Release passe et son binaire ne contient ni le scénario ni
+l'argument de lancement : `/private/tmp/wander-scenario-release-build.log`.
+Les avertissements préexistants concernent les versions d'extensions
+`15`/`27` par rapport à l'app `35` et les métadonnées AppIntents.
+Les revues ont fait stabiliser les dates des amis fictifs et calculer leurs
+présentations une seule fois ; la revue indépendante finale ne relève aucun
+défaut matériel supplémentaire.
+
+Les 37 tests existants et cinq tests UI passent dans
+`/private/tmp/wander-scenario-final-tests.xcresult`. Le sixième test échoue
+initialement sur un sélecteur XCTest absent, avant son geste. Le test final
+mesure la distance entre deux marqueurs, indépendante du centre de pincement
+et de la rotation, et attend l'animation MapKit. Pincement et double tap passent
+ensuite dans `/private/tmp/wander-scenario-zoom-final.xcresult`, code 0.
+Les 43 tests distincts sont validés sur ces deux exécutions. Le premier rapport
+conserve son échec ; il n'est pas présenté comme une suite entièrement verte.
+Le correctif produit reste inchangé pendant les ajustements du test.
+
+Le lancement normal sans argument affiche la connexion Apple. La version
+normale est compilée, installée et lancée sur l'iPhone de Samuel, sans débogueur,
+à 10:43:58. Trois cycles rapides supplémentaires passent sur simulateur dans
+la version finale sans traces. Les trois notes Obsidian sont actualisées et
+leur rendu vérifié. Les tests UI couvrent la typographie par défaut ; le
+scénario ne valide pas Firebase, la réconciliation de `ContentView`, VoiceOver
+ou les groupes longs. Le sprint reste `in_progress` et le todo 025 `ready` pour
+ces validations. Le plan conserve les commandes, captures et vidéos.
+
 ## Reusable lesson and prevention
 
 Une notion produit exprimée en mètres doit être modélisée en mètres, pas avec
@@ -130,6 +268,16 @@ Coordinator les états interdépendants qui compliquent l'ajout de fonctionnalit
 Les tests des règles protègent la géométrie ; les tests avec de vrais objets
 MapKit protègent le cycle natif. Aucun des deux ne remplace les vérifications
 des gestes de l'écran complet.
+
+Un test qui appelle directement `touchesEnded` avec un `UITouch` de test ne
+prouve pas l'arbitrage des gestes UIKit. Ici, les trois tests de callbacks
+passaient avant le changement du recognizer, alors que le défaut persistait.
+De même, XCTest attend l'inactivité de l'app et peut espacer les taps assez
+longtemps pour masquer ce défaut. Il faut compléter ces tests par de vrais
+taps rapprochés sur l'écran et mesurer leur réception dans la même trace que
+`didSelect` et `didDeselect`. La séquence avant/après prouve ici la fermeture
+puis réouverture native et l'effet de la fermeture différée, au lieu de déduire
+la cause d'une simple réussite de suite.
 
 Aucune règle supplémentaire n'est ajoutée à `AGENTS.md` : les seuils et le
 comportement restent spécifiques à la carte sociale de Wander.

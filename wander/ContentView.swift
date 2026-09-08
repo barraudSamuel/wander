@@ -53,9 +53,10 @@ struct FriendMapSummary: Identifiable, Hashable {
     let locationSampledAt: Date?
     let spotEnteredAt: Date?
     let isLocationFresh: Bool
+    let isGhostModeEnabled: Bool
 
     var id: String { userID }
-    var canShowOnMap: Bool { locationSampledAt != nil }
+    var canShowOnMap: Bool { !isGhostModeEnabled && locationSampledAt != nil }
 }
 
 private struct FriendSelection: Identifiable, Equatable {
@@ -138,7 +139,8 @@ struct ContentView: View {
                 FriendsView(
                     service: friendSyncService,
                     friends: summaries,
-                    onShowOnMap: showFriendOnMap
+                    onShowOnMap: showFriendOnMap,
+                    onViewProfile: presentFriendProfile
                 )
                 .tabItem {
                     tabBarImage("TabIconFriends", accessibilityLabel: "Amis")
@@ -237,6 +239,15 @@ struct ContentView: View {
         .onChange(of: locationTracker.authorizationStatus, initial: true) {
             synchronizeLocationPushRegistration()
         }
+        .onChange(
+            of: friendSyncService.isLocationSharingAllowed,
+            initial: true
+        ) { _, isAllowed in
+            synchronizeLocationPushRegistration()
+            if isAllowed {
+                locationTracker.resetSharedPresenceAndRequestLocation()
+            }
+        }
         .onChange(of: displayName) { _, newDisplayName in
             friendSyncService.updateDisplayName(newDisplayName)
         }
@@ -310,6 +321,15 @@ struct ContentView: View {
                 acceptedUserIDs: acceptedFriendUserIDs
             )
         }
+        .onChange(
+            of: friendSyncService.ghostFriendUserIDs,
+            initial: true
+        ) { _, userIDs in
+            locationPushService.receiveUnavailableFriends(userIDs)
+            reconcileFriendPresentations(
+                acceptedUserIDs: acceptedFriendUserIDs
+            )
+        }
     }
 
     private var lifecycleObservedContent: some View {
@@ -329,6 +349,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
+                friendSyncService.resumeGhostModeSynchronization()
                 locationTracker.resumeTrackingIfNeeded()
                 synchronizeLocationPushRegistration()
                 openPendingNotificationRouteIfPossible()
@@ -346,6 +367,18 @@ struct ContentView: View {
         .onDisappear {
             outingPlanService.stopObserving()
             outingAttendanceService.stopObserving()
+        }
+        .sheet(item: $selectedFriendProfile) { selection in
+            FriendProfileSheet(
+                userID: selection.userID,
+                service: friendSyncService,
+                onOpenDirections: {
+                    selectedTab = .explore
+                    presentNavigationOptions(selection.userID)
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -402,10 +435,14 @@ struct ContentView: View {
                     heatMapRevision: locationTracker.heatMapRevision,
                     onJoinFriend: presentNavigationOptions,
                     onSelectFriend: { userID in
+                        guard !friendSyncService.ghostFriendUserIDs.contains(userID),
+                              friendSyncService.friendLocation(for: userID) != nil else {
+                            return
+                        }
                         locationPushService.requestRefresh(
                             for: userID,
                             currentLocation:
-                                friendSyncService.friendLocations[userID]
+                                friendSyncService.friendLocation(for: userID)
                         )
                     },
                     onViewFriendProfile: presentFriendProfile,
@@ -491,6 +528,8 @@ struct ContentView: View {
             )
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 HStack(alignment: .bottom) {
+                    GhostModeMapControl(service: friendSyncService)
+
                     Spacer()
 
                     VStack(spacing: 10) {
@@ -580,17 +619,6 @@ struct ContentView: View {
             Button("Annuler", role: .cancel) {}
         } message: {
             Text(selectedOutingNavigationMessage)
-        }
-        .sheet(item: $selectedFriendProfile) { selection in
-            FriendProfileSheet(
-                userID: selection.userID,
-                service: friendSyncService,
-                onOpenDirections: {
-                    presentNavigationOptions(selection.userID)
-                }
-            )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
         }
         .alert(
             "Participation impossible",
@@ -902,7 +930,8 @@ struct ContentView: View {
         for userID: String
     ) -> FriendNavigationDestination? {
         guard acceptedFriendUserIDs.contains(userID),
-              let location = friendSyncService.friendLocations[userID],
+              !friendSyncService.ghostFriendUserIDs.contains(userID),
+              let location = friendSyncService.friendLocation(for: userID),
               location.userID == userID,
               CLLocationCoordinate2DIsValid(location.coordinate),
               location.coordinate.latitude.isFinite,
@@ -930,6 +959,12 @@ struct ContentView: View {
     private func reconcileFriendPresentations(
         acceptedUserIDs: Set<String>
     ) {
+        if let userID = centerOnFriendUserID,
+           (!acceptedUserIDs.contains(userID)
+            || currentNavigationDestination(for: userID) == nil) {
+            centerOnFriendUserID = nil
+        }
+
         if let userID = friendNavigationSelection?.userID,
            (!acceptedUserIDs.contains(userID)
             || currentNavigationDestination(for: userID) == nil) {
@@ -949,7 +984,9 @@ struct ContentView: View {
     ) -> [FriendMapSummary] {
         friendSyncService.acceptedFriends
             .map { friend in
-                let location = locations[friend.userID]
+                let isGhostModeEnabled = friend.isGhostModeEnabled
+                    || friendSyncService.ghostFriendUserIDs.contains(friend.userID)
+                let location = isGhostModeEnabled ? nil : locations[friend.userID]
                 let isLocationFresh =
                     friendSyncService.freshFriendLocationUserIDs.contains(
                         friend.userID
@@ -966,7 +1003,8 @@ struct ContentView: View {
                     ) ?? ProfileColor.generatedHex(seed: friend.userID),
                     locationSampledAt: location?.sampledAt,
                     spotEnteredAt: location?.spotEnteredAt,
-                    isLocationFresh: isLocationFresh
+                    isLocationFresh: !isGhostModeEnabled && isLocationFresh,
+                    isGhostModeEnabled: isGhostModeEnabled
                 )
             }
             .sorted { lhs, rhs in
@@ -975,7 +1013,8 @@ struct ContentView: View {
     }
 
     private func showFriendOnMap(_ friend: FriendMapSummary) {
-        guard friend.canShowOnMap else { return }
+        guard friend.canShowOnMap,
+              currentNavigationDestination(for: friend.userID) != nil else { return }
         centerOnFriendUserID = friend.userID
         selectedTab = .explore
     }
@@ -986,6 +1025,7 @@ struct ContentView: View {
             trackingEnabled: locationTracker.trackingEnabled,
             backgroundTrackingEnabled:
                 locationTracker.backgroundTrackingEnabled,
+            locationSharingAllowed: friendSyncService.isLocationSharingAllowed,
             authorizationStatus: locationTracker.authorizationStatus
         )
     }
@@ -1307,12 +1347,155 @@ struct ContentView: View {
     #endif
 }
 
+// MARK: - Ghost mode
+
+private struct GhostModeMapControl: View {
+    @ObservedObject var service: FriendSyncService
+    @State private var errorDetailsPresented = false
+    @State private var conflictDetailsPresented = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let conflictMessage = service.ghostModeConflictMessage {
+                Button {
+                    conflictDetailsPresented = true
+                } label: {
+                    Label("Visibilité mise à jour", systemImage: "info.circle")
+                }
+                .buttonStyle(.glass)
+                .accessibilityHint(
+                    "Lire pourquoi ton précédent choix n’a pas été appliqué"
+                )
+                .alert(
+                    "Visibilité mise à jour",
+                    isPresented: $conflictDetailsPresented
+                ) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(conflictMessage)
+                }
+            }
+
+            if service.ghostModeErrorMessage != nil {
+                Label("Réessayer", systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if service.isGhostModePending {
+                Text("En attente")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if service.isGhostModeEnabled {
+                Text("Indisponible")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            modeButton
+        }
+    }
+
+    private var modeButton: some View {
+        Button {
+            if service.ghostModeErrorMessage != nil {
+                errorDetailsPresented = true
+            } else if service.isGhostModePending {
+                service.retryGhostModeChange()
+            } else {
+                service.setGhostModeEnabled(!service.isGhostModeEnabled)
+            }
+        } label: {
+            Text("👻")
+                .accessibilityHidden(true)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .disabled(!service.canChangeGhostMode)
+        .accessibilityLabel("Mode fantôme")
+        .accessibilityValue(accessibilityStatus)
+        .accessibilityHint(
+            service.isGhostModePending || service.ghostModeErrorMessage != nil
+                ? "Réessayer la synchronisation de ton choix"
+                : service.isGhostModeEnabled
+                    ? "Reprendre le partage de ta position"
+                    : "Masquer ta position à tous tes amis"
+        )
+        .alert(
+            "Mode fantôme en attente",
+            isPresented: $errorDetailsPresented
+        ) {
+            Button("Réessayer") {
+                service.retryGhostModeChange()
+            }
+            Button("Fermer", role: .cancel) {}
+        } message: {
+            Text(service.ghostModeErrorMessage ?? "Vérifie ta connexion et réessaie.")
+        }
+    }
+
+    private var accessibilityStatus: String {
+        if service.isGhostModePending || service.ghostModeErrorMessage != nil {
+            return service.isGhostModeEnabled
+                ? "Activation en attente"
+                : "Désactivation en attente"
+        }
+        return service.isGhostModeEnabled ? "Activé" : "Désactivé"
+    }
+}
+
+private struct GhostModeStatusView: View {
+    @ObservedObject var service: FriendSyncService
+
+    var body: some View {
+        if service.isGhostModePending {
+            Label(
+                service.isGhostModeEnabled
+                    ? "Activation en attente"
+                    : "Désactivation en attente",
+                systemImage: "clock"
+            )
+            .foregroundStyle(.secondary)
+
+            Text(
+                service.isGhostModeEnabled
+                    ? "En attente de confirmation. Ta dernière position partagée peut rester visible jusque-là."
+                    : "Ta position reste masquée jusqu’à la confirmation."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } else if service.isGhostModeEnabled {
+            Text("👻 Indisponible pour tes amis")
+                .accessibilityLabel("Indisponible pour tes amis, mode fantôme activé")
+                .foregroundStyle(.secondary)
+        } else {
+            Text("Mode fantôme désactivé")
+                .foregroundStyle(.secondary)
+        }
+
+        if let conflictMessage = service.ghostModeConflictMessage {
+            Label(conflictMessage, systemImage: "info.circle")
+                .foregroundStyle(.secondary)
+        }
+
+        if let errorMessage = service.ghostModeErrorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
+
+            Button("Réessayer la synchronisation") {
+                service.retryGhostModeChange()
+            }
+            .disabled(!service.canChangeGhostMode)
+        }
+    }
+}
+
 // MARK: - Friends
 
 private struct FriendsView: View {
     @ObservedObject var service: FriendSyncService
     let friends: [FriendMapSummary]
     let onShowOnMap: (FriendMapSummary) -> Void
+    let onViewProfile: (String) -> Void
 
     @State private var friendCodeInput = ""
     @State private var processingRequestID: String?
@@ -1450,8 +1633,15 @@ private struct FriendsView: View {
                                         "Afficher \(friend.displayName) sur la carte"
                                     )
                                 } else {
-                                    FriendRow(friend: friend)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Button {
+                                        onViewProfile(friend.userID)
+                                    } label: {
+                                        FriendRow(friend: friend)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityHint("Ouvrir le profil de cet ami")
                                 }
 
                                 if processingFriendUserID == friend.userID {
@@ -1635,7 +1825,10 @@ private struct FriendRow: View {
 
     @ViewBuilder
     private func statusLabel(relativeTo referenceDate: Date) -> some View {
-        if let sampledAt = friend.locationSampledAt {
+        if friend.isGhostModeEnabled {
+            Text("👻 Indisponible")
+                .accessibilityLabel("Indisponible, mode fantôme activé")
+        } else if let sampledAt = friend.locationSampledAt {
             let locationText = presenceStatusText(relativeTo: referenceDate)
                 ?? positionStatusText(sampledAt, relativeTo: referenceDate)
             Text(locationText)
@@ -1781,6 +1974,25 @@ private struct ProfileView: View {
                 }
 
                 Section {
+                    Toggle(isOn: ghostModeBinding) {
+                        Text("👻 Mode fantôme")
+                    }
+                    .disabled(!friendSyncService.canChangeGhostMode)
+                    .accessibilityLabel("Mode fantôme")
+                    .accessibilityHint(
+                        "Masquer ta position à tous tes amis jusqu’à désactivation"
+                    )
+
+                    GhostModeStatusView(service: friendSyncService)
+                } header: {
+                    Text("Visibilité auprès de mes amis")
+                } footer: {
+                    Text(
+                        "En mode fantôme, tes amis te voient indisponible et ne peuvent plus actualiser ta position. Ton exploration continue sur cet appareil ; les nouvelles zones seront synchronisées quand tu désactiveras ce mode."
+                    )
+                }
+
+                Section {
                     Toggle("Enregistrer mes déplacements", isOn: trackingBinding)
 
                     if locationTracker.authorizationStatus == .authorizedWhenInUse
@@ -1812,7 +2024,7 @@ private struct ProfileView: View {
                     Text("Localisation")
                 } footer: {
                     Text(
-                        "Quand l’exploration est active, Wander utilise ta position pour révéler la carte et alimenter les fonctions entre amis. Avec le suivi en arrière-plan et l’autorisation Toujours, tes amis acceptés peuvent aussi actualiser ta position lorsqu’ils te sélectionnent."
+                        "Quand l’exploration est active, Wander utilise ta position pour révéler la carte. Si le mode fantôme est désactivé, ta position est partagée avec tes amis. Avec le suivi en arrière-plan et l’autorisation Toujours, ils peuvent aussi l’actualiser lorsqu’ils te sélectionnent."
                     )
                 }
 
@@ -1902,6 +2114,8 @@ private struct ProfileView: View {
                                 trackingEnabled: locationTracker.trackingEnabled,
                                 backgroundTrackingEnabled:
                                     locationTracker.backgroundTrackingEnabled,
+                                locationSharingAllowed:
+                                    friendSyncService.isLocationSharingAllowed,
                                 authorizationStatus:
                                     locationTracker.authorizationStatus
                             )
@@ -1946,6 +2160,13 @@ private struct ProfileView: View {
         } message: {
             Text(accountActionErrorMessage ?? "Réessaie dans quelques instants.")
         }
+    }
+
+    private var ghostModeBinding: Binding<Bool> {
+        Binding(
+            get: { friendSyncService.isGhostModeEnabled },
+            set: { friendSyncService.setGhostModeEnabled($0) }
+        )
     }
 
     private var accountSection: some View {

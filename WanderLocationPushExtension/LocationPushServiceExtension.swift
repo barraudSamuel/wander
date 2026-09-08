@@ -17,20 +17,30 @@ final class LocationPushServiceExtension: NSObject,
     private var locationManager: CLLocationManager?
     private var serviceSession: CLServiceSession?
     private var didFinish = false
+    private var isPublishing = false
+    private var consentOwnerID: String?
+    private var consentRevision: String?
 
     func didReceiveLocationPushPayload(
         _ payload: [String: Any],
         completion: @escaping () -> Void
     ) {
         self.completion = completion
-        guard UserDefaults(
+        guard let sharedDefaults = UserDefaults(
             suiteName: LocationPushSharedConfiguration.appGroupID
-        )?.bool(
+        ), sharedDefaults.bool(
             forKey: LocationPushSharedConfiguration.sharingEnabledKey
-        ) == true else {
+        ), let ownerID = sharedDefaults.string(
+            forKey: LocationPushSharedConfiguration.ownerIDKey
+        ), !ownerID.isEmpty,
+        let revision = sharedDefaults.string(
+            forKey: LocationPushSharedConfiguration.consentRevisionKey
+        ), !revision.isEmpty else {
             finish()
             return
         }
+        consentOwnerID = ownerID
+        consentRevision = revision
         serviceSession = CLServiceSession(authorization: .always)
 
         let manager = CLLocationManager()
@@ -48,11 +58,13 @@ final class LocationPushServiceExtension: NSObject,
         _ manager: CLLocationManager,
         didUpdateLocations locations: [CLLocation]
     ) {
+        guard !didFinish, !isPublishing else { return }
         guard let location = locations.last,
               isValid(location) else {
             finish()
             return
         }
+        isPublishing = true
 
         Task {
             defer { finish() }
@@ -82,15 +94,9 @@ final class LocationPushServiceExtension: NSObject,
               user.providerData.contains(where: {
                   $0.providerID == "apple.com"
               }),
-              let sharedDefaults = UserDefaults(
-                  suiteName: LocationPushSharedConfiguration.appGroupID
-              ),
-              sharedDefaults.bool(
-                  forKey: LocationPushSharedConfiguration.sharingEnabledKey
-              ),
-              sharedDefaults.string(
-                  forKey: LocationPushSharedConfiguration.ownerIDKey
-              ) == user.uid else {
+              let ownerID = consentOwnerID, ownerID == user.uid,
+              let consentRevision,
+              Self.sharedConsentMatches(ownerID: ownerID, revision: consentRevision) else {
             return
         }
 
@@ -98,47 +104,84 @@ final class LocationPushServiceExtension: NSObject,
         let database = Firestore.firestore()
         let profileReference = database.collection("users").document(user.uid)
         let locationReference = database.collection("locations").document(user.uid)
-        async let profileSnapshot = profileReference.getDocument(source: .server)
-        async let previousLocationSnapshot = locationReference.getDocument(source: .server)
-        let (profile, previousLocation) = try await (
-            profileSnapshot,
-            previousLocationSnapshot
-        )
-
+        let profile = try await profileReference.getDocument(source: .server)
+        let expectedRevision = profile.data()?[LocationSharingPolicy.revisionKey] as? String
         guard profile.exists,
-              profile.data()?["deletionRequestedAt"] == nil,
-              let rawDisplayName = profile.data()?["displayName"] as? String else {
+              let initialProfile = profile.data(),
+              LocationSharingPolicy.allowsPublication(
+                  profile: initialProfile,
+                  expectedRevision: expectedRevision,
+                  sampledAt: location.timestamp
+              ),
+              !didFinish,
+              Self.sharedConsentMatches(ownerID: ownerID, revision: consentRevision) else {
             return
         }
-        let displayName = rawDisplayName.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard !displayName.isEmpty, displayName.count <= 50 else { return }
 
-        var data: [String: Any] = [
-            "location": GeoPoint(
-                latitude: location.coordinate.latitude,
-                longitude: location.coordinate.longitude
-            ),
-            "displayName": displayName,
-            "horizontalAccuracy": location.horizontalAccuracy,
-            "sampledAt": Timestamp(date: location.timestamp),
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
+        _ = try await database.runTransaction { transaction, errorPointer -> Any? in
+            do {
+                let currentProfile = try transaction.getDocument(profileReference)
+                guard Self.sharedConsentMatches(
+                    ownerID: ownerID,
+                    revision: consentRevision
+                ), currentProfile.exists,
+                let profileData = currentProfile.data(),
+                LocationSharingPolicy.allowsPublication(
+                    profile: profileData,
+                    expectedRevision: expectedRevision,
+                    sampledAt: location.timestamp
+                ), let rawDisplayName = profileData["displayName"] as? String else {
+                    return nil
+                }
+                let displayName = rawDisplayName.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                guard !displayName.isEmpty, displayName.count <= 50 else { return nil }
+                let previousLocation = try transaction.getDocument(locationReference)
 
-        if let preservedSpotEnteredAt = preservedSpotEnteredAt(
-            from: previousLocation,
-            for: location
-        ) {
-            data["spotEnteredAt"] = preservedSpotEnteredAt
+                var data: [String: Any] = [
+                    "location": GeoPoint(
+                        latitude: location.coordinate.latitude,
+                        longitude: location.coordinate.longitude
+                    ),
+                    "displayName": displayName,
+                    "horizontalAccuracy": location.horizontalAccuracy,
+                    "sampledAt": Timestamp(date: location.timestamp),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ]
+                if let enteredAt = Self.preservedSpotEnteredAt(
+                    from: previousLocation,
+                    for: location,
+                    resumedAt: (profileData[LocationSharingPolicy.resumedAtKey] as? Timestamp)?
+                        .dateValue()
+                ) {
+                    data["spotEnteredAt"] = enteredAt
+                }
+                transaction.setData(data, forDocument: locationReference)
+                return nil
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
         }
-
-        try await locationReference.setData(data)
     }
 
-    private func preservedSpotEnteredAt(
+    nonisolated private static func sharedConsentMatches(
+        ownerID: String,
+        revision: String
+    ) -> Bool {
+        guard let defaults = UserDefaults(
+            suiteName: LocationPushSharedConfiguration.appGroupID
+        ) else { return false }
+        return defaults.bool(forKey: LocationPushSharedConfiguration.sharingEnabledKey)
+            && defaults.string(forKey: LocationPushSharedConfiguration.ownerIDKey) == ownerID
+            && defaults.string(forKey: LocationPushSharedConfiguration.consentRevisionKey) == revision
+    }
+
+    nonisolated private static func preservedSpotEnteredAt(
         from snapshot: DocumentSnapshot,
-        for location: CLLocation
+        for location: CLLocation,
+        resumedAt: Date?
     ) -> Timestamp? {
         guard let data = snapshot.data(),
               let previousGeoPoint = data["location"] as? GeoPoint,
@@ -146,6 +189,9 @@ final class LocationPushServiceExtension: NSObject,
               previousAccuracy > 0,
               let enteredAt = data["spotEnteredAt"] as? Timestamp,
               enteredAt.dateValue() <= location.timestamp else {
+            return nil
+        }
+        if let resumedAt, enteredAt.dateValue() < resumedAt {
             return nil
         }
 
