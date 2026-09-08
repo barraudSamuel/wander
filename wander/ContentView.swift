@@ -12,6 +12,21 @@ import SwiftData
 import SwiftUI
 import UIKit
 
+enum MapDetailSelection: Equatable {
+    case friend(String)
+    case outing(String)
+
+    var friendUserID: String? {
+        guard case .friend(let userID) = self else { return nil }
+        return userID
+    }
+
+    var outingEventID: String? {
+        guard case .outing(let eventID) = self else { return nil }
+        return eventID
+    }
+}
+
 private enum RootTab: Hashable {
     case explore
     case friends
@@ -88,7 +103,6 @@ struct ContentView: View {
     @StateObject private var locationPushService = LocationPushService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage("profile.displayName") private var displayName = ""
     @AppStorage(ProfileAvatar.storageKey) private var avatarID = ""
     @AppStorage(ProfileColor.storageKey) private var profileColorHex = ""
@@ -106,7 +120,7 @@ struct ContentView: View {
     @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
     @State private var centerOnOutingPlanEventID: String?
-    @State private var selectedOutingPlanEventID: String?
+    @State private var selectedMapDetail: MapDetailSelection?
     @State private var heatMapEnabled = false
     @State private var cityProgress: CityProgress?
     @State private var friendNavigationSelection: FriendSelection?
@@ -300,7 +314,7 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) {
             if selectedTab != .explore {
-                selectedOutingPlanEventID = nil
+                selectedMapDetail = nil
             }
             synchronizeOutingAttendanceObservation()
         }
@@ -393,6 +407,10 @@ struct ContentView: View {
 
     // MARK: - Explore
 
+    private var selectedOutingPlanEventID: String? {
+        selectedMapDetail?.outingEventID
+    }
+
     private func exploreTab(
         friendSummaries: [FriendMapSummary]
     ) -> some View {
@@ -401,163 +419,147 @@ struct ContentView: View {
             outingPlans[$0]
         }
 
-        return FriendEdgeRailView(
-            friends: friendSummaries,
-            onSelect: { friend in
-                guard friend.canShowOnMap else { return }
-                showFriendOnMap(friend)
-            }
-        ) {
-            ZStack(alignment: .topTrailing) {
-                MapWithFogView(
-                    locationTracker: locationTracker,
-                    discoveredCellIDs: locationTracker.discoveredCellIDs,
-                    cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
-                    friendLocations: friendSyncService.friendLocations,
-                    freshFriendLocationUserIDs:
-                        friendSyncService.freshFriendLocationUserIDs,
-                    refreshingFriendLocationUserIDs:
-                        locationPushService.refreshingFriendUserIDs,
-                    outingPlans: outingPlans,
-                    userExplorationProgress: cityProgress,
-                    userDisplayName: displayName,
-                    userAvatarID: avatarID,
-                    userProfileColorHex: profileColorHex,
-                    centerOnUser: $centerOnUser,
-                    resetMapOrientation: $resetMapOrientation,
-                    centerOnFriendUserID: $centerOnFriendUserID,
-                    centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
-                    pendingOutingCoordinate: pendingOutingCoordinate,
-                    isEventCreationEnabled: !outingComposerVisible,
-                    selectedOutingPlanEventID: selectedOutingPlanEventID,
-                    showsHeatMap: heatMapEnabled,
-                    heatMapCellData: locationTracker.heatMapCellData,
-                    heatMapRevision: locationTracker.heatMapRevision,
-                    onJoinFriend: presentNavigationOptions,
-                    onSelectFriend: { userID in
-                        guard !friendSyncService.ghostFriendUserIDs.contains(userID),
-                              friendSyncService.friendLocation(for: userID) != nil else {
-                            return
-                        }
-                        locationPushService.requestRefresh(
-                            for: userID,
-                            currentLocation:
-                                friendSyncService.friendLocation(for: userID)
+        return MapDetailSplitView(isPresented: selectedMapDetail != nil) {
+            if let selectedOutingPlan {
+                OutingPlanDetailCardView(
+                    outing: selectedOutingPlan,
+                    onDismiss: { selectedMapDetail = nil },
+                    onEdit: {
+                        pendingOutingCoordinate = nil
+                        editingOutingEvent = selectedOutingPlan.plan
+                        outingComposerDetent = .large
+                        outingComposerVisible = true
+                    },
+                    onOpenDirections: {
+                        presentOutingNavigationOptions(
+                            eventID: selectedOutingPlan.plan.eventIDValue
                         )
                     },
-                    onViewFriendProfile: presentFriendProfile,
-                    onSelectOutingPlan: { eventID in
-                        selectedOutingPlanEventID = eventID
-                    },
-                    onDeselectOutingPlan: { eventID in
-                        guard selectedOutingPlanEventID == eventID else { return }
-                        selectedOutingPlanEventID = nil
-                    },
-                    onCreateEvent: { coordinate in
-                        guard CLLocationCoordinate2DIsValid(coordinate),
-                              !outingComposerVisible else {
-                            return
-                        }
-                        selectedOutingPlanEventID = nil
-                        editingOutingEvent = nil
-                        pendingOutingCoordinate = coordinate
-                        outingComposerDetent =
-                            OutingComposerPresentation.creationDetent
-                        outingComposerVisible = true
+                    onSetAttendance: { shouldAttend in
+                        setOutingAttendance(
+                            shouldAttend,
+                            eventID: selectedOutingPlan.plan.eventIDValue
+                        )
                     }
                 )
-                .ignoresSafeArea()
-
-                ownExplorationStatusOverlay
-
-                if let selectedOutingPlan {
-                    OutingPlanDetailCardView(
-                        outing: selectedOutingPlan,
-                        onDismiss: {
-                            selectedOutingPlanEventID = nil
-                        },
-                        onEdit: {
-                            pendingOutingCoordinate = nil
-                            editingOutingEvent = selectedOutingPlan.plan
-                            outingComposerDetent = .large
-                            outingComposerVisible = true
-                        },
-                        onOpenDirections: {
-                            presentOutingNavigationOptions(
-                                eventID: selectedOutingPlan.plan.eventIDValue
-                            )
-                        },
-                        onSetAttendance: { shouldAttend in
-                            setOutingAttendance(
-                                shouldAttend,
-                                eventID: selectedOutingPlan.plan.eventIDValue
-                            )
-                        }
-                    )
-                    .frame(maxWidth: 600)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .transition(
-                        accessibilityReduceMotion
-                            ? .identity
-                            : .scale(scale: 0.96, anchor: .top)
-                    )
-                    .zIndex(1)
-                } else {
-                    Button {
-                        filterSheetVisible = true
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease")
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.large)
-                    .accessibilityLabel("Filtres de la carte")
-                    .accessibilityHint("Choisir les informations visibles sur la carte")
-                    .padding(.top, 8)
-                    .padding(.trailing, 16)
-                    .transition(.opacity)
-                }
+                .id(selectedOutingPlan.plan.eventIDValue)
+            } else if let userID = selectedMapDetail?.friendUserID {
+                FriendProfilePanel(
+                    userID: userID,
+                    service: friendSyncService,
+                    onDismiss: { selectedMapDetail = nil },
+                    onOpenDirections: { presentNavigationOptions(userID) }
+                )
+                .id(userID)
             }
-            .animation(
-                accessibilityReduceMotion
-                    ? nil
-                    : .spring(response: 0.18, dampingFraction: 0.9),
-                value: selectedOutingPlanEventID
-            )
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                HStack(alignment: .bottom) {
-                    GhostModeMapControl(service: friendSyncService)
+        } map: {
+            FriendEdgeRailView(
+                friends: friendSummaries,
+                onSelect: { friend in
+                    guard friend.canShowOnMap else { return }
+                    showFriendOnMap(friend)
+                }
+            ) {
+                ZStack(alignment: .topTrailing) {
+                    MapWithFogView(
+                        locationTracker: locationTracker,
+                        discoveredCellIDs: locationTracker.discoveredCellIDs,
+                        cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
+                        friendLocations: friendSyncService.friendLocations,
+                        freshFriendLocationUserIDs:
+                            friendSyncService.freshFriendLocationUserIDs,
+                        refreshingFriendLocationUserIDs:
+                            locationPushService.refreshingFriendUserIDs,
+                        outingPlans: outingPlans,
+                        userExplorationProgress: cityProgress,
+                        userDisplayName: displayName,
+                        userAvatarID: avatarID,
+                        userProfileColorHex: profileColorHex,
+                        centerOnUser: $centerOnUser,
+                        resetMapOrientation: $resetMapOrientation,
+                        centerOnFriendUserID: $centerOnFriendUserID,
+                        centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
+                        pendingOutingCoordinate: pendingOutingCoordinate,
+                        isEventCreationEnabled: !outingComposerVisible,
+                        selectedOutingPlanEventID: selectedOutingPlanEventID,
+                        selectedFriendProfileUserID: selectedMapDetail?.friendUserID,
+                        showsHeatMap: heatMapEnabled,
+                        heatMapCellData: locationTracker.heatMapCellData,
+                        heatMapRevision: locationTracker.heatMapRevision,
+                        onJoinFriend: presentNavigationOptions,
+                        onSelectFriend: presentMapFriendProfile,
+                        onViewFriendProfile: presentMapFriendProfile,
+                        onSelectOutingPlan: { eventID in
+                            selectedMapDetail = .outing(eventID)
+                        },
+                        onCreateEvent: { coordinate in
+                            guard CLLocationCoordinate2DIsValid(coordinate),
+                                  !outingComposerVisible else {
+                                return
+                            }
+                            selectedMapDetail = nil
+                            editingOutingEvent = nil
+                            pendingOutingCoordinate = coordinate
+                            outingComposerDetent =
+                                OutingComposerPresentation.creationDetent
+                            outingComposerVisible = true
+                        }
+                    )
 
-                    Spacer()
+                    ownExplorationStatusOverlay
+                        .modifier(MapContentSafeArea())
 
-                    VStack(spacing: 10) {
+                    if selectedMapDetail == nil {
                         Button {
-                            resetMapOrientation = true
+                            filterSheetVisible = true
                         } label: {
-                            Image(systemName: "safari")
+                            Image(systemName: "line.3.horizontal.decrease")
                         }
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .controlSize(.large)
-                        .accessibilityLabel("Orienter la carte vers le nord")
-
-                        Button {
-                            centerOnUser = true
-                        } label: {
-                            Image(systemName: "scope")
-                        }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.large)
-                        .accessibilityLabel("Recentrer la carte sur ma position")
+                        .accessibilityLabel("Filtres de la carte")
+                        .accessibilityHint("Choisir les informations visibles sur la carte")
+                        .padding(.top, 8)
+                        .padding(.trailing, 16)
+                        .modifier(MapContentSafeArea(edges: [.top, .trailing]))
                     }
                 }
-                .padding(.horizontal)
-                .padding(.bottom, 8)
+                .overlay(alignment: .bottom) {
+                    HStack(alignment: .bottom) {
+                        GhostModeMapControl(service: friendSyncService)
+
+                        Spacer()
+
+                        VStack(spacing: 10) {
+                            Button {
+                                resetMapOrientation = true
+                            } label: {
+                                Image(systemName: "safari")
+                            }
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.circle)
+                            .controlSize(.large)
+                            .accessibilityLabel("Orienter la carte vers le nord")
+
+                            Button {
+                                centerOnUser = true
+                            } label: {
+                                Image(systemName: "scope")
+                            }
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.circle)
+                            .controlSize(.large)
+                            .accessibilityLabel("Recentrer la carte sur ma position")
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .modifier(MapContentSafeArea(edges: [.bottom, .horizontal]))
+                }
             }
         }
+        .toolbarBackground(.hidden, for: .tabBar)
         .sheet(isPresented: $filterSheetVisible) {
             MapFiltersSheet(
                 heatMapEnabled: $heatMapEnabled
@@ -697,6 +699,16 @@ struct ContentView: View {
             return
         }
         selectedOutingNavigationEventID = eventID
+    }
+
+    private func presentMapFriendProfile(_ userID: String) {
+        guard acceptedFriendUserIDs.contains(userID) else { return }
+        selectedMapDetail = .friend(userID)
+        guard !friendSyncService.ghostFriendUserIDs.contains(userID),
+              let location = friendSyncService.friendLocation(for: userID) else {
+            return
+        }
+        locationPushService.requestRefresh(for: userID, currentLocation: location)
     }
 
     private func presentFriendProfile(_ userID: String) {
@@ -971,6 +983,11 @@ struct ContentView: View {
             friendNavigationSelection = nil
         }
 
+        if let userID = selectedMapDetail?.friendUserID,
+           !acceptedUserIDs.contains(userID) {
+            selectedMapDetail = nil
+        }
+
         if let userID = selectedFriendProfile?.userID,
            !acceptedUserIDs.contains(userID) {
             selectedFriendProfile = nil
@@ -1157,7 +1174,7 @@ struct ContentView: View {
 
         if let selectedOutingPlanEventID,
            outingPlans[selectedOutingPlanEventID] == nil {
-            self.selectedOutingPlanEventID = nil
+            self.selectedMapDetail = nil
         }
 
         if let selectedOutingNavigationEventID,

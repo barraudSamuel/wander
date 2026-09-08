@@ -13,6 +13,7 @@ final class MapSocialProximityController {
     private let presentation: (MapSocialProximityGroupAnnotation) -> MapSocialClusterPresentation
     private let setFocusAppearance: (Bool, MKAnnotationView) -> Void
     private let onDeselectMember: (MapSocialClusterMemberID) -> Void
+    private let visibleBounds: @MainActor (MKMapView) -> CGRect
     private var state = MapSocialProximityState()
     private var sources: [MapSocialClusterMemberID: any MKAnnotation] = [:]
     private var memberIDsByAnnotation: [ObjectIdentifier: MapSocialClusterMemberID] = [:]
@@ -24,15 +25,20 @@ final class MapSocialProximityController {
     private var pendingSelection: MapSocialClusterMemberID?
     private var selectionGeneration = 0
     private var scheduledSelectionGeneration: Int?
+    private var isFittingExpandedGroup = false
 
     init(
         presentation: @escaping (MapSocialProximityGroupAnnotation) -> MapSocialClusterPresentation,
         setFocusAppearance: @escaping (Bool, MKAnnotationView) -> Void,
-        onDeselectMember: @escaping (MapSocialClusterMemberID) -> Void = { _ in }
+        onDeselectMember: @escaping (MapSocialClusterMemberID) -> Void = { _ in },
+        visibleBounds: @escaping @MainActor (MKMapView) -> CGRect = {
+            $0.bounds.inset(by: $0.safeAreaInsets)
+        }
     ) {
         self.presentation = presentation
         self.setFocusAppearance = setFocusAppearance
         self.onDeselectMember = onDeselectMember
+        self.visibleBounds = visibleBounds
     }
 
     // Avoid synthesized isolated deinit on older Swift runtimes (swiftlang/swift#88036).
@@ -76,6 +82,7 @@ final class MapSocialProximityController {
         }
         synchronize(on: mapView)
         refreshViews(on: mapView)
+        viewportDidChange(on: mapView)
         selectPendingAnnotationIfVisible(on: mapView)
     }
 
@@ -166,6 +173,9 @@ final class MapSocialProximityController {
         for group: MapSocialProximityGroupAnnotation,
         on mapView: MKMapView
     ) {
+        if let bounds = expandedGroupBounds(on: mapView) {
+            view.setExpandedViewportSize(bounds.size)
+        }
         view.configure(with: presentation(group))
         view.onSelectMember = { [weak self, weak mapView, weak group] memberID in
             guard let self, let mapView, let group else { return }
@@ -175,6 +185,10 @@ final class MapSocialProximityController {
             }
             self.collapseExpandedGroup(on: mapView, animated: true)
             self.center(on: memberID, on: mapView)
+        }
+        view.onExpandedSizeChange = { [weak self, weak mapView] in
+            guard let self, let mapView else { return }
+            self.viewportDidChange(on: mapView)
         }
         view.setExpanded(expandedGroupID == group.identifier, animated: false)
         if expandedGroupID == group.identifier {
@@ -344,12 +358,61 @@ final class MapSocialProximityController {
         configure(view, for: group, on: mapView)
         expandedGroupID = group.identifier
         expandedView = view
-        let anchor = mapView.convert(group.coordinate, toPointTo: mapView)
-        let safeBounds = mapView.bounds.inset(by: mapView.safeAreaInsets).insetBy(dx: 12, dy: 12)
-        if !safeBounds.contains(view.projectedExpandedFrame(at: anchor)) {
-            mapView.setCenter(group.coordinate, animated: !UIAccessibility.isReduceMotionEnabled)
-        }
         view.setExpanded(true, animated: true)
+        viewportDidChange(on: mapView)
+    }
+
+    /// A clipping-window change does not emit MapKit camera callbacks.
+    /// Keep the existing group and selection while exposing its list and anchor.
+    func viewportDidChange(on mapView: MKMapView) {
+        guard !isFittingExpandedGroup,
+              let groupID = expandedGroupID,
+              let group = groupsByID[groupID],
+              let view = expandedView,
+              let annotation = view.annotation,
+              (annotation as AnyObject) === group,
+              view.isExpanded,
+              let bounds = expandedGroupBounds(on: mapView) else { return }
+        isFittingExpandedGroup = true
+        defer { isFittingExpandedGroup = false }
+
+        view.setExpandedViewportSize(bounds.size)
+        let anchor = mapView.convert(group.coordinate, toPointTo: mapView)
+        guard anchor.x.isFinite, anchor.y.isFinite else { return }
+        let listFrame = view.projectedExpandedFrame(at: anchor)
+        let frame = CGRect(
+            x: listFrame.minX,
+            y: listFrame.minY,
+            width: listFrame.width,
+            height: max(anchor.y, listFrame.maxY) - listFrame.minY
+        )
+        let translation = CGPoint(
+            x: max(0, bounds.minX - frame.minX) + min(0, bounds.maxX - frame.maxX),
+            y: max(0, bounds.minY - frame.minY) + min(0, bounds.maxY - frame.maxY)
+        )
+        guard abs(translation.x) > 0.5 || abs(translation.y) > 0.5 else { return }
+
+        // MapKit centers inside its safe area, which can differ from bounds.midY.
+        let projectedCenter = mapView.convert(mapView.centerCoordinate, toPointTo: mapView)
+        guard projectedCenter.x.isFinite, projectedCenter.y.isFinite else { return }
+        let center = mapView.convert(
+            CGPoint(
+                x: projectedCenter.x - translation.x,
+                y: projectedCenter.y - translation.y
+            ),
+            toCoordinateFrom: mapView
+        )
+        guard CLLocationCoordinate2DIsValid(center) else { return }
+        // A viewport drag can call this every frame. Do not queue camera animations.
+        mapView.setCenter(center, animated: false)
+    }
+
+    private func expandedGroupBounds(on mapView: MKMapView) -> CGRect? {
+        let bounds = visibleBounds(mapView)
+        guard bounds.minX.isFinite, bounds.minY.isFinite,
+              bounds.width.isFinite, bounds.height.isFinite,
+              bounds.width > 24, bounds.height > 32 else { return nil }
+        return bounds.insetBy(dx: 12, dy: 12)
     }
 
     private func collapseExpandedGroup(on mapView: MKMapView, animated: Bool) {

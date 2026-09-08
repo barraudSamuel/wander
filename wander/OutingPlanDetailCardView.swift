@@ -13,46 +13,52 @@ struct OutingPlanDetailCardView: View {
     let onSetAttendance: (Bool) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(spacing: 0) {
             header
-            outingDetails
-            participationSummary
-            directionsButton
+            Divider()
 
-            if outing.isCurrentUser {
-                editButton
-            } else {
-                attendanceControl
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(outing.plan.placeName)
+                        .font(.title2.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
+
+                    outingDetails
+                    participationSummary
+                    directionsButton
+
+                    if outing.isCurrentUser {
+                        editButton
+                    } else {
+                        attendanceControl
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
             }
+            .accessibilityIdentifier("outing-detail-scroll")
         }
-        .padding(16)
-        .background(
-            .regularMaterial,
-            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-        )
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
         .accessibilityElement(children: .contain)
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Sortie prévue")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-                Text(outing.plan.placeName)
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 12) {
+            Text("Sortie prévue")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
+            .frame(minWidth: 44, minHeight: 44)
             .accessibilityLabel("Fermer la fiche de la sortie")
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     private var outingDetails: some View {
@@ -86,27 +92,36 @@ struct OutingPlanDetailCardView: View {
             switch outing.rosterState {
             case .available:
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 10) {
-                        OutingPeopleAvatarStack(
-                            people: outing.visiblePeople,
-                            accessibilityText: participantsAccessibilityText
-                        )
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) {
+                            participantAvatars
+                            Text(peopleCountText)
+                                .font(.subheadline.weight(.medium))
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
 
-                        Text(peopleCountText)
-                            .font(.subheadline.weight(.medium))
+                        VStack(alignment: .leading, spacing: 8) {
+                            participantAvatars
+                            Text(peopleCountText)
+                                .font(.subheadline.weight(.medium))
+                        }
                     }
 
                     if !outing.visibleDeclines.isEmpty {
-                        HStack(spacing: 10) {
-                            OutingPeopleAvatarStack(
-                                people: outing.visibleDeclines,
-                                accessibilityText: declinesAccessibilityText
-                            )
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                declineAvatars
+                                Text(declineCountText)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
 
-                            Text(declineCountText)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 8) {
+                                declineAvatars
+                                Text(declineCountText)
+                            }
                         }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                     }
                 }
 
@@ -124,6 +139,20 @@ struct OutingPlanDetailCardView: View {
                 participationStatus
             }
         }
+    }
+
+    private var participantAvatars: some View {
+        OutingPeopleAvatarStack(
+            people: outing.visiblePeople,
+            accessibilityText: participantsAccessibilityText
+        )
+    }
+
+    private var declineAvatars: some View {
+        OutingPeopleAvatarStack(
+            people: outing.visibleDeclines,
+            accessibilityText: declinesAccessibilityText
+        )
     }
 
     @ViewBuilder

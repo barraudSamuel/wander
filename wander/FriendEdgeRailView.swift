@@ -14,6 +14,8 @@ struct FriendEdgeRailView<Content: View>: View {
     private let content: Content
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.mapContentInsets) private var mapContentInsets
+    @Environment(\.layoutDirection) private var layoutDirection
 
     @State private var isOpen = false
     @State private var edgeRevealProgress: CGFloat = 0
@@ -47,20 +49,40 @@ struct FriendEdgeRailView<Content: View>: View {
     }
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        ZStack(alignment: rightAlignment) {
             content
 
             GeometryReader { geometry in
+                let leftInset = layoutDirection == .leftToRight
+                    ? mapContentInsets.leading : mapContentInsets.trailing
+                let rightInset = layoutDirection == .leftToRight
+                    ? mapContentInsets.trailing : mapContentInsets.leading
+                let contentOrigin = CGPoint(
+                    x: min(max(0, leftInset), max(0, geometry.size.width)),
+                    y: min(max(0, mapContentInsets.top), max(0, geometry.size.height))
+                )
+                let contentSize = CGSize(
+                    width: max(
+                        0,
+                        geometry.size.width - contentOrigin.x - max(0, rightInset)
+                    ),
+                    height: max(
+                        0,
+                        geometry.size.height - contentOrigin.y - max(0, mapContentInsets.bottom)
+                    )
+                )
                 let revealProgress = currentRevealProgress(railWidth: railWidth)
+                let visibleRailHeight = min(railHeight, contentSize.height)
                 let displayedRailCenterY = resolvedRailCenterY(
-                    defaultCenterY: geometry.size.height / 2
+                    viewportHeight: contentSize.height,
+                    railHeight: visibleRailHeight
                 )
 
-                ZStack(alignment: .trailing) {
-                    ZStack(alignment: .trailing) {
+                ZStack(alignment: rightAlignment) {
+                    ZStack(alignment: rightAlignment) {
                         railBackground(
                             width: railWidth,
-                            height: railHeight,
+                            height: visibleRailHeight,
                             progress: revealProgress
                         )
 
@@ -68,11 +90,11 @@ struct FriendEdgeRailView<Content: View>: View {
                             railWidth: railWidth,
                             progress: revealProgress,
                             verticalOffset: (focusedFriendCenterY
-                                ?? railHeight / 2)
-                                - railHeight / 2
+                                ?? visibleRailHeight / 2)
+                                - visibleRailHeight / 2
                         )
 
-                        ZStack(alignment: .trailing) {
+                        ZStack(alignment: rightAlignment) {
                             Color.clear
                                 .contentShape(Rectangle())
 
@@ -82,19 +104,19 @@ struct FriendEdgeRailView<Content: View>: View {
                                 focusedFriendCenterY: $focusedFriendCenterY,
                                 onActivate: activate
                             )
-                            .frame(width: railWidth, height: railHeight)
+                            .frame(width: railWidth, height: visibleRailHeight)
                             .mask {
                                 FriendRailShape()
                                     .frame(
                                         width: railWidth,
-                                        height: railHeight
+                                        height: visibleRailHeight
                                     )
                             }
                         }
                         .frame(
                             width: railWidth + closeGestureReach,
-                            height: railHeight,
-                            alignment: .trailing
+                            height: visibleRailHeight,
+                            alignment: rightAlignment
                         )
                         .offset(x: railWidth * (1 - revealProgress))
                         .opacity(revealProgress)
@@ -105,40 +127,51 @@ struct FriendEdgeRailView<Content: View>: View {
                         }
                     }
                     .frame(
-                        width: geometry.size.width,
-                        height: railHeight,
-                        alignment: .trailing
+                        width: contentSize.width,
+                        height: visibleRailHeight,
+                        alignment: rightAlignment
                     )
                     .clipped()
                     .position(
-                        x: geometry.size.width / 2,
+                        x: contentSize.width / 2,
                         y: displayedRailCenterY
                     )
                     .animation(railHeightAnimation, value: railHeight)
-
-                    if !isOpen {
-                        RightEdgePanGestureView { event in
-                            handleEdgePan(event)
-                        }
-                        .frame(
-                            width: edgeTouchWidth,
-                            height: geometry.size.height
-                        )
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .accessibilityHidden(true)
-                    }
                 }
                 .frame(
-                    width: geometry.size.width,
-                    height: geometry.size.height,
-                    alignment: .trailing
+                    width: contentSize.width,
+                    height: contentSize.height,
+                    alignment: rightAlignment
                 )
+                .clipped()
+                .allowsHitTesting(contentSize.width > 0 && contentSize.height > 0)
+                .offset(x: contentOrigin.x, y: contentOrigin.y)
                 .onChange(of: friends.map(\.id), initial: true) { _, friendIDs in
                     reconcileFocus(with: friendIDs)
                 }
+
+                if !isOpen {
+                    let touchWidth = min(edgeTouchWidth, max(0, geometry.size.width))
+                    // Screen-edge recognition starts at the physical screen edge,
+                    // while its vertical coordinates match the safe rail viewport.
+                    RightEdgePanGestureView { event in
+                        handleEdgePan(event)
+                    }
+                    .frame(width: touchWidth, height: contentSize.height)
+                    .position(
+                        x: geometry.size.width - touchWidth / 2,
+                        y: contentOrigin.y + contentSize.height / 2
+                    )
+                    .allowsHitTesting(touchWidth > 0 && contentSize.height > 0)
+                    .accessibilityHidden(true)
+                }
             }
-            .ignoresSafeArea()
+            .clipped()
         }
+    }
+
+    private var rightAlignment: Alignment {
+        layoutDirection == .leftToRight ? .trailing : .leading
     }
 
     private func railBackground(
@@ -174,8 +207,8 @@ struct FriendEdgeRailView<Content: View>: View {
                     .regular,
                     in: Capsule()
                 )
-                .padding(.trailing, railWidth + 10)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(layoutDirection == .leftToRight ? .trailing : .leading, railWidth + 10)
+                .frame(maxWidth: .infinity, alignment: rightAlignment)
                 .opacity(progress)
                 .offset(x: railWidth * (1 - progress))
                 .offset(y: verticalOffset)
@@ -253,12 +286,14 @@ struct FriendEdgeRailView<Content: View>: View {
     }
 
     private func resolvedRailCenterY(
-        defaultCenterY: CGFloat
+        viewportHeight: CGFloat,
+        railHeight: CGFloat
     ) -> CGFloat {
-        guard let railCenterY, railCenterY.isFinite else {
-            return defaultCenterY
-        }
-        return railCenterY
+        let minimumCenterY = railHeight / 2
+        let maximumCenterY = max(minimumCenterY, viewportHeight - minimumCenterY)
+        let proposedCenterY = railCenterY.flatMap { $0.isFinite ? $0 : nil }
+            ?? viewportHeight / 2
+        return min(maximumCenterY, max(minimumCenterY, proposedCenterY))
     }
 
     private func latchOpenWithFeedback() {

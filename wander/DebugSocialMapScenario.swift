@@ -20,26 +20,46 @@ struct DebugSocialMapScenarioView: View {
     @State private var revision = 0
 
     var body: some View {
-        DebugSocialMapScene(kind: scene)
-            .id("\(scene.rawValue)-\(revision)")
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 8) {
-                    Picker("Scénario", selection: $scene) {
-                        ForEach(SceneKind.allCases) { kind in
-                            Text(kind.rawValue).tag(kind)
+        if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
+            // Match Explorer's outer geometry and native tab bar without the
+            // fixture controls that reserve extra space below the map.
+            GeometryReader { _ in
+                TabView {
+                    mapScene
+                        .toolbarBackground(.hidden, for: .tabBar)
+                        .tabItem { Label("Explorer", systemImage: "map") }
+                    Color.clear
+                        .tabItem { Label("Amis", systemImage: "person.2") }
+                    Color.clear
+                        .tabItem { Label("Profil", systemImage: "person.crop.circle") }
+                }
+            }
+        } else {
+            mapScene
+                .safeAreaInset(edge: .bottom) {
+                    VStack(spacing: 8) {
+                        Picker("Scénario", selection: $scene) {
+                            ForEach(SceneKind.allCases) { kind in
+                                Text(kind.rawValue).tag(kind)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        HStack {
+                            Text("Scénario carte sociale")
+                                .font(.caption)
+                            Spacer()
+                            Button("Réinitialiser") { revision += 1 }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    HStack {
-                        Text("Scénario carte sociale")
-                            .font(.caption)
-                        Spacer()
-                        Button("Réinitialiser") { revision += 1 }
-                    }
+                    .padding()
+                    .background(.regularMaterial)
                 }
-                .padding()
-                .background(.regularMaterial)
-            }
+        }
+    }
+
+    private var mapScene: some View {
+        DebugSocialMapScene(kind: scene)
+            .id("\(scene.rawValue)-\(revision)")
     }
 }
 
@@ -50,7 +70,7 @@ private struct DebugSocialMapScene: View {
     private let friends: [String: FriendLocation]
     @StateObject private var locationTracker: LocationTracker
     @State private var plans: [String: OutingPlan]
-    @State private var selectedEventID: String?
+    @State private var selectedDetail: MapDetailSelection?
     @State private var editingEvent: OutingPlan?
     @State private var centerOnUser = false
     @State private var resetOrientation = false
@@ -101,40 +121,37 @@ private struct DebugSocialMapScene: View {
 
     var body: some View {
         let presentations = presentations
-        ZStack(alignment: .top) {
-            MapWithFogView(
-                locationTracker: locationTracker,
-                discoveredCellIDs: [], cityBoundaryCoordinates: [],
-                friendLocations: friends, freshFriendLocationUserIDs: Set(friends.keys),
-                outingPlans: presentations,
-                userDisplayName: "Moi", userAvatarID: ProfileAvatar.cyclopsHorns.rawValue,
-                userProfileColorHex: "#3478F6",
-                centerOnUser: $centerOnUser, resetMapOrientation: $resetOrientation,
-                centerOnFriendUserID: $centerOnFriend, centerOnOutingPlanEventID: $centerOnEvent,
-                isEventCreationEnabled: editingEvent == nil,
-                selectedOutingPlanEventID: selectedEventID,
-                showsSystemUserLocation: false,
-                onSelectOutingPlan: { selectedEventID = $0 },
-                onDeselectOutingPlan: { id in
-                    guard selectedEventID == id else { return }
-                    selectedEventID = nil
-                }
-            )
-            .ignoresSafeArea()
-
-            if let id = selectedEventID, let outing = presentations[id] {
+        MapDetailSplitView(isPresented: selectedDetail != nil) {
+            if let id = selectedDetail?.outingEventID, let outing = presentations[id] {
                 OutingPlanDetailCardView(
                     outing: outing,
-                    onDismiss: { selectedEventID = nil },
+                    onDismiss: { selectedDetail = nil },
                     onEdit: { editingEvent = outing.plan },
                     onOpenDirections: {}, onSetAttendance: { _ in }
                 )
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .transition(.scale(scale: 0.96, anchor: .top))
+                .id(id)
+            } else if let id = selectedDetail?.friendUserID, let friend = friends[id] {
+                FriendProfileContentView(
+                    displayName: friend.displayName,
+                    avatarID: friend.avatarID,
+                    profileColorHex: friend.profileColorHex,
+                    isGhostModeEnabled: false,
+                    location: friend,
+                    isLocationFresh: true,
+                    onDismiss: { selectedDetail = nil },
+                    onOpenDirections: {}
+                )
+                .id(id)
+            }
+        } map: {
+            if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
+                FriendEdgeRailView(friends: [], onSelect: { _ in }) {
+                    mapView
+                }
+            } else {
+                mapView
             }
         }
-        .animation(.spring(response: 0.18, dampingFraction: 0.9), value: selectedEventID)
         .sheet(item: $editingEvent) { event in
             OutingPlanComposerView(
                 displayName: "Moi", initialCoordinate: nil, editingEvent: event,
@@ -157,12 +174,31 @@ private struct DebugSocialMapScene: View {
                     },
                     cancel: { id in
                         plans.removeValue(forKey: id)
-                        if selectedEventID == id { selectedEventID = nil }
+                        if selectedDetail == .outing(id) { selectedDetail = nil }
                     }
                 ),
                 showsNotificationSettings: false
             )
         }
+    }
+
+    private var mapView: some View {
+        MapWithFogView(
+            locationTracker: locationTracker,
+            discoveredCellIDs: [], cityBoundaryCoordinates: [],
+            friendLocations: friends, freshFriendLocationUserIDs: Set(friends.keys),
+            outingPlans: presentations,
+            userDisplayName: "Moi", userAvatarID: ProfileAvatar.cyclopsHorns.rawValue,
+            userProfileColorHex: "#3478F6",
+            centerOnUser: $centerOnUser, resetMapOrientation: $resetOrientation,
+            centerOnFriendUserID: $centerOnFriend, centerOnOutingPlanEventID: $centerOnEvent,
+            isEventCreationEnabled: editingEvent == nil,
+            selectedOutingPlanEventID: selectedDetail?.outingEventID,
+            selectedFriendProfileUserID: selectedDetail?.friendUserID,
+            showsSystemUserLocation: false,
+            onSelectFriend: { selectedDetail = .friend($0) },
+            onSelectOutingPlan: { selectedDetail = .outing($0) }
+        )
     }
 
     private static func plan(number: Int, category: OutingCategory) -> OutingPlan {

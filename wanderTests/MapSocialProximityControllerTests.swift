@@ -7,6 +7,81 @@ import XCTest
 /// Exercises the controller through real MapKit annotations, views, and delegate callbacks.
 @MainActor
 final class MapSocialProximityControllerTests: XCTestCase {
+    func testExpandedGroupFitsChangingViewportWithoutLosingSelectionOrRepeatedCentering() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        fixture.update(Dictionary(uniqueKeysWithValues: (0..<8).map { index in
+            (MapSocialClusterMemberID.outing("event-\(index)"), fixture.annotation("Sortie \(index)", meters: 0))
+        }))
+        let group = try XCTUnwrap(fixture.groups.first)
+        try await eventually("The group view appears") { fixture.groupView(for: group) != nil }
+        let view = try XCTUnwrap(fixture.groupView(for: group))
+        fixture.mapView.selectAnnotation(group, animated: false)
+        try await eventually("The group expands") { view.isExpanded }
+        let revision = fixture.controller.presentationRevision
+        let nativeBounds = fixture.mapView.bounds
+
+        let visibleBounds = CGRect(
+            x: nativeBounds.midX - 110,
+            y: nativeBounds.midY - 75,
+            width: 220,
+            height: 150
+        )
+        fixture.visibleBounds = visibleBounds
+        fixture.controller.viewportDidChange(on: fixture.mapView)
+        try await eventually("The list and its anchor fit the nonzero-origin viewport") {
+            let anchor = fixture.mapView.convert(group.coordinate, toPointTo: fixture.mapView)
+            let frame = view.projectedExpandedFrame(at: anchor)
+            let safeBounds = visibleBounds.insetBy(dx: 12, dy: 12)
+            return safeBounds.insetBy(dx: -1, dy: -1).contains(frame)
+                && safeBounds.insetBy(dx: -1, dy: -1).contains(anchor)
+        }
+        view.layoutIfNeeded()
+        let rows = fixture.memberRows(in: view)
+        let scrollView = try XCTUnwrap(rows.first?.superview as? UIScrollView)
+        XCTAssertEqual(rows.count, 8)
+        XCTAssertGreaterThan(scrollView.contentSize.height, scrollView.bounds.height)
+        XCTAssertGreaterThan(scrollView.bounds.height, 44)
+        // setCenter updates projection before MapKit lays out its annotation views.
+        try await eventually("MapKit lays out the list at its projected position") {
+            view.layoutIfNeeded()
+            let anchor = fixture.mapView.convert(group.coordinate, toPointTo: fixture.mapView)
+            let expected = view.projectedExpandedFrame(at: anchor).insetBy(dx: 6, dy: 6)
+            let actual = scrollView.convert(scrollView.bounds, to: fixture.mapView)
+            return abs(actual.minX - expected.minX) <= 1
+                && abs(actual.minY - expected.minY) <= 1
+                && abs(actual.height - expected.height) <= 1
+        }
+        let anchor = fixture.mapView.convert(group.coordinate, toPointTo: fixture.mapView)
+        let expectedFrame = view.projectedExpandedFrame(at: anchor).insetBy(dx: 6, dy: 6)
+        let actualFrame = scrollView.convert(scrollView.bounds, to: fixture.mapView)
+        XCTAssertEqual(actualFrame.minX, expectedFrame.minX, accuracy: 1)
+        XCTAssertEqual(actualFrame.minY, expectedFrame.minY, accuracy: 1)
+        XCTAssertEqual(actualFrame.height, expectedFrame.height, accuracy: 1)
+
+        scrollView.setContentOffset(CGPoint(x: 0, y: 40), animated: false)
+        let centerRequests = fixture.mapView.centerRequestCount
+        for _ in 0..<5 {
+            fixture.controller.viewportDidChange(on: fixture.mapView)
+        }
+        XCTAssertEqual(fixture.mapView.centerRequestCount, centerRequests)
+        XCTAssertEqual(scrollView.contentOffset.y, 40, accuracy: 0.5)
+        XCTAssertEqual(fixture.controller.presentationRevision, revision)
+        XCTAssertTrue(fixture.isSelected(group))
+        XCTAssertTrue(view.isExpanded)
+        XCTAssertEqual(view.accessibilityCustomActions?.count, 8)
+        XCTAssertTrue(fixture.deselectedMembers.isEmpty)
+        XCTAssertEqual(fixture.mapView.bounds, nativeBounds)
+
+        let compactHeight = scrollView.bounds.height
+        fixture.visibleBounds = nil
+        fixture.controller.viewportDidChange(on: fixture.mapView)
+        view.layoutIfNeeded()
+        XCTAssertGreaterThan(scrollView.bounds.height, compactHeight)
+        XCTAssertEqual(fixture.controller.presentationRevision, revision)
+        XCTAssertTrue(view.isExpanded)
+    }
+
     func testRefreshingSourcesPreservesGroupIdentityAndExpandedAccessibility() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -91,6 +166,13 @@ final class MapSocialProximityControllerTests: XCTestCase {
             .friend("amina")
         )
         fixture.update([.friend("amina"): friend])
+
+        let centerRequests = fixture.mapView.centerRequestCount
+        let revision = fixture.controller.presentationRevision
+        fixture.visibleBounds = fixture.mapView.bounds.insetBy(dx: 0, dy: 120)
+        fixture.controller.viewportDidChange(on: fixture.mapView)
+        XCTAssertEqual(fixture.mapView.centerRequestCount, centerRequests)
+        XCTAssertEqual(fixture.controller.presentationRevision, revision)
 
         XCTAssertTrue(fixture.isSelected(friend))
         XCTAssertEqual(fixture.attachedCount(of: friend), 1)
@@ -664,7 +746,8 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
     private var sources: [MapSocialClusterMemberID: MKPointAnnotation] = [:]
     private(set) var hasSettledInitialRegion = false
     private(set) var deselectedMembers: [MapSocialClusterMemberID] = []
-    let mapView = MKMapView(frame: .zero)
+    let mapView = CenterTrackingMapView(frame: .zero)
+    var visibleBounds: CGRect?
 
     lazy var controller = MapSocialProximityController(
         presentation: { [weak self] group in
@@ -675,6 +758,9 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         },
         onDeselectMember: { [weak self] memberID in
             self?.deselectedMembers.append(memberID)
+        },
+        visibleBounds: { [weak self] mapView in
+            self?.visibleBounds ?? mapView.bounds.inset(by: mapView.safeAreaInsets)
         }
     )
 
@@ -855,5 +941,15 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
             }
         }
         return MapSocialClusterPresentation(people: people, outings: outings)
+    }
+}
+
+@MainActor
+private final class CenterTrackingMapView: MKMapView {
+    private(set) var centerRequestCount = 0
+
+    override func setCenter(_ coordinate: CLLocationCoordinate2D, animated: Bool) {
+        centerRequestCount += 1
+        super.setCenter(coordinate, animated: animated)
     }
 }

@@ -745,7 +745,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
     }
 
     private func refreshCallout() {
-        guard let configuredCalloutInfo else { return }
+        guard canShowCallout, let configuredCalloutInfo else { return }
         detailCalloutAccessoryView = makeCalloutDetailView(
             for: configuredCalloutInfo,
             addressText: addressText
@@ -1410,6 +1410,9 @@ final class FogOfWarOverlayRenderer: MKOverlayRenderer {
 }
 
 struct MapWithFogView: UIViewRepresentable {
+    @Environment(\.mapRenderSize) private var mapRenderSize
+    @Environment(\.mapContentInsets) private var mapContentInsets
+    @Environment(\.layoutDirection) private var layoutDirection
     @ObservedObject var locationTracker: LocationTracker
 
     /// Set of H3 cell IDs that should be punched through the fog.
@@ -1458,8 +1461,11 @@ struct MapWithFogView: UIViewRepresentable {
     /// Whether a long press may start another event creation flow.
     var isEventCreationEnabled = true
 
-    /// Event whose detail card is currently visible.
+    /// Event whose information is visible above the map.
     var selectedOutingPlanEventID: String?
+
+    /// Friend whose profile is visible above the map.
+    var selectedFriendProfileUserID: String?
 
     var showsSystemUserLocation = true
     var showsHeatMap = false
@@ -1470,13 +1476,13 @@ struct MapWithFogView: UIViewRepresentable {
     /// Presents external navigation choices for the selected friend.
     var onJoinFriend: (String) -> Void = { _ in }
 
-    /// Requests an on-demand location update when MapKit selects a friend.
+    /// Opens the profile and requests a location update when a friend is selected.
     var onSelectFriend: (String) -> Void = { _ in }
 
-    /// Presents the native profile sheet for the selected friend.
+    /// Opens the profile information for the selected friend.
     var onViewFriendProfile: (String) -> Void = { _ in }
 
-    /// Presents the native detail card for the selected outing.
+    /// Presents the information for the selected outing.
     var onSelectOutingPlan: (String) -> Void = { _ in }
 
     /// Hides the detail card when MapKit clears that outing's selection.
@@ -1485,7 +1491,7 @@ struct MapWithFogView: UIViewRepresentable {
     /// Creates a new event from a long press on an empty point of the map.
     var onCreateEvent: (CLLocationCoordinate2D) -> Void = { _ in }
 
-    func makeUIView(context: Context) -> MKMapView {
+    func makeUIView(context: Context) -> MapViewportView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.preferredConfiguration = MKStandardMapConfiguration(
@@ -1518,10 +1524,25 @@ struct MapWithFogView: UIViewRepresentable {
             context: context,
             visibleDiscoveredCellIDs: visibleDiscoveredCellIDs
         )
-        return mapView
+        let viewport = MapViewportView(
+            mapView: mapView,
+            renderSize: mapRenderSize,
+            contentInsets: viewportContentInsets
+        )
+        let coordinator = context.coordinator
+        coordinator.viewport = viewport
+        viewport.onViewportChange = { [weak coordinator, weak mapView] in
+            guard let coordinator, let mapView else { return }
+            coordinator.socialProximityController.viewportDidChange(on: mapView)
+            coordinator.refreshMapOffscreenIndicators(on: mapView)
+        }
+        return viewport
     }
 
-    func updateUIView(_ uiView: MKMapView, context: Context) {
+    func updateUIView(_ viewport: MapViewportView, context: Context) {
+        viewport.renderSize = mapRenderSize
+        viewport.contentInsets = viewportContentInsets
+        let uiView = viewport.mapView
         context.coordinator.onJoinFriend = onJoinFriend
         context.coordinator.onSelectFriend = onSelectFriend
         context.coordinator.onViewFriendProfile = onViewFriendProfile
@@ -1560,7 +1581,7 @@ struct MapWithFogView: UIViewRepresentable {
         context.coordinator.synchronizeSocialProximityAnnotations(on: uiView)
         updateDraftOutingAnnotation(on: uiView, context: context)
         context.coordinator.refreshMapOffscreenIndicators(on: uiView)
-        synchronizeOutingPlanSelection(on: uiView, context: context)
+        synchronizeDetailSelection(on: uiView, context: context)
         context.coordinator.lastShowsHeatMap = showsHeatMap
 
         // A loaded city boundary is only a temporary starting region. Always
@@ -1620,11 +1641,22 @@ struct MapWithFogView: UIViewRepresentable {
         )
     }
 
-    static func dismantleUIView(_ uiView: MKMapView, coordinator: Coordinator) {
+    static func dismantleUIView(_ viewport: MapViewportView, coordinator: Coordinator) {
+        viewport.onViewportChange = nil
+        let uiView = viewport.mapView
         coordinator.removeLongPressRecognizer(from: uiView)
         coordinator.removeImmediateSocialAnnotationRecognizer(from: uiView)
         coordinator.removeMapOffscreenIndicatorContainer()
         coordinator.socialProximityController.tearDown()
+    }
+
+    private var viewportContentInsets: UIEdgeInsets {
+        UIEdgeInsets(
+            top: mapContentInsets.top,
+            left: layoutDirection == .leftToRight ? mapContentInsets.leading : mapContentInsets.trailing,
+            bottom: mapContentInsets.bottom,
+            right: layoutDirection == .leftToRight ? mapContentInsets.trailing : mapContentInsets.leading
+        )
     }
 
     private var visibleDiscoveredCellIDs: Set<String> {
@@ -1860,7 +1892,8 @@ struct MapWithFogView: UIViewRepresentable {
 
         guard focusDraftOuting(
             at: pendingOutingCoordinate,
-            on: mapView
+            on: mapView,
+            visibleBounds: coordinator.visibleSafeBounds(on: mapView)
         ) else {
             return
         }
@@ -1869,21 +1902,22 @@ struct MapWithFogView: UIViewRepresentable {
 
     private func focusDraftOuting(
         at coordinate: CLLocationCoordinate2D,
-        on mapView: MKMapView
+        on mapView: MKMapView,
+        visibleBounds: CGRect
     ) -> Bool {
-        guard mapView.bounds.width > 0, mapView.bounds.height > 0 else {
+        guard visibleBounds.width > 0, visibleBounds.height > 0 else {
             return false
         }
 
         mapView.setUserTrackingMode(.none, animated: false)
 
-        let topInset = mapView.safeAreaInsets.top + 24
+        let topInset = visibleBounds.minY + 24
         let exposedBottom = max(
             topInset,
-            mapView.bounds.height * 0.34 - 24
+            visibleBounds.minY + visibleBounds.height * 0.34 - 24
         )
         let targetPoint = CGPoint(
-            x: mapView.bounds.midX,
+            x: visibleBounds.midX,
             y: topInset + (exposedBottom - topInset) / 2
         )
 
@@ -1974,31 +2008,29 @@ struct MapWithFogView: UIViewRepresentable {
         mapView.setCamera(camera, animated: true)
     }
 
-    private func synchronizeOutingPlanSelection(
+    private func synchronizeDetailSelection(
         on mapView: MKMapView,
         context: Context
     ) {
-        for annotation in mapView.selectedAnnotations {
-            guard let outingAnnotation = annotation as? OutingPlanAnnotation,
-                  outingAnnotation.eventID != selectedOutingPlanEventID else {
-                continue
-            }
-            mapView.deselectAnnotation(outingAnnotation, animated: true)
+        let requested: MapSocialClusterMemberID?
+        if let eventID = selectedOutingPlanEventID {
+            requested = .outing(eventID)
+        } else if let userID = selectedFriendProfileUserID {
+            requested = .friend(userID)
+        } else {
+            requested = nil
         }
 
-        guard let selectedOutingPlanEventID,
-              let annotation = context.coordinator
-                .outingPlanAnnotations[selectedOutingPlanEventID],
-              !mapView.selectedAnnotations.contains(where: {
-                  ($0 as AnyObject) === annotation
-              }) else {
-            return
+        let coordinator = context.coordinator
+        guard requested != coordinator.lastRequestedDetailSelection else { return }
+        // Pane selection outlives native focus while the user pans or zooms.
+        // Publish the request before selection can synchronously call its delegate.
+        coordinator.lastRequestedDetailSelection = requested
+        if let requested {
+            coordinator.socialProximityController.select(requested, on: mapView)
+        } else {
+            coordinator.socialProximityController.collapse(on: mapView)
         }
-
-        context.coordinator.socialProximityController.select(
-            .outing(selectedOutingPlanEventID),
-            on: mapView
-        )
     }
 
     private func centerMap(
@@ -2132,6 +2164,7 @@ struct MapWithFogView: UIViewRepresentable {
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
+        weak var viewport: MapViewportView?
         let explorationEngine = ExplorationEngine()
         let fogColor: UIColor
         var fogOverlay: FogOfWarOverlay?
@@ -2155,6 +2188,7 @@ struct MapWithFogView: UIViewRepresentable {
         fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
         fileprivate var draftOutingAnnotation: DraftOutingAnnotation?
         fileprivate var lastFocusedDraftCoordinate: MapUserCoordinate?
+        fileprivate var lastRequestedDetailSelection: MapSocialClusterMemberID?
         var onJoinFriend: (String) -> Void
         var onSelectFriend: (String) -> Void
         var onViewFriendProfile: (String) -> Void
@@ -2192,6 +2226,10 @@ struct MapWithFogView: UIViewRepresentable {
                 if case .outing(let eventID) = memberID {
                     self?.onDeselectOutingPlan(eventID)
                 }
+            },
+            visibleBounds: { [weak self] mapView in
+                self?.visibleSafeBounds(on: mapView)
+                    ?? mapView.bounds.inset(by: mapView.safeAreaInsets)
             }
         )
         private let eventCreationFeedback = UIImpactFeedbackGenerator(
@@ -2395,22 +2433,27 @@ struct MapWithFogView: UIViewRepresentable {
             mapOffscreenIndicatorContainer = nil
         }
 
+        func visibleSafeBounds(on mapView: MKMapView) -> CGRect {
+            viewport?.visibleSafeMapRect
+                ?? mapView.bounds.inset(by: mapView.safeAreaInsets)
+        }
+
         func refreshMapOffscreenIndicators(on mapView: MKMapView) {
             guard let container = mapOffscreenIndicatorContainer else {
                 return
             }
 
             container.frame = mapView.bounds
+            let safeBounds = visibleSafeBounds(on: mapView)
             guard let indicatorBounds = MapOffscreenIndicatorLayout
                 .indicatorBounds(
-                    in: mapView.bounds,
-                    safeAreaInsets: mapView.safeAreaInsets
+                    in: safeBounds,
+                    safeAreaInsets: .zero
                 ) else {
                 removeAllMapOffscreenIndicatorViews()
                 return
             }
 
-            let safeBounds = mapView.bounds.inset(by: mapView.safeAreaInsets)
             guard safeBounds.width > 0, safeBounds.height > 0 else {
                 removeAllMapOffscreenIndicatorViews()
                 return
@@ -2648,12 +2691,13 @@ struct MapWithFogView: UIViewRepresentable {
             let relativeBearing: Double = (
                 bearing - mapView.camera.heading
             ) * Double.pi / 180
-            let distance = max(mapView.bounds.width, mapView.bounds.height) * 2
+            let visibleBounds = visibleSafeBounds(on: mapView)
+            let distance = max(visibleBounds.width, visibleBounds.height) * 2
 
             return CGPoint(
-                x: mapView.bounds.midX
+                x: visibleBounds.midX
                     + CGFloat(sin(relativeBearing)) * distance,
-                y: mapView.bounds.midY
+                y: visibleBounds.midY
                     - CGFloat(cos(relativeBearing)) * distance
             )
         }
@@ -3244,6 +3288,7 @@ struct MapWithFogView: UIViewRepresentable {
                 return
             }
             let userID = friendAnnotation.userID
+            annotationView.canShowCallout = false
 
             annotationView.configure(
                 avatarID: avatarID,
@@ -3261,6 +3306,7 @@ struct MapWithFogView: UIViewRepresentable {
                 ),
                 isRefreshingLocation: isRefreshingLocation
             )
+            annotationView.accessibilityHint = "Afficher le profil de cet ami"
         }
     }
 }

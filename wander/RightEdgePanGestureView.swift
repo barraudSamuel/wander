@@ -59,11 +59,10 @@ struct RightEdgePanGestureView: UIViewRepresentable {
         }
 
         @objc func handle(_ recognizer: UIScreenEdgePanGestureRecognizer) {
-            let translationX = recognizer.translation(in: recognizer.view).x
-            let velocityX = recognizer.velocity(in: recognizer.view).x
-            let coordinateView: UIView? = recognizer.view?.window
-                ?? recognizer.view
-            let locationY = recognizer.location(in: coordinateView).y
+            guard let view = recognizer.view else { return }
+            let translationX = recognizer.translation(in: view).x
+            let velocityX = recognizer.velocity(in: view).x
+            let locationY = recognizer.location(in: view).y
 
             switch recognizer.state {
             case .began:

@@ -69,6 +69,7 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     private static let anchorGap: CGFloat = 8
 
     var onSelectMember: ((MapSocialClusterMemberID) -> Void)?
+    var onExpandedSizeChange: (() -> Void)?
 
     private let compactContainer = UIView()
     private let expandedContainer = UIView()
@@ -76,6 +77,10 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     private var compactMemberViews: [UIView] = []
     private var expandedRows: [MapSocialClusterRowControl] = []
     private var presentation: MapSocialClusterPresentation?
+    private var expandedViewportSize = CGSize(
+        width: CGFloat.greatestFiniteMagnitude,
+        height: CGFloat.greatestFiniteMagnitude
+    )
     private(set) var isExpanded = false
 
     override init(
@@ -98,7 +103,12 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     override func prepareForReuse() {
         super.prepareForReuse()
         onSelectMember = nil
+        onExpandedSizeChange = nil
         presentation = nil
+        expandedViewportSize = CGSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         removeMemberViews()
         setExpanded(false, animated: false)
         accessibilityLabel = nil
@@ -131,9 +141,12 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
             memberView.layer.cornerRadius = Self.compactItemSize / 2
         }
 
-        expandedContainer.frame = expandedPresentationFrame.insetBy(
-            dx: Self.expandedInset,
-            dy: Self.expandedInset
+        let expandedFrame = expandedPresentationFrame
+        expandedContainer.frame = CGRect(
+            x: expandedFrame.minX + Self.expandedInset,
+            y: expandedFrame.minY + Self.expandedInset,
+            width: max(0, expandedFrame.width - Self.expandedInset * 2),
+            height: max(0, expandedFrame.height - Self.expandedInset * 2)
         )
         expandedContainer.layer.cornerRadius = 16
         expandedContainer.layer.shadowPath = UIBezierPath(
@@ -155,6 +168,13 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
             width: expandedScrollView.bounds.width,
             height: CGFloat(expandedRows.count) * expandedRowHeight
         )
+        let maximumOffset = max(
+            0,
+            expandedScrollView.contentSize.height - expandedScrollView.bounds.height
+        )
+        if expandedScrollView.contentOffset.y > maximumOffset {
+            expandedScrollView.contentOffset.y = maximumOffset
+        }
     }
 
     override func point(
@@ -259,6 +279,18 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
         )
     }
 
+    /// Includes the space between the list and its geographic anchor.
+    func setExpandedViewportSize(_ size: CGSize) {
+        guard size.width.isFinite, size.height.isFinite else { return }
+        let boundedSize = CGSize(width: max(0, size.width), height: max(0, size.height))
+        guard expandedViewportSize != boundedSize else { return }
+        let previousControlSize = expandedControlSize
+        expandedViewportSize = boundedSize
+        guard expandedControlSize != previousControlSize else { return }
+        setNeedsLayout()
+        layoutIfNeeded()
+    }
+
     private var compactControlSize: CGSize {
         let itemCount = max(1, compactMemberViews.count)
         let width = Self.compactItemSize + Self.compactInset * 2
@@ -273,8 +305,12 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
             * expandedRowHeight
             + Self.expandedInset * 2
         return CGSize(
-            width: expandedWidth,
-            height: min(Self.expandedMaximumHeight, contentHeight)
+            width: min(expandedWidth, expandedViewportSize.width),
+            height: min(
+                Self.expandedMaximumHeight,
+                contentHeight,
+                max(0, expandedViewportSize.height - Self.anchorGap)
+            )
         )
     }
 
@@ -350,6 +386,9 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     @objc private func preferredContentSizeDidChange() {
         applyGeometry(forExpandedState: isExpanded)
         setNeedsLayout()
+        if isExpanded {
+            onExpandedSizeChange?()
+        }
     }
 
     private func rebuildMemberViews() {
