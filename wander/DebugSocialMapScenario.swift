@@ -66,6 +66,7 @@ struct DebugSocialMapScenarioView: View {
 private struct DebugSocialMapScene: View {
     private static let coordinate = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
     private static let ownerID = "scenario-owner"
+    private static let arguments = Set(ProcessInfo.processInfo.arguments)
 
     private let friends: [String: FriendLocation]
     @StateObject private var locationTracker: LocationTracker
@@ -76,6 +77,12 @@ private struct DebugSocialMapScene: View {
     @State private var resetOrientation = false
     @State private var centerOnFriend: String?
     @State private var centerOnEvent: String?
+    @State private var responses: [String: OutingAttendanceParticipationState] = [:]
+    @State private var showsDirections = false
+
+    private static func hasArgument(_ argument: String) -> Bool {
+        arguments.contains("-debug-social-map-" + argument)
+    }
 
     init(kind: DebugSocialMapScenarioView.SceneKind) {
         self.friends = Self.makeFriends(kind: kind)
@@ -91,6 +98,11 @@ private struct DebugSocialMapScene: View {
             Self.plan(number: 2, category: .coffee)
         ]
         _plans = State(initialValue: Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0) }))
+        if Self.hasArgument("open-event"), let event = events.last {
+            _selectedDetail = State(initialValue: .outing(event.id))
+        } else if Self.hasArgument("open-friend") {
+            _selectedDetail = State(initialValue: .friend("scenario-amina"))
+        }
     }
 
     private static func makeFriends(kind: DebugSocialMapScenarioView.SceneKind) -> [String: FriendLocation] {
@@ -101,7 +113,7 @@ private struct DebugSocialMapScene: View {
             return (id, FriendLocation(
                 userID: id, displayName: name, avatarID: ProfileAvatar.cyclopsHorns.rawValue,
                 profileColorHex: "#3478F6", coordinate: Self.coordinate,
-                horizontalAccuracy: 5, sampledAt: referenceDate, updatedAt: referenceDate,
+                horizontalAccuracy: 5, sampledAt: Self.hasArgument("stale") ? referenceDate.addingTimeInterval(-7200) : referenceDate, updatedAt: referenceDate,
                 receivedAt: referenceDate, spotEnteredAt: nil
             ))
         })
@@ -109,12 +121,32 @@ private struct DebugSocialMapScene: View {
 
     private var presentations: [String: MapOutingPlan] {
         plans.mapValues { plan in
-            MapOutingPlan(
+            let isGuest = Self.hasArgument("guest")
+            let response = responses[plan.id] ?? (isGuest ? .notResponded : .attending)
+            let state: OutingAttendanceParticipationState = Self.hasArgument("loading")
+                ? .loading : Self.hasArgument("unavailable") ? .unavailable : response
+            let roster: OutingAttendanceRosterState = Self.hasArgument("loading")
+                ? .loading : Self.hasArgument("unavailable") ? .unavailable : .available
+            let count = Self.hasArgument("stress") ? 9 : isGuest ? 2 : 0
+            var attendees = (0..<count).map { index in
+                MapOutingAttendee(
+                    userID: "scenario-attendee-\(index)", displayName: "Invité \(index + 1)",
+                    avatarID: ProfileAvatar.allCases[index % ProfileAvatar.allCases.count].rawValue
+                )
+            }
+            let me = MapOutingAttendee(userID: "scenario-me", displayName: "Vous", avatarID: ProfileAvatar.skull.rawValue)
+            if isGuest, response == .attending { attendees.append(me) }
+            return MapOutingPlan(
                 plan: plan,
-                organizer: MapOutingAttendee(userID: Self.ownerID, displayName: "Moi", avatarID: ProfileAvatar.cyclopsHorns.rawValue),
-                profileColorHex: "#3478F6", isCurrentUser: true,
-                rosterState: .available, participationState: .attending,
-                attendees: [], declines: [], isAttendanceUpdating: false
+                organizer: MapOutingAttendee(
+                    userID: Self.ownerID,
+                    displayName: isGuest ? "Théo" : "Moi",
+                    avatarID: ProfileAvatar.cyclopsHorns.rawValue
+                ),
+                profileColorHex: "#3478F6", isCurrentUser: !isGuest,
+                rosterState: roster, participationState: state,
+                attendees: attendees, declines: isGuest && response == .declined ? [me] : [],
+                isAttendanceUpdating: Self.hasArgument("updating")
             )
         }
     }
@@ -127,7 +159,8 @@ private struct DebugSocialMapScene: View {
                     outing: outing,
                     onDismiss: { selectedDetail = nil },
                     onEdit: { editingEvent = outing.plan },
-                    onOpenDirections: {}, onSetAttendance: { _ in }
+                    onOpenDirections: { showsDirections = true },
+                    onSetAttendance: { responses[id] = $0 ? .attending : .declined }
                 )
                 .id(id)
             } else if let id = selectedDetail?.friendUserID, let friend = friends[id] {
@@ -135,22 +168,27 @@ private struct DebugSocialMapScene: View {
                     displayName: friend.displayName,
                     avatarID: friend.avatarID,
                     profileColorHex: friend.profileColorHex,
-                    isGhostModeEnabled: false,
-                    location: friend,
-                    isLocationFresh: true,
+                    isGhostModeEnabled: Self.hasArgument("ghost"),
+                    location: Self.hasArgument("missing-location") ? nil : friend,
+                    isLocationFresh: !Self.hasArgument("stale"),
                     onDismiss: { selectedDetail = nil },
-                    onOpenDirections: {}
+                    onOpenDirections: { showsDirections = true }
                 )
                 .id(id)
             }
         } map: {
             if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
                 FriendEdgeRailView(friends: [], onSelect: { _ in }) {
-                    mapView
+                    mapView(presentations: presentations)
                 }
             } else {
-                mapView
+                mapView(presentations: presentations)
             }
+        }
+        .alert("Itinéraire de test", isPresented: $showsDirections) {
+            Button("Fermer", role: .cancel) {}
+        } message: {
+            Text("L’action de la fiche a été reçue par le scénario local.")
         }
         .sheet(item: $editingEvent) { event in
             OutingPlanComposerView(
@@ -182,7 +220,7 @@ private struct DebugSocialMapScene: View {
         }
     }
 
-    private var mapView: some View {
+    private func mapView(presentations: [String: MapOutingPlan]) -> some View {
         MapWithFogView(
             locationTracker: locationTracker,
             discoveredCellIDs: [], cityBoundaryCoordinates: [],
@@ -207,7 +245,9 @@ private struct DebugSocialMapScene: View {
         return OutingPlan(
             eventID: id, eventIDValue: id.uuidString.lowercased(), ownerID: ownerID,
             publicationID: id, publicationIDValue: id.uuidString.lowercased(),
-            displayName: "Moi", placeName: category.title, address: "Lieu de test",
+            displayName: "Moi",
+            placeName: hasArgument("stress") ? "Café du parc et des promenades au bord de la rivière" : category.title,
+            address: "Lieu de test",
             category: category, coordinate: coordinate,
             plannedAt: date.addingTimeInterval(Double(number) * 3600),
             publishedAt: date, updatedAt: date, timeZoneIdentifier: "Asia/Seoul"

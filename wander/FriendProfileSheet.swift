@@ -159,49 +159,72 @@ struct FriendProfileContentView: View {
     let onOpenDirections: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    fields.identity
-                    Divider()
-                    Text("Position")
-                        .font(.headline)
-                        .accessibilityAddTraits(.isHeader)
-                    fields.locationDetails
-                    fields.directionsButton
+        TimelineView(.animation(minimumInterval: 1, paused: isGhostModeEnabled || location == nil)) { context in
+            MapDetailPanel(
+                title: displayName,
+                closeLabel: "Fermer la fiche de l’ami",
+                scrollIdentifier: "friend-profile-scroll",
+                narrativeIdentifier: "friend-profile-narrative",
+                content: narrative(relativeTo: context.date),
+                onDismiss: onDismiss
+            ) {
+                if location != nil || isGhostModeEnabled {
                     fields.locationFooter
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
+            } actions: {
+                fields.directionsButton
+                    .labelStyle(.iconOnly)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel("Itinéraire")
             }
-            .accessibilityIdentifier("friend-profile-scroll")
         }
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .accessibilityElement(children: .contain)
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text("Profil")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
+    private func narrative(relativeTo now: Date) -> MapDetailTextContent {
+        var fragments: [MapDetailTextContent.Fragment] = [
+            .avatars([avatarID]), .text(" "), .emphasis(displayName), .text(".\n")
+        ]
+        var status: String
+        if isGhostModeEnabled {
+            fragments += [.text("👻 Mode fantôme activé. "), .emphasis("Indisponible"), .text(".")]
+            status = "Mode fantôme activé. Indisponible."
+        } else if let location {
+            let updated = duration(since: location.sampledAt, now: now)
+            let date = location.sampledAt.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+            let freshness = isLocationFresh ? "Position actualisée" : "Dernière position reçue"
+            fragments += [
+                .text("📍 \(freshness) il y a "), .emphasis(updated),
+                .text(", le 📅 "), .emphasis(date), .text(".")
+            ]
+            status = "\(freshness) il y a \(updated), le \(date)."
+            if isLocationFresh, let spotEnteredAt = location.spotEnteredAt {
+                let presenceDuration = duration(since: spotEnteredAt, now: now)
+                fragments += [.text(" Au même endroit depuis "), .emphasis(presenceDuration), .text(".")]
+                status += " Au même endroit depuis \(presenceDuration)."
+            } else if !isLocationFresh {
+                let stale = " Position non actualisée récemment."
+                fragments += [.text(stale)]
+                status += stale
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .frame(minWidth: 44, minHeight: 44)
-            .accessibilityLabel("Fermer la fiche de l’ami")
+        } else {
+            fragments += [.text("📍 Position indisponible.")]
+            status = "Position indisponible."
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        return MapDetailTextContent(fragments: fragments, accessibilityLabel: "\(displayName). \(status)")
     }
+
+    private func duration(since date: Date, now: Date) -> String {
+        Self.durationFormatter.string(from: max(0, now.timeIntervalSince(date))) ?? "0 s"
+    }
+
+    private static let durationFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute, .second]
+        formatter.maximumUnitCount = 2
+        formatter.unitsStyle = .full
+        formatter.zeroFormattingBehavior = .dropAll
+        return formatter
+    }()
 
     private var fields: FriendProfileFields {
         FriendProfileFields(

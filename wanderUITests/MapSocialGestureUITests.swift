@@ -8,11 +8,17 @@ final class MapSocialGestureUITests: XCTestCase {
     override func setUpWithError() throws {
         #if DEBUG && targetEnvironment(simulator)
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
         app.launchArguments = ["-debug-social-map"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Scénario carte sociale"].waitForExistence(timeout: 10))
         XCTAssertTrue(map.waitForExistence(timeout: 3))
+        let portrait = NSPredicate { _, _ in
+            self.app.windows.firstMatch.frame.height > self.app.windows.firstMatch.frame.width
+        }
+        expectation(for: portrait, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
         #else
         throw XCTSkip("Le scénario local nécessite Debug sur simulateur.")
         #endif
@@ -101,19 +107,24 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertLessThanOrEqual(detailPane.frame.maxY, resizeHandle.frame.minY + 2)
         XCTAssertLessThanOrEqual(resizeHandle.frame.maxY, map.frame.minY + 2)
         XCTAssertEqual(resizeHandle.frame.height, 44, accuracy: 1)
-        attachScreenshot(named: "Fiche événement arrondie, moitié de l’écran")
+        attachScreenshot(named: "Fiche événement arrondie, ouverture au tiers")
         let initialDetailHeight = detailPane.frame.height
         let initialMapHeight = map.frame.height
+        let dragDistance: CGFloat = 137
         let start = resizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 150)))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dragDistance)))
 
-        waitForResizeValue("Fiche agrandie")
-        XCTAssertGreaterThan(detailPane.frame.height, initialDetailHeight + 50)
-        XCTAssertLessThan(map.frame.height, initialMapHeight - 50)
+        let retainedHeight = NSPredicate { _, _ in
+            abs(self.detailPane.frame.height - initialDetailHeight - dragDistance) < 8
+        }
+        expectation(for: retainedHeight, evaluatedWith: detailPane)
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(detailPane.frame.height, initialDetailHeight + dragDistance, accuracy: 8)
+        XCTAssertEqual(map.frame.height, initialMapHeight - dragDistance, accuracy: 8)
         XCTAssertTrue(detailPane.staticTexts["Café"].firstMatch.exists)
         XCTAssertTrue(app.buttons["Fermer la fiche de la sortie"].isHittable)
         XCTAssertLessThanOrEqual(resizeHandle.frame.maxY, map.frame.minY + 2)
-        attachScreenshot(named: "Fiche événement agrandie, carte visible")
+        attachScreenshot(named: "Fiche événement à hauteur libre, carte visible")
     }
 
     func testNativeMapRenderSizeStaysStableAcrossPaneChanges() {
@@ -186,20 +197,20 @@ final class MapSocialGestureUITests: XCTestCase {
     func testResizeButtonCyclesSizesAndCloseRestoresMap() {
         let fullMapHeight = map.frame.height
         openGroupedEvent(index: 1, title: "Repas")
-        waitForResizeValue("Moitié de l’écran")
-        let halfHeight = detailPane.frame.height
+        waitForResizeValue("Un tiers de l’écran")
+        let initialHeight = detailPane.frame.height
 
         resizeHandle.tap()
         waitForResizeValue("Fiche agrandie")
-        XCTAssertGreaterThan(detailPane.frame.height, halfHeight + 50)
+        XCTAssertGreaterThan(detailPane.frame.height, initialHeight + 50)
 
         resizeHandle.tap()
         waitForResizeValue("Fiche réduite")
-        XCTAssertLessThan(detailPane.frame.height, halfHeight - 50)
+        XCTAssertLessThan(detailPane.frame.height, initialHeight)
 
         resizeHandle.tap()
-        waitForResizeValue("Moitié de l’écran")
-        XCTAssertEqual(detailPane.frame.height, halfHeight, accuracy: 2)
+        waitForResizeValue("Un tiers de l’écran")
+        XCTAssertEqual(detailPane.frame.height, initialHeight, accuracy: 2)
         app.buttons["Fermer la fiche de la sortie"].tap()
         XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
         XCTAssertTrue(resizeHandle.waitForNonExistence(timeout: 3))
@@ -216,9 +227,14 @@ final class MapSocialGestureUITests: XCTestCase {
         let close = app.buttons["Fermer la fiche de la sortie"]
         let closeY = close.frame.minY
         let edit = app.buttons["Modifier l’événement"]
-        XCTAssertFalse(edit.isHittable)
+        XCTAssertTrue(edit.isHittable)
+        let editY = edit.frame.midY
+        let directions = app.buttons["Itinéraire"]
+        XCTAssertTrue(directions.isHittable)
+        XCTAssertEqual(editY, directions.frame.midY, accuracy: 2)
 
-        reveal(edit, in: app.scrollViews["outing-detail-scroll"])
+        app.scrollViews["outing-detail-scroll"].swipeUp()
+        XCTAssertEqual(edit.frame.midY, editY, accuracy: 2)
 
         XCTAssertTrue(edit.isHittable)
         XCTAssertTrue(close.isHittable)
@@ -267,6 +283,131 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Fermer la fiche de l’ami"].isHittable)
         app.buttons["Fermer la fiche de l’ami"].tap()
         XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
+    }
+
+    func testGuestActionsStayVisibleAndRespondAtEverySize() {
+        launchDetailScenario(["guest", "stress", "open-event", "fullscreen"])
+        let narrative = app.staticTexts["outing-detail-narrative"]
+        XCTAssertTrue(narrative.waitForExistence(timeout: 3))
+        XCTAssertTrue(narrative.label.contains("Invité 9"))
+        XCTAssertFalse(app.staticTexts["Lieu de test"].exists)
+        for _ in 0..<3 {
+            assertGuestActionsOnOneLine()
+            resizeHandle.tap()
+        }
+        let decline = app.buttons["Je ne participe pas"]
+        decline.tap()
+        XCTAssertTrue(decline.isSelected)
+        XCTAssertTrue(narrative.label.contains("Ne participent pas : Vous"))
+        let attend = app.buttons["Je participe"]
+        attend.tap()
+        XCTAssertTrue(attend.isSelected)
+        XCTAssertFalse(decline.isSelected)
+        XCTAssertFalse(narrative.label.contains("Ne participent pas : Vous"))
+        app.buttons["Itinéraire"].tap()
+        XCTAssertTrue(app.alerts["Itinéraire de test"].waitForExistence(timeout: 3))
+        app.alerts.buttons["Fermer"].tap()
+        attachScreenshot(named: "Résumé narratif et trois actions fixes")
+    }
+
+    func testUnavailableAndUpdatingParticipationKeepsDirectionsAccessible() {
+        for state in ["loading", "unavailable", "updating"] {
+            launchDetailScenario(["guest", "open-event", state])
+            let attend = app.buttons["Je participe"]
+            XCTAssertTrue(attend.waitForExistence(timeout: 3))
+            XCTAssertFalse(attend.isEnabled)
+            XCTAssertFalse(app.buttons["Je ne participe pas"].isEnabled)
+            XCTAssertTrue(app.buttons["Itinéraire"].isEnabled)
+            XCTAssertTrue(app.buttons["Itinéraire"].isHittable)
+        }
+    }
+
+    func testFriendActionsRespectGhostAndMissingPosition() {
+        for state in ["ghost", "missing-location", "stale"] {
+            launchDetailScenario(["mixed", "open-friend", state])
+            let directions = app.buttons["Itinéraire"]
+            XCTAssertTrue(directions.waitForExistence(timeout: 3))
+            XCTAssertEqual(directions.isEnabled, state == "stale")
+            for _ in 0..<3 {
+                XCTAssertTrue(app.buttons["Fermer la fiche de l’ami"].isHittable)
+                XCTAssertLessThanOrEqual(directions.frame.maxY, resizeHandle.frame.minY)
+                resizeHandle.tap()
+                let settled = NSPredicate { _, _ in
+                    directions.frame.maxY <= self.resizeHandle.frame.minY
+                        && abs(self.detailPane.frame.maxY - self.resizeHandle.frame.minY) < 2
+                }
+                expectation(for: settled, evaluatedWith: app)
+                waitForExpectations(timeout: 3)
+            }
+            if state == "stale" {
+                directions.tap()
+                XCTAssertTrue(app.alerts["Itinéraire de test"].waitForExistence(timeout: 3))
+            }
+        }
+    }
+
+    func testCompactGuestActionsAndMapRemainAvailableWithLargeText() {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map", "-debug-social-map-guest", "-debug-social-map-stress",
+                               "-debug-social-map-open-event", "-debug-social-map-fullscreen"]
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue]
+        app.launch()
+        XCTAssertTrue(detailPane.waitForExistence(timeout: 10))
+        resizeHandle.tap()
+        resizeHandle.tap()
+        waitForResizeValue("Fiche réduite")
+        assertGuestActionsOnOneLine()
+        XCTAssertTrue(app.buttons["Fermer la fiche de la sortie"].isHittable)
+        XCTAssertGreaterThan(map.frame.height, 100)
+        let handleY = resizeHandle.frame.minY
+        app.scrollViews["outing-detail-scroll"].swipeUp()
+        XCTAssertEqual(resizeHandle.frame.minY, handleY, accuracy: 2)
+        assertGuestActionsOnOneLine()
+        attachScreenshot(named: "Fiche réduite en très grande police")
+        resizeHandle.tap()
+        resizeHandle.tap()
+        waitForResizeValue("Fiche agrandie")
+        assertGuestActionsOnOneLine()
+        app.scrollViews["outing-detail-scroll"].swipeDown()
+        attachScreenshot(named: "Avatars en fiche agrandie et très grande police")
+        app.scrollViews["outing-detail-scroll"].swipeUp()
+        attachScreenshot(named: "Participants en fiche agrandie et très grande police")
+
+        defer { XCUIDevice.shared.orientation = .portrait }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = NSPredicate { _, _ in
+            self.app.windows.firstMatch.frame.width > self.app.windows.firstMatch.frame.height
+        }
+        expectation(for: landscape, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        resizeHandle.tap()
+        waitForResizeValue("Fiche réduite")
+        assertGuestActionsOnOneLine()
+        XCTAssertGreaterThan(app.scrollViews["outing-detail-scroll"].frame.height, 70)
+        XCTAssertGreaterThan(map.frame.height, 60)
+        attachScreenshot(named: "Actions et résumé accessibles en paysage et très grande police")
+    }
+
+    private func launchDetailScenario(_ options: [String]) {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map"] + options.map { "-debug-social-map-" + $0 }
+        app.launch()
+        XCTAssertTrue(detailPane.waitForExistence(timeout: 10))
+    }
+
+    private func assertGuestActionsOnOneLine() {
+        let buttons = ["Itinéraire", "Je ne participe pas", "Je participe"].map { app.buttons[$0] }
+        for button in buttons {
+            XCTAssertTrue(button.isHittable, button.label)
+            XCTAssertGreaterThanOrEqual(button.frame.width, 44, button.label)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44, button.label)
+            XCTAssertEqual(button.frame.midY, buttons[0].frame.midY, accuracy: 2)
+            XCTAssertLessThanOrEqual(button.frame.maxY, resizeHandle.frame.minY)
+            XCTAssertGreaterThanOrEqual(button.frame.minX, detailPane.frame.minX)
+            XCTAssertLessThanOrEqual(button.frame.maxX, detailPane.frame.maxX)
+        }
+        XCTAssertLessThanOrEqual(buttons[0].frame.maxX, buttons[1].frame.minX)
+        XCTAssertLessThanOrEqual(buttons[1].frame.maxX, buttons[2].frame.minX)
     }
 
     // MARK: - Scenario interactions

@@ -13,209 +13,167 @@ struct OutingPlanDetailCardView: View {
     let onSetAttendance: (Bool) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(outing.plan.placeName)
-                        .font(.title2.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityAddTraits(.isHeader)
-
-                    outingDetails
-                    participationSummary
-                    directionsButton
-
-                    if outing.isCurrentUser {
-                        editButton
-                    } else {
-                        attendanceControl
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-            }
-            .accessibilityIdentifier("outing-detail-scroll")
-        }
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-        .accessibilityElement(children: .contain)
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text("Sortie prévue")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .frame(minWidth: 44, minHeight: 44)
-            .accessibilityLabel("Fermer la fiche de la sortie")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-
-    private var outingDetails: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(
-                outing.plan.category.title,
-                systemImage: outing.plan.category.systemImageName
-            )
-
-            Label(
-                outing.plan.plannedAt.formatted(
-                    date: .abbreviated,
-                    time: .shortened
-                ),
-                systemImage: "calendar"
-            )
-
-            if let address = outing.plan.address {
-                Label(address, systemImage: "mappin.and.ellipse")
-            }
-
-            Label(organizerText, systemImage: "person.crop.circle")
-        }
-        .font(.body)
-        .symbolRenderingMode(.hierarchical)
-    }
-
-    @ViewBuilder
-    private var participationSummary: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            switch outing.rosterState {
-            case .available:
-                VStack(alignment: .leading, spacing: 8) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) {
-                            participantAvatars
-                            Text(peopleCountText)
-                                .font(.subheadline.weight(.medium))
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            participantAvatars
-                            Text(peopleCountText)
-                                .font(.subheadline.weight(.medium))
-                        }
-                    }
-
-                    if !outing.visibleDeclines.isEmpty {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 10) {
-                                declineAvatars
-                                Text(declineCountText)
-                                    .fixedSize(horizontal: true, vertical: false)
-                            }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                declineAvatars
-                                Text(declineCountText)
-                            }
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-            case .loading, .notRequested:
-                ProgressView("Chargement des participants…")
-                    .font(.subheadline)
-
-            case .unavailable:
-                Label("Participants indisponibles", systemImage: "person.2")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
+        MapDetailPanel(
+            title: outing.plan.placeName,
+            closeLabel: "Fermer la fiche de la sortie",
+            scrollIdentifier: "outing-detail-scroll",
+            narrativeIdentifier: "outing-detail-narrative",
+            content: narrative,
+            onDismiss: onDismiss
+        ) {
             if !outing.isCurrentUser {
                 participationStatus
             }
+        } actions: {
+            actionRow
         }
     }
 
-    private var participantAvatars: some View {
-        OutingPeopleAvatarStack(
-            people: outing.visiblePeople,
-            accessibilityText: participantsAccessibilityText
+    // MARK: - Narrative
+
+    private var narrative: MapDetailTextContent {
+        let organizer = outing.isCurrentUser ? "Vous" : outing.organizer.displayName
+        let verb = outing.isCurrentUser ? "organisez" : "organise"
+        let participants = outing.visiblePeople.filter { $0.userID != outing.organizer.userID }
+        let declines = outing.visibleDeclines
+        let fragments: [MapDetailTextContent.Fragment] = [
+            .avatars([outing.organizer.avatarID]), .text(" "), .emphasis(organizer),
+            .text(" \(verb) "), .emphasis(activityDescription),
+            .text(" \(activityEmoji), le 📅 "), .emphasis(dateDescription), .text(".\n")
+        ]
+        return MapDetailTextContent(
+            fragments: fragments + rosterFragments(participants: participants, declines: declines),
+            accessibilityLabel: narrativeAccessibilityText(participants: participants, declines: declines)
         )
     }
 
-    private var declineAvatars: some View {
-        OutingPeopleAvatarStack(
-            people: outing.visibleDeclines,
-            accessibilityText: declinesAccessibilityText
-        )
+    private var activityDescription: String {
+        switch outing.plan.category {
+        case .coffee: "un café"
+        case .meal: "un repas"
+        case .drinks: "un verre"
+        case .walk: "une balade"
+        case .culture: "une sortie culturelle"
+        case .sport: "une séance de sport"
+        case .other: "une sortie"
+        }
+    }
+
+    private var activityEmoji: String {
+        switch outing.plan.category {
+        case .coffee: "☕️"
+        case .meal: "🍽️"
+        case .drinks: "🍻"
+        case .walk: "🚶"
+        case .culture: "🎭"
+        case .sport: "🏃"
+        case .other: "✨"
+        }
+    }
+
+    private var dateDescription: String {
+        outing.plan.plannedAt.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+    }
+
+    private func rosterFragments(
+        participants: [MapOutingAttendee], declines: [MapOutingAttendee]
+    ) -> [MapDetailTextContent.Fragment] {
+        switch outing.rosterState {
+        case .available:
+            var fragments: [MapDetailTextContent.Fragment]
+            if participants.isEmpty {
+                fragments = [.text("Aucun autre participant pour le moment.")]
+            } else {
+                fragments = [.text("Avec "), .avatars(participants.map(\.avatarID)), .text(".")]
+            }
+            if !declines.isEmpty {
+                fragments += [.text("\nPas cette fois : "), .avatars(declines.map(\.avatarID)), .text(".")]
+            }
+            return fragments
+        case .loading, .notRequested:
+            return [.text("Chargement des participants…")]
+        case .unavailable:
+            return [.text("Participants indisponibles")]
+        }
+    }
+
+    private func narrativeAccessibilityText(
+        participants: [MapOutingAttendee], declines: [MapOutingAttendee]
+    ) -> String {
+        let organizer = outing.isCurrentUser
+            ? "Vous organisez"
+            : "\(outing.organizer.displayName) organise"
+        var result = "\(organizer) \(activityDescription), le "
+            + dateDescription + ". "
+        switch outing.rosterState {
+        case .available:
+            result += participants.isEmpty
+                ? "Aucun autre participant pour le moment."
+                : "Avec " + ListFormatter.localizedString(byJoining: participants.map(\.displayName)) + "."
+            if !declines.isEmpty {
+                result += " Ne participent pas : "
+                    + ListFormatter.localizedString(byJoining: declines.map(\.displayName)) + "."
+            }
+        case .loading, .notRequested:
+            result += "Chargement des participants."
+        case .unavailable:
+            result += "Participants indisponibles."
+        }
+        return result
     }
 
     @ViewBuilder
     private var participationStatus: some View {
-        switch outing.participationState {
-        case .attending:
-            Text("Vous participez")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-        case .notResponded:
-            Text("Vous n’avez pas encore répondu")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-        case .declined:
-            Text("Vous ne participez pas")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-        case .loading, .notRequested:
-            ProgressView("Vérification de votre participation…")
-                .font(.footnote)
-
-        case .unavailable:
-            Label(
-                "Participation indisponible",
-                systemImage: "person.crop.circle.badge.exclamationmark"
-            )
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+        if outing.isAttendanceUpdating {
+            ProgressView("Mise à jour de votre réponse…")
+        } else {
+            switch outing.participationState {
+            case .attending:
+                Text("Vous participez")
+            case .notResponded:
+                Text("Vous n’avez pas encore répondu")
+            case .declined:
+                Text("Vous ne participez pas")
+            case .loading, .notRequested:
+                ProgressView("Vérification de votre participation…")
+            case .unavailable:
+                Label("Participation indisponible", systemImage: "person.crop.circle.badge.exclamationmark")
+            }
         }
     }
 
-    @ViewBuilder
-    private var attendanceControl: some View {
+    // MARK: - Fixed actions
+
+    private var canRespond: Bool {
         switch outing.participationState {
-        case .attending, .notResponded, .declined:
-            attendanceButtons
-        case .loading, .notRequested, .unavailable:
-            EmptyView()
+        case .attending, .notResponded, .declined: true
+        case .loading, .notRequested, .unavailable: false
         }
     }
 
-    private var attendanceButtons: some View {
-        VStack(spacing: 8) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    attendanceButton(shouldAttend: true)
-                    attendanceButton(shouldAttend: false)
-                }
-
-                VStack(spacing: 8) {
-                    attendanceButton(shouldAttend: true)
-                    attendanceButton(shouldAttend: false)
-                }
+    private var actionRow: some View {
+        HStack(spacing: 8) {
+            Button(action: onOpenDirections) {
+                actionLabel("Itinéraire", symbol: "map")
             }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Itinéraire")
+            .accessibilityHint("Choisir une application pour rejoindre le lieu de cet événement")
 
-            if outing.isAttendanceUpdating {
-                ProgressView("Mise à jour de votre réponse…")
-                    .font(.footnote)
+            if outing.isCurrentUser {
+                Button(action: onEdit) {
+                    actionLabel("Modifier l’événement", symbol: "pencil")
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("Modifier l’événement")
+                .accessibilityHint("Modifie ou annule cet événement")
+            } else {
+                attendanceButton(shouldAttend: false)
+                attendanceButton(shouldAttend: true)
             }
         }
+        .controlSize(.regular)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
@@ -223,137 +181,31 @@ struct OutingPlanDetailCardView: View {
         let isSelected = shouldAttend
             ? outing.participationState == .attending
             : outing.participationState == .declined
-        let label = shouldAttend ? "Je participe" : "Non, je ne participe pas"
-        let systemImage = isSelected
-            ? "checkmark.circle.fill"
-            : shouldAttend ? "person.badge.plus" : "person.crop.circle.badge.xmark"
+        let title = shouldAttend ? "Je participe" : "Je ne participe pas"
+        let symbol = shouldAttend ? "checkmark" : "xmark"
+        let button = Button {
+            guard canRespond, !outing.isAttendanceUpdating else { return }
+            onSetAttendance(shouldAttend)
+        } label: {
+            actionLabel(title, symbol: symbol)
+        }
+        .disabled(!canRespond || outing.isAttendanceUpdating)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityValue(outing.isAttendanceUpdating ? "Mise à jour en cours" : isSelected ? "Sélectionné" : "")
+        .accessibilityHint(isSelected ? "Réponse actuellement sélectionnée" : "Choisit cette réponse pour la sortie")
 
         if isSelected {
-            Button {
-                onSetAttendance(shouldAttend)
-            } label: {
-                Label(label, systemImage: systemImage)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(outing.isAttendanceUpdating)
-            .accessibilityHint("Réponse actuellement sélectionnée")
+            button.buttonStyle(.borderedProminent)
         } else {
-            Button {
-                onSetAttendance(shouldAttend)
-            } label: {
-                Label(label, systemImage: systemImage)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .disabled(outing.isAttendanceUpdating)
-            .accessibilityHint("Choisit cette réponse pour la sortie")
+            button.buttonStyle(.bordered)
         }
     }
 
-    private var directionsButton: some View {
-        Button(action: onOpenDirections) {
-            Label("Itinéraire", systemImage: "map")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-        .accessibilityHint(
-            "Choisir une application pour rejoindre le lieu de cet événement"
-        )
-    }
-
-    private var editButton: some View {
-        Button(action: onEdit) {
-            Label("Modifier l’événement", systemImage: "pencil")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .accessibilityHint("Modifie ou annule cet événement")
-    }
-
-    private var organizerText: String {
-        outing.isCurrentUser
-            ? "Organisée par vous"
-            : "Organisée par \(outing.organizer.displayName)"
-    }
-
-    private var peopleCountText: String {
-        switch outing.visiblePeople.count {
-        case 1:
-            "1 personne participe"
-        default:
-            "\(outing.visiblePeople.count) personnes participent"
-        }
-    }
-
-    private var declineCountText: String {
-        switch outing.visibleDeclines.count {
-        case 1:
-            "1 personne ne participe pas"
-        default:
-            "\(outing.visibleDeclines.count) personnes ne participent pas"
-        }
-    }
-
-    private var participantsAccessibilityText: String {
-        let organizerDescription = outing.isCurrentUser
-            ? "Vous organisez la sortie."
-            : "Sortie organisée par \(outing.organizer.displayName)."
-        let participantNames = outing.visiblePeople
-            .filter { $0.userID != outing.organizer.userID }
-            .map(\.displayName)
-        guard !participantNames.isEmpty else {
-            return organizerDescription + " Aucun autre participant."
-        }
-        return organizerDescription + " Participants : "
-            + ListFormatter.localizedString(byJoining: participantNames)
-    }
-
-    private var declinesAccessibilityText: String {
-        "Ne participent pas : "
-            + ListFormatter.localizedString(
-                byJoining: outing.visibleDeclines.map(\.displayName)
-            )
-    }
-}
-
-private struct OutingPeopleAvatarStack: View {
-    private static let maximumVisibleCount = 6
-    private static let avatarOverlap: CGFloat = 12
-    private static let avatarSeparatorWidth: CGFloat = 2
-
-    let people: [MapOutingAttendee]
-    let accessibilityText: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: -Self.avatarOverlap) {
-                ForEach(people.prefix(Self.maximumVisibleCount)) { person in
-                    ProfileAvatarView(avatarID: person.avatarID, size: 32)
-                        .overlay {
-                            Circle()
-                                .stroke(
-                                    Color(uiColor: .systemBackground),
-                                    lineWidth: Self.avatarSeparatorWidth
-                                )
-                        }
-                        .accessibilityHidden(true)
-                }
-            }
-
-            let hiddenCount = people.count
-                - min(people.count, Self.maximumVisibleCount)
-            if hiddenCount > 0 {
-                Text("+\(hiddenCount)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText)
+    private func actionLabel(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .labelStyle(.iconOnly)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minWidth: 30, minHeight: 30)
     }
 }

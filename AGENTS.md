@@ -69,8 +69,8 @@ approval and update it during the same approved work:
   status summary, or documentation links change.
 
 For every changed Obsidian note, update its `updated` frontmatter property,
-preserve valid wikilinks, and verify the affected properties, links, tables,
-callouts, code fences, and Mermaid diagrams in Obsidian reading view. The code,
+and preserve valid wikilinks. Do not open Obsidian or check the rendered
+appearance of notes unless the project owner explicitly requests it. The code,
 `docs/`, and `todos/` remain the detailed sources of truth; these Obsidian notes
 are the maintained product and architecture overview. Pure internal refactors
 with no backlog, technical-documentation, or UX impact do not require an
@@ -79,8 +79,8 @@ Obsidian update.
 If the vault path is absent or not writable, do not create a substitute vault
 or duplicate `wander` folder elsewhere. Record the exact notes and sections
 that still require updates in the plan's validation or review notes, report the
-limitation explicitly to the project owner, and do not claim that Obsidian
-validation succeeded.
+limitation explicitly to the project owner, and do not claim that the affected
+notes were updated.
 
 ### Sprint Planning and Status
 

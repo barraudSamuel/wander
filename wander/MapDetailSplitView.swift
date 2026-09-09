@@ -3,9 +3,9 @@ import SwiftUI
 struct MapDetailSplitView<Detail: View, MapContent: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .body) private var minimumDetailHeight = 140
-    @State private var position: Position = .half
-    @GestureState(resetTransaction: Transaction(animation: .snappy(duration: 0.25)))
-    private var dragTranslation: CGFloat = 0
+    @State private var position: Position = .third
+    @State private var dragOrigin: DragOrigin?
+    @GestureState private var isDragging = false
 
     let isPresented: Bool
     private let detail: Detail
@@ -31,109 +31,55 @@ struct MapDetailSplitView<Detail: View, MapContent: View>: View {
                     geometry.size.height - safeInsets.top - safeInsets.bottom - separatorHeight
                 )
                 let detailHeight = isPresented
-                    ? safeInsets.top + clampedHeight(
-                        height(for: position, availableHeight: availableHeight)
-                            + dragTranslation,
-                        availableHeight: availableHeight
-                    )
+                    ? safeInsets.top + height(for: position, availableHeight: availableHeight)
                     : 0
-                let visibleSeparatorHeight = isPresented ? separatorHeight : 0
-                let mapHeight = max(
-                    0,
-                    geometry.size.height - detailHeight - visibleSeparatorHeight
-                )
-                let detailRadius = cornerRadius(
-                    width: geometry.size.width,
-                    height: detailHeight
-                )
-                let mapRadius = isPresented
-                    ? cornerRadius(width: geometry.size.width, height: mapHeight)
-                    : 0
-                let detailShape = UnevenRoundedRectangle(
-                    bottomLeadingRadius: detailRadius,
-                    bottomTrailingRadius: detailRadius,
-                    style: .continuous
-                )
-                let mapShape = UnevenRoundedRectangle(
-                    topLeadingRadius: mapRadius,
-                    topTrailingRadius: mapRadius,
-                    style: .continuous
-                )
 
-                // Keep the map in the same structural slot as the pane opens and closes.
-                VStack(spacing: 0) {
-                    detail
-                        .padding(EdgeInsets(
-                            top: safeInsets.top,
-                            leading: safeInsets.leading,
-                            bottom: 0,
-                            trailing: safeInsets.trailing
-                        ))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: detailHeight, alignment: .top)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(detailShape)
-                        .contentShape(detailShape)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("map-detail-pane")
-                        .accessibilityHidden(!isPresented)
-                        .allowsHitTesting(isPresented)
-
-                    if isPresented {
-                        resizeHandle(availableHeight: availableHeight)
-                            .frame(height: visibleSeparatorHeight)
-                            .clipped()
-                            .transition(.identity)
-                    }
-
-                    mapContent
-                        .environment(\.mapRenderSize, geometry.size)
-                        .environment(\.mapContentInsets, EdgeInsets(
-                            top: isPresented ? 0 : safeInsets.top,
-                            leading: safeInsets.leading,
-                            bottom: safeInsets.bottom,
-                            trailing: safeInsets.trailing
-                        ))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: mapHeight)
-                        .clipShape(mapShape)
-                        .contentShape(mapShape)
-                }
-                .background(.black)
-                .transaction { transaction in
-                    if reduceMotion {
-                        transaction.animation = nil
-                    }
+                MapDetailArrangement(
+                    detailHeight: detailHeight,
+                    separatorHeight: isPresented ? separatorHeight : 0,
+                    windowSize: geometry.size,
+                    safeInsets: safeInsets,
+                    isPresented: isPresented,
+                    detail: detail,
+                    mapContent: mapContent
+                ) { displayedHeight in
+                    resizeHandle(availableHeight: availableHeight, displayedHeight: displayedHeight)
                 }
                 .animation(resizeAnimation, value: isPresented)
-                .animation(resizeAnimation, value: position)
+                .onChange(of: isDragging) { _, dragging in
+                    if !dragging, dragOrigin != nil { dragOrigin = nil }
+                }
             }
             .ignoresSafeArea(.container)
         }
-        .onChange(of: isPresented) { _, presented in
-            if presented {
-                position = .half
-            }
+        .onChange(of: isPresented) { _, _ in
+            dragOrigin = nil
+            position = .third
         }
     }
 
     // MARK: - Resizing
 
     private var resizeAnimation: Animation? {
-        reduceMotion ? nil : .snappy(duration: 0.25)
+        reduceMotion ? nil : .easeOut(duration: 0.25)
     }
 
-    private func cornerRadius(width: CGFloat, height: CGFloat) -> CGFloat {
-        min(32, max(0, min(width, height)) / 4)
-    }
-
-    private func resizeHandle(availableHeight: CGFloat) -> some View {
+    private func resizeHandle(availableHeight: CGFloat, displayedHeight: CGFloat) -> some View {
         Button {
-            switch position {
-            case .compact: position = .half
-            case .half: position = .expanded
-            case .expanded: position = .compact
+            let next: Position = switch position {
+            case .compact: .third
+            case .third: .expanded
+            case .expanded: .compact
+            case .custom:
+                if displayedHeight < height(for: .third, availableHeight: availableHeight) - 1 {
+                    .third
+                } else if displayedHeight < height(for: .expanded, availableHeight: availableHeight) - 1 {
+                    .expanded
+                } else {
+                    .compact
+                }
             }
+            select(next)
         } label: {
             Image(systemName: "minus")
                 .font(.title2.weight(.semibold))
@@ -145,72 +91,295 @@ struct MapDetailSplitView<Detail: View, MapContent: View>: View {
         .buttonStyle(.plain)
         .background(.black)
         .accessibilityLabel("Taille de la fiche")
-        .accessibilityValue(position.accessibilityValue)
+        .accessibilityValue(position.accessibilityValue(
+            displayedFraction: availableHeight > 0 ? displayedHeight / availableHeight : 0
+        ))
         .accessibilityHint("Touchez deux fois pour passer à la taille suivante.")
         .accessibilityIdentifier("map-detail-resize-handle")
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment:
-                position = position == .compact ? .half : .expanded
+                adjustHeight(by: 0.05, displayedHeight: displayedHeight, availableHeight: availableHeight)
             case .decrement:
-                position = position == .expanded ? .half : .compact
+                adjustHeight(by: -0.05, displayedHeight: displayedHeight, availableHeight: availableHeight)
             @unknown default:
                 break
             }
         }
         .highPriorityGesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .global)
-                .updating($dragTranslation) { value, translation, transaction in
-                    translation = value.translation.height
+                .updating($isDragging) { _, dragging, transaction in
+                    dragging = true
                     transaction.animation = nil
                 }
+                .onChanged { value in
+                    guard availableHeight > 0 else { return }
+                    // Use the displayed height when interrupting an animated shortcut.
+                    let origin = dragOrigin ?? DragOrigin(height: displayedHeight, availableHeight: availableHeight)
+                    // A rotation invalidates the gesture's original coordinate space.
+                    guard origin.availableHeight == availableHeight else { return }
+                    withTransaction(Transaction(animation: nil)) {
+                        dragOrigin = origin
+                        position = .custom(clampedHeight(
+                            origin.height + value.translation.height,
+                            availableHeight: availableHeight
+                        ) / availableHeight)
+                    }
+                }
                 .onEnded { value in
-                    let destination = height(
-                        for: position,
-                        availableHeight: availableHeight
-                    ) + value.predictedEndTranslation.height
-                    position = Position.allCases.min {
-                        abs(height(for: $0, availableHeight: availableHeight) - destination)
-                            < abs(height(for: $1, availableHeight: availableHeight) - destination)
-                    } ?? .half
+                    guard let origin = dragOrigin, availableHeight > 0,
+                          origin.availableHeight == availableHeight else {
+                        dragOrigin = nil
+                        return
+                    }
+                    withTransaction(Transaction(animation: nil)) {
+                        position = .custom(clampedHeight(
+                            origin.height + value.translation.height,
+                            availableHeight: availableHeight
+                        ) / availableHeight)
+                        dragOrigin = nil
+                    }
                 }
         )
+    }
+
+    private func adjustHeight(by fraction: CGFloat, displayedHeight: CGFloat, availableHeight: CGFloat) {
+        guard availableHeight > 0 else { return }
+        let height = clampedHeight(displayedHeight + fraction * availableHeight, availableHeight: availableHeight)
+        guard abs(height - displayedHeight) > 0.5 else { return }
+        select(.custom(height / availableHeight))
+    }
+
+    private func select(_ newPosition: Position) {
+        dragOrigin = nil
+        withAnimation(resizeAnimation) {
+            position = newPosition
+        }
     }
 
     private func height(for position: Position, availableHeight: CGFloat) -> CGFloat {
-        clampedHeight(
-            availableHeight * position.fraction,
-            availableHeight: availableHeight
-        )
+        clampedHeight(availableHeight * position.fraction, availableHeight: availableHeight)
     }
 
     private func clampedHeight(_ height: CGFloat, availableHeight: CGFloat) -> CGFloat {
-        let minimum = min(minimumDetailHeight, availableHeight * 0.4)
-        let minimumMapHeight = min(140, availableHeight * 0.3)
-        let maximum = availableHeight - minimumMapHeight
+        let maximum = availableHeight * 0.85
+        let minimum = min(minimumDetailHeight + 80, maximum)
         return min(maximum, max(minimum, height))
     }
 
-    private enum Position: CaseIterable {
+    private struct DragOrigin {
+        let height: CGFloat
+        let availableHeight: CGFloat
+    }
+
+    private enum Position {
         case compact
-        case half
+        case third
         case expanded
+        case custom(CGFloat)
 
         var fraction: CGFloat {
             switch self {
             case .compact: 0.25
-            case .half: 0.5
-            case .expanded: 0.75
+            case .third: 1.0 / 3.0
+            case .expanded: 1
+            case .custom(let fraction): fraction
             }
         }
 
-        var accessibilityValue: String {
+        func accessibilityValue(displayedFraction: CGFloat) -> String {
             switch self {
             case .compact: "Fiche réduite"
-            case .half: "Moitié de l’écran"
+            case .third: "Un tiers de l’écran"
             case .expanded: "Fiche agrandie"
+            case .custom: "\(Int((displayedFraction * 100).rounded())) %"
             }
         }
+    }
+}
+
+/// Interpolate the geometry once, then lay out each frame without another
+/// animation on text runs, attachment positions or line breaks.
+private struct MapDetailArrangement<Detail: View, MapContent: View, Handle: View>: View, Animatable {
+    var detailHeight: CGFloat
+    var separatorHeight: CGFloat
+    let windowSize: CGSize
+    let safeInsets: EdgeInsets
+    let isPresented: Bool
+    let detail: Detail
+    let mapContent: MapContent
+    @ViewBuilder let handle: (CGFloat) -> Handle
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(detailHeight, separatorHeight) }
+        set {
+            detailHeight = newValue.first
+            separatorHeight = newValue.second
+        }
+    }
+
+    var body: some View {
+        let mapHeight = max(0, windowSize.height - detailHeight - separatorHeight)
+        let detailRadius = cornerRadius(height: detailHeight)
+        let mapRadius = isPresented ? cornerRadius(height: mapHeight) : 0
+        let detailShape = UnevenRoundedRectangle(
+            bottomLeadingRadius: detailRadius,
+            bottomTrailingRadius: detailRadius,
+            style: .continuous
+        )
+        let mapShape = UnevenRoundedRectangle(
+            topLeadingRadius: mapRadius,
+            topTrailingRadius: mapRadius,
+            style: .continuous
+        )
+
+        // Preserve the map's structural slot and its full native rendering size.
+        VStack(spacing: 0) {
+            detail
+                .padding(EdgeInsets(
+                    top: safeInsets.top, leading: safeInsets.leading,
+                    bottom: 0, trailing: safeInsets.trailing
+                ))
+                .frame(maxWidth: .infinity)
+                .frame(height: max(0, detailHeight), alignment: .top)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(detailShape)
+                .contentShape(detailShape)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("map-detail-pane")
+                .accessibilityHidden(!isPresented)
+                .allowsHitTesting(isPresented)
+
+            handle(max(0, detailHeight - safeInsets.top))
+                .frame(height: max(0, separatorHeight))
+                .clipped()
+                .accessibilityHidden(!isPresented)
+                .allowsHitTesting(isPresented)
+
+            mapContent
+                .environment(\.mapRenderSize, windowSize)
+                .environment(\.mapContentInsets, EdgeInsets(
+                    top: isPresented ? 0 : safeInsets.top,
+                    leading: safeInsets.leading,
+                    bottom: safeInsets.bottom,
+                    trailing: safeInsets.trailing
+                ))
+                .frame(maxWidth: .infinity)
+                .frame(height: mapHeight)
+                .clipShape(mapShape)
+                .contentShape(mapShape)
+        }
+        .background(.black)
+        .transaction { $0.animation = nil }
+    }
+
+    private func cornerRadius(height: CGFloat) -> CGFloat {
+        min(32, max(0, min(windowSize.width, height)) / 4)
+    }
+}
+
+// MARK: - Shared detail presentation
+
+struct MapDetailPanel<Supporting: View, Actions: View>: View {
+    @ScaledMetric(relativeTo: .body) private var minimumTextSize = 16
+
+    let title: String
+    let closeLabel: String
+    let scrollIdentifier: String
+    let narrativeIdentifier: String
+    let content: MapDetailTextContent
+    let onDismiss: () -> Void
+    @ViewBuilder let supporting: () -> Supporting
+    @ViewBuilder let actions: () -> Actions
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityAddTraits(.isHeader)
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .frame(minWidth: 44, minHeight: 44)
+                .accessibilityLabel(closeLabel)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .layoutPriority(1)
+
+            GeometryReader { geometry in
+                ScrollView {
+                    MapDetailSummaryLayout(availableHeight: max(0, geometry.size.height - 12)) {
+                        MapDetailFittingText(
+                            content: content,
+                            minimumFontSize: minimumTextSize,
+                            identifier: narrativeIdentifier
+                        )
+                        supporting()
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier(scrollIdentifier)
+            }
+
+            actions()
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+                .layoutPriority(1)
+        }
+        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Reserve the native status/footer's intrinsic height before fitting the text.
+/// No geometry state or measurement feedback is needed during a drag.
+private struct MapDetailSummaryLayout: Layout {
+    let availableHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let layout = measurements(width: proposal.width ?? 0, subviews: subviews)
+        return CGSize(width: layout.width, height: layout.text.height + layout.spacing + layout.supporting.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let text = subviews.first else { return }
+        let layout = measurements(width: bounds.width, subviews: subviews)
+        text.place(at: bounds.origin, anchor: .topLeading, proposal: layout.textProposal)
+        if subviews.count > 1 {
+            subviews[1].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + layout.text.height + layout.spacing),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: layout.supporting.height)
+            )
+        }
+    }
+
+    private func measurements(width: CGFloat, subviews: Subviews) -> (
+        width: CGFloat, text: CGSize, supporting: CGSize, spacing: CGFloat, textProposal: ProposedViewSize
+    ) {
+        let supporting = subviews.count > 1
+            ? subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            : .zero
+        let spacing: CGFloat = supporting.height > 0 ? 6 : 0
+        let textProposal = ProposedViewSize(
+            width: width,
+            height: max(0, availableHeight - supporting.height - spacing)
+        )
+        let text = subviews.first?.sizeThatFits(textProposal) ?? .zero
+        return (width, text, supporting, spacing, textProposal)
     }
 }
 
