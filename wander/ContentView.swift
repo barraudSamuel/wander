@@ -5,7 +5,6 @@
 //  Map-first experience with native Apple navigation and controls.
 //
 
-import AuthenticationServices
 import CoreLocation
 import MapKit
 import SwiftData
@@ -25,12 +24,6 @@ enum MapDetailSelection: Equatable {
         guard case .outing(let eventID) = self else { return nil }
         return eventID
     }
-}
-
-private enum RootTab: Hashable {
-    case explore
-    case friends
-    case profile
 }
 
 private enum OutingComposerPresentation {
@@ -109,7 +102,9 @@ struct ContentView: View {
 
     @ObservedObject private var cityBoundary = CityBoundary.shared
 
-    @State private var selectedTab: RootTab = .explore
+    @State private var dockSelection: MotionDockSelection = .explore
+    @State private var friendCodeInput = ""
+    @State private var isProfileAccountFlowActive = false
     @State private var filterSheetVisible = false
     @State private var outingComposerVisible = false
     @State private var outingComposerDetent =
@@ -137,31 +132,24 @@ struct ContentView: View {
         lifecycleObservedContent
     }
 
-    private var tabContent: some View {
+    private var mapDockContent: some View {
         let summaries = friendSummaries(
             locations: friendSyncService.friendLocations
         )
 
         return GeometryReader { geometry in
-            TabView(selection: $selectedTab) {
+            MotionDockView(selection: dockSelectionBinding) {
                 exploreTab(friendSummaries: summaries)
-                    .tabItem {
-                        tabBarImage("TabIconExplore", accessibilityLabel: "Explorer")
-                    }
-                    .tag(RootTab.explore)
-
-                FriendsView(
+            } friends: {
+                FriendsPanelView(
                     service: friendSyncService,
                     friends: summaries,
                     onShowOnMap: showFriendOnMap,
-                    onViewProfile: presentFriendProfile
+                    onViewProfile: presentFriendProfile,
+                    friendCodeInput: $friendCodeInput
                 )
-                .tabItem {
-                    tabBarImage("TabIconFriends", accessibilityLabel: "Amis")
-                }
-                .tag(RootTab.friends)
-
-                ProfileView(
+            } profile: {
+                ProfilePanelView(
                     displayName: $displayName,
                     avatarID: $avatarID,
                     profileColorHex: $profileColorHex,
@@ -173,12 +161,9 @@ struct ContentView: View {
                             selectedColorHex,
                             userInitiated: true
                         )
-                    }
+                    },
+                    onAccountFlowStateChanged: { isProfileAccountFlowActive = $0 }
                 )
-                .tabItem {
-                    tabBarImage("TabIconProfile", accessibilityLabel: "Profil")
-                }
-                .tag(RootTab.profile)
             }
             #if DEBUG
             .overlay(alignment: .bottom) {
@@ -204,7 +189,7 @@ struct ContentView: View {
     }
 
     private var profileObservedContent: some View {
-        tabContent
+        mapDockContent
         .onAppear {
             locationTracker.configure(with: modelContext)
             restoreOwnExplorationIfAvailable()
@@ -296,6 +281,16 @@ struct ContentView: View {
         }
     }
 
+    private var dockSelectionBinding: Binding<MotionDockSelection> {
+        Binding(
+            get: { dockSelection },
+            set: { newSelection in
+                guard !isProfileAccountFlowActive else { return }
+                dockSelection = newSelection
+            }
+        )
+    }
+
     private var outingObservedContent: some View {
         profileObservedContent
         .onChange(of: acceptedFriendUserIDs, initial: true) { _, userIDs in
@@ -312,11 +307,10 @@ struct ContentView: View {
         .onChange(of: selectedOutingPlanEventID) {
             synchronizeOutingAttendanceObservation()
         }
-        .onChange(of: selectedTab) {
-            if selectedTab != .explore {
-                selectedMapDetail = nil
-            }
-            synchronizeOutingAttendanceObservation()
+        .onChange(of: isProfileAccountFlowActive) { _, isActive in
+            guard !isActive else { return }
+            openPendingNotificationRouteIfPossible()
+            openPendingFriendRequestNotificationRouteIfPossible()
         }
         .onChange(of: notificationService.pendingRoute, initial: true) {
             openPendingNotificationRouteIfPossible()
@@ -387,22 +381,13 @@ struct ContentView: View {
                 userID: selection.userID,
                 service: friendSyncService,
                 onOpenDirections: {
-                    selectedTab = .explore
+                    dockSelection = .explore
                     presentNavigationOptions(selection.userID)
                 }
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-    }
-
-    private func tabBarImage(
-        _ assetName: String,
-        accessibilityLabel: String
-    ) -> some View {
-        Image(assetName)
-            .renderingMode(.original)
-            .accessibilityLabel(accessibilityLabel)
     }
 
     // MARK: - Explore
@@ -559,7 +544,6 @@ struct ContentView: View {
                 }
             }
         }
-        .toolbarBackground(.hidden, for: .tabBar)
         .sheet(isPresented: $filterSheetVisible) {
             MapFiltersSheet(
                 heatMapEnabled: $heatMapEnabled
@@ -713,6 +697,7 @@ struct ContentView: View {
 
     private func presentFriendProfile(_ userID: String) {
         guard acceptedFriendUserIDs.contains(userID) else { return }
+        dockSelection = .explore
         selectedFriendProfile = FriendSelection(userID: userID)
     }
 
@@ -1033,7 +1018,7 @@ struct ContentView: View {
         guard friend.canShowOnMap,
               currentNavigationDestination(for: friend.userID) != nil else { return }
         centerOnFriendUserID = friend.userID
-        selectedTab = .explore
+        dockSelection = .explore
     }
 
     private func synchronizeLocationPushRegistration() {
@@ -1201,9 +1186,7 @@ struct ContentView: View {
         outingAttendanceService.observe(
             events: outingPlanService.events,
             acceptedFriendUserIDs: acceptedFriendUserIDs,
-            selectedEventID: selectedTab == .explore
-                ? selectedOutingPlanEventID
-                : nil
+            selectedEventID: selectedOutingPlanEventID
         )
     }
 
@@ -1253,7 +1236,8 @@ struct ContentView: View {
     }
 
     private func openPendingNotificationRouteIfPossible() {
-        guard friendSyncService.isProfileReady,
+        guard !isProfileAccountFlowActive,
+              friendSyncService.isProfileReady,
               let route = notificationService.pendingRoute else {
             return
         }
@@ -1275,7 +1259,9 @@ struct ContentView: View {
                     return
                 }
 
-                selectedTab = .explore
+                // The account flow may have opened while the event was loading.
+                guard !isProfileAccountFlowActive else { return }
+                dockSelection = .explore
                 centerOnOutingPlanEventID = route.eventIDValue
                 notificationService.consume(route)
             } catch is OutingPlanServiceError {
@@ -1288,12 +1274,13 @@ struct ContentView: View {
     }
 
     private func openPendingFriendRequestNotificationRouteIfPossible() {
-        guard friendSyncService.isProfileReady,
+        guard !isProfileAccountFlowActive,
+              friendSyncService.isProfileReady,
               let route = notificationService.pendingFriendRequestRoute else {
             return
         }
 
-        selectedTab = .friends
+        dockSelection = .friends
         notificationService.consume(route)
     }
 
@@ -1460,7 +1447,7 @@ private struct GhostModeMapControl: View {
     }
 }
 
-private struct GhostModeStatusView: View {
+struct GhostModeStatusView: View {
     @ObservedObject var service: FriendSyncService
 
     var body: some View {
@@ -1503,1005 +1490,6 @@ private struct GhostModeStatusView: View {
             }
             .disabled(!service.canChangeGhostMode)
         }
-    }
-}
-
-// MARK: - Friends
-
-private struct FriendsView: View {
-    @ObservedObject var service: FriendSyncService
-    let friends: [FriendMapSummary]
-    let onShowOnMap: (FriendMapSummary) -> Void
-    let onViewProfile: (String) -> Void
-
-    @State private var friendCodeInput = ""
-    @State private var processingRequestID: String?
-    @State private var processingFriendUserID: String?
-    @State private var friendPendingRemoval: FriendMapSummary?
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("Ton code ami") {
-                    if service.isPreparingProfile {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text("Création de ton code…")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if let friendCode = service.friendCode, !friendCode.isEmpty {
-                        HStack {
-                            Text(friendCode)
-                                .font(.title3.weight(.semibold))
-                                .monospaced()
-                                .textSelection(.enabled)
-
-                            Spacer()
-
-                            Button {
-                                UIPasteboard.general.string = friendCode
-                            } label: {
-                                Label("Copier", systemImage: "doc.on.doc")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-
-                        ShareLink(item: shareMessage(for: friendCode)) {
-                            Label("Partager mon code", systemImage: "square.and.arrow.up")
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label(
-                                "Code indisponible",
-                                systemImage: "exclamationmark.circle"
-                            )
-                            .foregroundStyle(.secondary)
-
-                            Button("Réessayer") {
-                                service.retryProfileSetup()
-                            }
-                        }
-                    }
-                }
-
-                Section("Ajouter un ami") {
-                    TextField("Code ami", text: $friendCodeInput)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                        .submitLabel(.send)
-                        .onSubmit(sendFriendRequest)
-
-                    Button(action: sendFriendRequest) {
-                        if service.isProcessingFriendAction
-                            && processingRequestID == nil {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                        } else {
-                            Label("Ajouter un ami", systemImage: "person.badge.plus")
-                                .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        friendCodeInput.isEmpty
-                            || !service.isProfileReady
-                            || service.isProcessingFriendAction
-                    )
-                }
-
-                if !service.incomingRequests.isEmpty {
-                    Section("Demandes reçues") {
-                        ForEach(service.incomingRequests) { request in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(spacing: 10) {
-                                    ProfileAvatarView(
-                                        avatarID: request.avatarID,
-                                        size: 32
-                                    )
-                                    .accessibilityHidden(true)
-
-                                    Text(request.displayName)
-                                }
-
-                                if processingRequestID == request.id {
-                                    HStack(spacing: 10) {
-                                        ProgressView()
-                                        Text("Mise à jour…")
-                                            .foregroundStyle(.secondary)
-                                    }
-                                } else {
-                                    HStack {
-                                        Button("Accepter") {
-                                            process(request, accepting: true)
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .disabled(service.isProcessingFriendAction)
-
-                                        Button("Refuser", role: .destructive) {
-                                            process(request, accepting: false)
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(service.isProcessingFriendAction)
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 3)
-                        }
-                    }
-                }
-
-                Section("Mes amis") {
-                    if friends.isEmpty {
-                        Text("Aucun ami pour le moment.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(friends) { friend in
-                            HStack {
-                                if friend.canShowOnMap {
-                                    Button {
-                                        onShowOnMap(friend)
-                                    } label: {
-                                        FriendRow(friend: friend)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel(
-                                        "Afficher \(friend.displayName) sur la carte"
-                                    )
-                                } else {
-                                    Button {
-                                        onViewProfile(friend.userID)
-                                    } label: {
-                                        FriendRow(friend: friend)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityHint("Ouvrir le profil de cet ami")
-                                }
-
-                                if processingFriendUserID == friend.userID {
-                                    ProgressView()
-                                }
-                            }
-                            .swipeActions(
-                                edge: .trailing,
-                                allowsFullSwipe: false
-                            ) {
-                                Button(role: .destructive) {
-                                    friendPendingRemoval = friend
-                                } label: {
-                                    Label(
-                                        "Retirer",
-                                        systemImage: "person.badge.minus"
-                                    )
-                                }
-                                .disabled(service.isProcessingFriendAction)
-                            }
-                        }
-                    }
-                }
-
-                if !service.outgoingRequests.isEmpty {
-                    Section("En attente") {
-                        ForEach(service.outgoingRequests) { request in
-                            HStack {
-                                ProfileAvatarView(
-                                    avatarID: request.avatarID,
-                                    size: 32
-                                )
-                                .accessibilityHidden(true)
-
-                                Text(request.displayName)
-                                Spacer()
-                                Text("Demande envoyée")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Amis")
-            .alert(
-                removalAlertTitle,
-                isPresented: removalAlertIsPresented,
-                presenting: friendPendingRemoval
-            ) { friend in
-                Button("Retirer", role: .destructive) {
-                    remove(friend)
-                }
-                Button("Annuler", role: .cancel) {}
-            } message: { _ in
-                Text(
-                    "Vous disparaîtrez tous les deux de la liste d’amis de l’autre. "
-                        + "Il faudra envoyer une nouvelle demande pour redevenir amis."
-                )
-            }
-            .alert(
-                "Impossible de terminer l’action",
-                isPresented: errorIsPresented
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(service.errorMessage ?? "Réessaie dans quelques instants.")
-            }
-            .onChange(of: service.isProcessingFriendAction) { _, isProcessing in
-                if !isProcessing {
-                    processingRequestID = nil
-                    processingFriendUserID = nil
-                }
-            }
-        }
-    }
-
-    private var errorIsPresented: Binding<Bool> {
-        Binding(
-            get: {
-                service.errorMessage != nil
-            },
-            set: { isPresented in
-                if !isPresented {
-                    service.clearError()
-                }
-            }
-        )
-    }
-
-    private var removalAlertIsPresented: Binding<Bool> {
-        Binding(
-            get: {
-                friendPendingRemoval != nil
-            },
-            set: { isPresented in
-                if !isPresented {
-                    friendPendingRemoval = nil
-                }
-            }
-        )
-    }
-
-    private var removalAlertTitle: String {
-        guard let friendPendingRemoval else {
-            return "Retirer cet ami ?"
-        }
-        return "Retirer \(friendPendingRemoval.displayName) de tes amis ?"
-    }
-
-    private func shareMessage(for friendCode: String) -> String {
-        "Ajoute-moi sur Wander avec le code \(friendCode)."
-    }
-
-    private func sendFriendRequest() {
-        guard service.isProfileReady,
-              !friendCodeInput.isEmpty,
-              !service.isProcessingFriendAction else { return }
-        let submittedCode = friendCodeInput
-
-        service.sendFriendRequest(code: submittedCode) { didSend in
-            guard didSend else { return }
-
-            DispatchQueue.main.async {
-                if friendCodeInput == submittedCode {
-                    friendCodeInput = ""
-                }
-            }
-        }
-    }
-
-    private func process(_ request: FriendRequest, accepting: Bool) {
-        processingRequestID = request.id
-
-        if accepting {
-            service.accept(request)
-        } else {
-            service.decline(request)
-        }
-
-        if !service.isProcessingFriendAction {
-            processingRequestID = nil
-        }
-    }
-
-    private func remove(_ friend: FriendMapSummary) {
-        processingFriendUserID = friend.userID
-        service.removeFriend(userID: friend.userID)
-
-        if !service.isProcessingFriendAction {
-            processingFriendUserID = nil
-        }
-    }
-}
-
-private struct FriendRow: View {
-    let friend: FriendMapSummary
-
-    var body: some View {
-        HStack(spacing: 12) {
-            FriendAvatarBadge(
-                avatarID: friend.avatarID,
-                profileColorHex: friend.profileColorHex,
-                size: 30
-            )
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(friend.displayName)
-                    .font(.body.weight(.medium))
-
-                TimelineView(.periodic(from: .now, by: 60)) { context in
-                    statusLabel(relativeTo: context.date)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    @ViewBuilder
-    private func statusLabel(relativeTo referenceDate: Date) -> some View {
-        if friend.isGhostModeEnabled {
-            Text("👻 Indisponible")
-                .accessibilityLabel("Indisponible, mode fantôme activé")
-        } else if let sampledAt = friend.locationSampledAt {
-            let locationText = presenceStatusText(relativeTo: referenceDate)
-                ?? positionStatusText(sampledAt, relativeTo: referenceDate)
-            Text(locationText)
-        } else {
-            Text("Position indisponible")
-        }
-    }
-
-    private func positionStatusText(
-        _ sampledAt: Date,
-        relativeTo referenceDate: Date
-    ) -> String {
-        let age = referenceDate.timeIntervalSince(sampledAt)
-        guard age >= 60 else {
-            return "Dernière position reçue à l’instant"
-        }
-
-        let relativeText = Self.relativePositionFormatter.localizedString(
-            for: sampledAt,
-            relativeTo: referenceDate
-        )
-        return "Dernière position reçue \(relativeText)"
-    }
-
-    private func presenceStatusText(relativeTo referenceDate: Date) -> String? {
-        guard friend.isLocationFresh,
-              let sampledAt = friend.locationSampledAt,
-              let enteredAt = friend.spotEnteredAt else {
-            return nil
-        }
-
-        let sampleAge = referenceDate.timeIntervalSince(sampledAt)
-        guard sampleAge >= -Self.maximumFutureTimestampSkew,
-              enteredAt <= sampledAt else {
-            return nil
-        }
-
-        let duration = max(0, referenceDate.timeIntervalSince(enteredAt))
-        return "Au même endroit depuis \(Self.durationText(duration))"
-    }
-
-    private static func durationText(_ duration: TimeInterval) -> String {
-        let totalMinutes = max(0, Int(duration / 60))
-        guard totalMinutes > 0 else { return "moins d’1 min" }
-
-        let days = totalMinutes / (24 * 60)
-        let hours = (totalMinutes % (24 * 60)) / 60
-        let minutes = totalMinutes % 60
-
-        if days > 0 {
-            return hours > 0 ? "\(days) j \(hours) h" : "\(days) j"
-        }
-        if hours > 0 {
-            return minutes > 0 ? "\(hours) h \(minutes) min" : "\(hours) h"
-        }
-        return "\(minutes) min"
-    }
-
-    private static let maximumFutureTimestampSkew: TimeInterval = 60
-
-    private static let relativePositionFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "fr_FR")
-        formatter.dateTimeStyle = .numeric
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
-
-}
-
-// MARK: - Profile
-
-private struct ProfileView: View {
-    @Binding var displayName: String
-    @Binding var avatarID: String
-    @Binding var profileColorHex: String
-    @ObservedObject var locationTracker: LocationTracker
-    @ObservedObject private var authenticationService = FirebaseService.shared
-    @ObservedObject private var friendSyncService = FriendSyncService.shared
-    @ObservedObject private var notificationService = NotificationService.shared
-    @ObservedObject private var locationPushService = LocationPushService.shared
-    @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
-
-    let cityProgress: CityProgress?
-    let cityProgressUnavailableText: String
-    let onProfileColorSelected: (String) -> Void
-
-    @State private var signOutConfirmationPresented = false
-    @State private var deleteConfirmationPresented = false
-    @State private var deletionAuthorizationPresented = false
-    @State private var accountActionErrorMessage: String?
-    @State private var isSigningOut = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    HStack(spacing: 16) {
-                        ProfileAvatarView(avatarID: avatarID, size: 72)
-                            .overlay {
-                                Circle()
-                                    .stroke(
-                                        ProfileColor.color(hex: profileColorHex),
-                                        lineWidth: 4
-                                    )
-                            }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(displayName.isEmpty ? "Explorer" : displayName)
-                                .font(.title2.bold())
-
-                            Label(
-                                locationTracker.isTracking ? "Exploration active" : "Exploration en pause",
-                                systemImage: locationTracker.isTracking ? "location.fill" : "pause.circle"
-                            )
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
-
-                Section("Avatar") {
-                    ProfileAvatarPicker(selection: $avatarID)
-                }
-
-                Section {
-                    TextField("Pseudo", text: $displayName)
-                        .textInputAutocapitalization(.words)
-                        .submitLabel(.done)
-
-                    ColorPicker(
-                        "Couleur de ma carte",
-                        selection: profileColorBinding,
-                        supportsOpacity: false
-                    )
-                } header: {
-                    Text("Identité")
-                } footer: {
-                    Text(
-                        "Cette couleur identifie ton profil et entoure ton avatar sur la carte."
-                    )
-                }
-
-                Section {
-                    Toggle(isOn: ghostModeBinding) {
-                        Text("👻 Mode fantôme")
-                    }
-                    .disabled(!friendSyncService.canChangeGhostMode)
-                    .accessibilityLabel("Mode fantôme")
-                    .accessibilityHint(
-                        "Masquer ta position à tous tes amis jusqu’à désactivation"
-                    )
-
-                    GhostModeStatusView(service: friendSyncService)
-                } header: {
-                    Text("Visibilité auprès de mes amis")
-                } footer: {
-                    Text(
-                        "En mode fantôme, tes amis te voient indisponible et ne peuvent plus actualiser ta position. Ton exploration continue sur cet appareil ; les nouvelles zones seront synchronisées quand tu désactiveras ce mode."
-                    )
-                }
-
-                Section {
-                    Toggle("Enregistrer mes déplacements", isOn: trackingBinding)
-
-                    if locationTracker.authorizationStatus == .authorizedWhenInUse
-                        || locationTracker.authorizationStatus == .authorizedAlways {
-                        Toggle(
-                            "Continuer en arrière-plan",
-                            isOn: backgroundTrackingBinding
-                        )
-                    }
-
-                    if locationTracker.authorizationStatus == .denied
-                        || locationTracker.authorizationStatus == .restricted {
-                        Label(
-                            "Autorise la localisation dans Réglages pour reprendre l’exploration.",
-                            systemImage: "location.slash"
-                        )
-                        .foregroundStyle(.secondary)
-
-                        Button {
-                            openSettings()
-                        } label: {
-                            Label("Ouvrir Réglages", systemImage: "gear")
-                        }
-                    } else if let lastError = locationTracker.lastError {
-                        Label(lastError, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Localisation")
-                } footer: {
-                    Text(
-                        "Quand l’exploration est active, Wander utilise ta position pour révéler la carte. Si le mode fantôme est désactivé, ta position est partagée avec tes amis. Avec le suivi en arrière-plan et l’autorisation Toujours, ils peuvent aussi l’actualiser lorsqu’ils te sélectionnent."
-                    )
-                }
-
-                Section {
-                    Toggle(
-                        "Activité de mes amis",
-                        isOn: notificationsBinding
-                    )
-
-                    Label(
-                        notificationAuthorizationText,
-                        systemImage: notificationAuthorizationSystemImage
-                    )
-                    .foregroundStyle(.secondary)
-
-                    if notificationService.authorizationStatus == .denied {
-                        Button {
-                            openSettings()
-                        } label: {
-                            Label("Ouvrir Réglages", systemImage: "gear")
-                        }
-                    }
-
-                    if let errorMessage = notificationService.errorMessage {
-                        Label(
-                            errorMessage,
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Notifications")
-                } footer: {
-                    Text(
-                        "Active-les pour recevoir les demandes d’amis, les nouvelles sorties et les participations de tes amis acceptés. Wander n’affiche jamais leur adresse ni leurs coordonnées dans une notification."
-                    )
-                }
-
-                Section("Progression") {
-                    LabeledContent(
-                        "Ville",
-                        value: cityProgress?.cityName ?? cityProgressUnavailableText
-                    )
-
-                    LabeledContent(
-                        "Progression",
-                        value: cityProgress?.percentageText ?? "—"
-                    )
-
-                    LabeledContent("Zones explorées") {
-                        Text(exploredCellsText)
-                            .monospacedDigit()
-                    }
-                }
-
-                accountSection
-            }
-            .navigationTitle("Profil")
-        }
-        .onAppear {
-            Task {
-                await notificationService.refreshAuthorizationStatus()
-            }
-            if friendSyncService.isAccountDeletionPending {
-                deletionAuthorizationPresented = true
-            }
-        }
-        .onChange(of: friendSyncService.isAccountDeletionPending) {
-            if friendSyncService.isAccountDeletionPending {
-                deletionAuthorizationPresented = true
-            }
-        }
-        .alert(
-            "Se déconnecter ?",
-            isPresented: $signOutConfirmationPresented
-        ) {
-            Button("Se déconnecter") {
-                isSigningOut = true
-                Task {
-                    do {
-                        try await notificationService.prepareForSignOut()
-                        await locationPushService.prepareForSignOut()
-                        if !authenticationService.signOut() {
-                            await notificationService.enableNotifications()
-                            locationPushService.synchronizeRegistration(
-                                userID: authenticationService.currentUserId,
-                                trackingEnabled: locationTracker.trackingEnabled,
-                                backgroundTrackingEnabled:
-                                    locationTracker.backgroundTrackingEnabled,
-                                locationSharingAllowed:
-                                    friendSyncService.isLocationSharingAllowed,
-                                authorizationStatus:
-                                    locationTracker.authorizationStatus
-                            )
-                            accountActionErrorMessage =
-                                authenticationService.authErrorMessage
-                        }
-                    } catch {
-                        accountActionErrorMessage = error.localizedDescription
-                    }
-                    isSigningOut = false
-                }
-            }
-
-            Button("Annuler", role: .cancel) {}
-        } message: {
-            Text(
-                "Tes données restent enregistrées et seront retrouvées à ta prochaine connexion."
-            )
-        }
-        .alert(
-            "Supprimer définitivement ton compte ?",
-            isPresented: $deleteConfirmationPresented
-        ) {
-            Button("Continuer", role: .destructive) {
-                deletionAuthorizationPresented = true
-            }
-
-            Button("Annuler", role: .cancel) {}
-        } message: {
-            Text(
-                "Ton profil, ta progression, tes relations et tes données locales seront définitivement supprimés. Cette action est irréversible."
-            )
-        }
-        .sheet(isPresented: $deletionAuthorizationPresented) {
-            deletionAuthorizationSheet
-        }
-        .alert(
-            "Impossible de terminer l’action",
-            isPresented: accountActionErrorPresented
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(accountActionErrorMessage ?? "Réessaie dans quelques instants.")
-        }
-    }
-
-    private var ghostModeBinding: Binding<Bool> {
-        Binding(
-            get: { friendSyncService.isGhostModeEnabled },
-            set: { friendSyncService.setGhostModeEnabled($0) }
-        )
-    }
-
-    private var accountSection: some View {
-        Section {
-            Button {
-                signOutConfirmationPresented = true
-            } label: {
-                Label(
-                    "Se déconnecter",
-                    systemImage: "rectangle.portrait.and.arrow.right"
-                )
-            }
-            .disabled(isSigningOut)
-
-            Button(role: .destructive) {
-                deleteConfirmationPresented = true
-            } label: {
-                Label(
-                    accountDeletionButtonTitle,
-                    systemImage: "person.crop.circle.badge.minus"
-                )
-            }
-            .disabled(isSigningOut)
-        } header: {
-            Text("Compte")
-        } footer: {
-            Text(
-                "La déconnexion conserve tes données. La suppression du compte efface définitivement ton profil Wander, ta progression, tes relations et les données de cet appareil."
-            )
-        }
-    }
-
-    private var accountDeletionButtonTitle: String {
-        friendSyncService.isAccountDeletionPending
-            ? "Terminer la suppression"
-            : "Supprimer mon compte"
-    }
-
-    private var deletionAuthorizationSheet: some View {
-        AccountDeletionAuthorizationView(
-            authenticationService: authenticationService,
-            deletionIsPending: friendSyncService.isAccountDeletionPending,
-            errorMessage: accountActionErrorMessage,
-            onCompletion: handleAccountDeletionAuthorization,
-            onCancel: cancelAccountDeletionAuthorization
-        )
-        .interactiveDismissDisabled(
-            authenticationService.isDeletingAccount
-                || friendSyncService.isAccountDeletionPending
-        )
-    }
-
-    private var accountActionErrorPresented: Binding<Bool> {
-        Binding(
-            get: { accountActionErrorMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    accountActionErrorMessage = nil
-                }
-            }
-        )
-    }
-
-    private func cancelAccountDeletionAuthorization() {
-        authenticationService.cancelAccountDeletion()
-        deletionAuthorizationPresented = false
-    }
-
-    private var trackingBinding: Binding<Bool> {
-        Binding(
-            get: {
-                locationTracker.trackingEnabled
-            },
-            set: { isEnabled in
-                if isEnabled {
-                    locationTracker.startTracking()
-                } else {
-                    locationTracker.stopTracking()
-                }
-            }
-        )
-    }
-
-    private var backgroundTrackingBinding: Binding<Bool> {
-        Binding(
-            get: {
-                locationTracker.backgroundTrackingEnabled
-            },
-            set: { isEnabled in
-                locationTracker.setBackgroundTrackingEnabled(isEnabled)
-            }
-        )
-    }
-
-    private var notificationsBinding: Binding<Bool> {
-        Binding(
-            get: { notificationService.isEnabled },
-            set: { isEnabled in
-                notificationService.clearError()
-                Task {
-                    if isEnabled {
-                        await notificationService.enableNotifications()
-                    } else {
-                        await notificationService.disableNotifications()
-                    }
-                }
-            }
-        )
-    }
-
-    private var notificationAuthorizationText: String {
-        switch notificationService.authorizationStatus {
-        case .notDetermined:
-            "Autorisation non demandée"
-        case .denied:
-            "Notifications refusées dans Réglages"
-        case .authorized:
-            "Notifications autorisées"
-        case .provisional:
-            "Notifications autorisées provisoirement"
-        case .ephemeral:
-            "Notifications autorisées temporairement"
-        @unknown default:
-            "État des notifications indisponible"
-        }
-    }
-
-    private var notificationAuthorizationSystemImage: String {
-        notificationService.authorizationAllowsNotifications
-            ? "bell.badge"
-            : "bell.slash"
-    }
-
-    private var exploredCellsText: String {
-        guard let cityProgress else { return "—" }
-        return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
-    }
-
-    private func handleAccountDeletionAuthorization(
-        _ result: Result<ASAuthorization, Error>
-    ) {
-        let authenticationService = authenticationService
-        let friendSyncService = friendSyncService
-        let locationTracker = locationTracker
-
-        Task {
-            do {
-                guard let authorizationCode = try await authenticationService
-                    .reauthenticateForAccountDeletion(result) else {
-                    if friendSyncService.isAccountDeletionPending {
-                        accountActionErrorMessage =
-                            "La vérification Apple est nécessaire pour terminer la suppression."
-                    } else {
-                        deletionAuthorizationPresented = false
-                    }
-                    return
-                }
-
-                try await notificationService.prepareForAccountDeletion()
-                await locationPushService.prepareForAccountDeletion()
-                try await friendSyncService.deleteCurrentAccountData()
-                try await authenticationService.finishAccountDeletion(
-                    authorizationCode: authorizationCode
-                )
-
-                var localCleanupError: Error?
-                do {
-                    try locationTracker.resetLocalData()
-                } catch {
-                    localCleanupError = error
-                }
-
-                clearLocalProfileData()
-
-                do {
-                    try await friendSyncService.clearLocalFirestoreCache()
-                } catch {
-                    localCleanupError = localCleanupError ?? error
-                }
-
-                if let localCleanupError {
-                    print(
-                        "[Profile] account deleted but local cleanup failed: "
-                            + localCleanupError.localizedDescription
-                    )
-                }
-            } catch {
-                authenticationService.cancelAccountDeletion()
-                if let authenticationError =
-                    error as? FirebaseService.AccountDeletionError {
-                    accountActionErrorMessage =
-                        authenticationError.errorDescription
-                } else {
-                    accountActionErrorMessage =
-                        friendSyncService.accountDeletionMessage(for: error)
-                }
-            }
-        }
-    }
-
-    private func clearLocalProfileData() {
-        displayName = ""
-        avatarID = ""
-        profileColorHex = ""
-
-        let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: ProfileAvatar.storageKey)
-        defaults.removeObject(forKey: ProfileAvatar.ownerStorageKey)
-        defaults.removeObject(forKey: ProfileColor.storageKey)
-        defaults.removeObject(forKey: ProfileColor.ownerStorageKey)
-        defaults.removeObject(forKey: ProfileColor.pendingOwnerStorageKey)
-        defaults.removeObject(
-            forKey: ProfileColor.pendingUserSelectionStorageKey
-        )
-        onboardingCompleted = false
-
-        defaults.removeObject(forKey: "profile.displayName")
-        defaults.removeObject(forKey: "profile.avatarImageData")
-        defaults.removeObject(forKey: "profile.onboardingCompleted")
-    }
-
-    private func openSettings() {
-        guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
-        UIApplication.shared.open(settingsURL)
-    }
-
-    private var profileColorBinding: Binding<Color> {
-        Binding(
-            get: {
-                ProfileColor.color(hex: profileColorHex)
-            },
-            set: { newColor in
-                let selectedColorHex = ProfileColor.hex(from: newColor)
-                profileColorHex = selectedColorHex
-                onProfileColorSelected(selectedColorHex)
-            }
-        )
-    }
-}
-
-private struct AccountDeletionAuthorizationView: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @ObservedObject var authenticationService: FirebaseService
-
-    let deletionIsPending: Bool
-    let errorMessage: String?
-    let onCompletion: (Result<ASAuthorization, Error>) -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    Image(systemName: "person.crop.circle.badge.minus")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.red)
-                        .accessibilityHidden(true)
-
-                    VStack(spacing: 8) {
-                        Text(
-                            deletionIsPending
-                                ? "Terminer la suppression"
-                                : "Confirmer avec Apple"
-                        )
-                        .font(.title2.bold())
-
-                        Text(
-                            deletionIsPending
-                                ? "La suppression a déjà commencé. Identifie-toi de nouveau pour effacer les données restantes."
-                                : "Wander doit vérifier ton identité avant de supprimer définitivement ton compte."
-                        )
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    }
-
-                    if authenticationService.isDeletingAccount {
-                        ProgressView("Suppression du compte…")
-                    } else {
-                        SignInWithAppleButton(
-                            .continue,
-                            onRequest: authenticationService
-                                .prepareAccountDeletionAuthorizationRequest,
-                            onCompletion: onCompletion
-                        )
-                        .signInWithAppleButtonStyle(
-                            colorScheme == .dark ? .white : .black
-                        )
-                        .frame(height: 50)
-                        .accessibilityLabel(
-                            "Confirmer la suppression avec Apple"
-                        )
-                    }
-
-                    if let errorMessage {
-                        Label(
-                            errorMessage,
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-            }
-            .navigationTitle("Suppression du compte")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if !deletionIsPending
-                    && !authenticationService.isDeletingAccount {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Annuler", action: onCancel)
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
     }
 }
 

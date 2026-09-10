@@ -18,20 +18,46 @@ struct DebugSocialMapScenarioView: View {
     @State private var scene: SceneKind = ProcessInfo.processInfo.arguments
         .contains("-debug-social-map-mixed") ? .mixed : .events
     @State private var revision = 0
+    @State private var dockSelection: MotionDockSelection = ProcessInfo.processInfo.arguments
+        .contains("-debug-dock-friends") ? .friends : .explore
+    @State private var friendCode = ""
+    @State private var profileName = "Explorateur"
+    @State private var profileConfirmation = false
 
     var body: some View {
         if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
-            // Match Explorer's outer geometry and native tab bar without the
-            // fixture controls that reserve extra space below the map.
-            GeometryReader { _ in
-                TabView {
-                    mapScene
-                        .toolbarBackground(.hidden, for: .tabBar)
-                        .tabItem { Label("Explorer", systemImage: "map") }
-                    Color.clear
-                        .tabItem { Label("Amis", systemImage: "person.2") }
-                    Color.clear
-                        .tabItem { Label("Profil", systemImage: "person.crop.circle") }
+            MotionDockView(selection: $dockSelection) {
+                mapScene
+            } friends: {
+                NavigationStack {
+                    List {
+                        Section("Ajouter un ami") {
+                            TextField("Code ami", text: $friendCode)
+                                .autocorrectionDisabled()
+                        }
+                        Section("Mes amis") {
+                            ForEach(1...30, id: \.self) { number in
+                                Text("Ami \(number)")
+                            }
+                        }
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .toolbar(.hidden, for: .navigationBar)
+                }
+            } profile: {
+                NavigationStack {
+                    Form {
+                        TextField("Pseudo", text: $profileName)
+                        Button("Confirmation de test") { profileConfirmation = true }
+                        ForEach(1...30, id: \.self) { number in
+                            Text("Réglage \(number)")
+                        }
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .toolbar(.hidden, for: .navigationBar)
+                    .alert("Action de test", isPresented: $profileConfirmation) {
+                        Button("Annuler", role: .cancel) {}
+                    }
                 }
             }
         } else {

@@ -144,12 +144,62 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertEqual(nativeMap.frame.size.height, initialSize.height, accuracy: 1)
     }
 
-    func testMapFillsWindowBehindNativeTabBar() {
+    func testDockPanelsPreserveResizedMapDetail() {
         app.terminate()
         app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
         app.launch()
         XCTAssertTrue(map.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.tabBars.buttons["Explorer"].isHittable)
+        openGroupedEvent(index: 0, title: "Café")
+        let initialHeight = detailPane.frame.height
+        let handle = resizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        handle.press(forDuration: 0.05, thenDragTo: handle.withOffset(CGVector(dx: 0, dy: 70)))
+        XCTAssertGreaterThan(detailPane.frame.height, initialHeight + 40)
+        let detailFrame = detailPane.frame
+        let mapFrame = map.frame
+        let user = app.buttons["Moi, Vous"]
+        XCTAssertTrue(user.exists)
+        let userFrame = user.frame
+
+        func assertPreservedDetail() {
+            XCTAssertTrue(detailPane.waitForExistence(timeout: 3))
+            XCTAssertTrue(detailPane.staticTexts["Café"].firstMatch.exists)
+            XCTAssertEqual(detailPane.frame.minY, detailFrame.minY, accuracy: 1)
+            XCTAssertEqual(detailPane.frame.height, detailFrame.height, accuracy: 1)
+            XCTAssertEqual(map.frame, mapFrame)
+            XCTAssertEqual(user.frame.midX, userFrame.midX, accuracy: 2)
+            XCTAssertEqual(user.frame.midY, userFrame.midY, accuracy: 2)
+        }
+
+        app.buttons["motion-dock-friends"].tap()
+        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        attachScreenshot(named: "Amis superposé à la fiche redimensionnée")
+        app.buttons["motion-dock-profile"].tap()
+        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
+        attachScreenshot(named: "Profil superposé à la fiche redimensionnée")
+        app.buttons["motion-dock-explore"].tap()
+        assertPreservedDetail()
+
+        app.buttons["motion-dock-friends"].tap()
+        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        app.buttons["motion-dock-friends"].tap()
+        assertPreservedDetail()
+
+        app.buttons["motion-dock-profile"].tap()
+        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
+        // Tap over the underlying detail: only the overlay closes.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.13)).tap()
+        assertPreservedDetail()
+        attachScreenshot(named: "Fiche et carte conservées après fermeture du panneau")
+        app.buttons["Fermer la fiche de la sortie"].tap()
+        XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
+    }
+
+    func testMapFillsWindowBehindMotionDock() {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
+        app.launch()
+        XCTAssertTrue(map.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["motion-dock-explore"].isHittable)
         let window = app.windows.firstMatch.frame
         assertFullScreenMap(map.frame, window: window)
         attachScreenshot(named: "Carte plein écran derrière les barres système")
@@ -166,12 +216,15 @@ final class MapSocialGestureUITests: XCTestCase {
             XCTAssertEqual(nativeMap.frame.height, nativeSize.height, accuracy: 0.01)
             XCTAssertEqual(map.frame.maxY, window.maxY, accuracy: 1)
         }
-        attachScreenshot(named: "Fiche ouverte et carte derrière les onglets")
+        attachScreenshot(named: "Fiche ouverte et carte derrière le dock")
         app.buttons["Fermer la fiche de la sortie"].tap()
         XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
         assertFullScreenMap(map.frame, window: window)
-        app.tabBars.buttons["Amis"].tap()
-        app.tabBars.buttons["Explorer"].tap()
+        // Wait for the panel state before tapping a command that moves during expansion.
+        app.buttons["motion-dock-friends"].tap()
+        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        app.buttons["motion-dock-explore"].tap()
+        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
         XCTAssertTrue(map.waitForExistence(timeout: 3))
         assertFullScreenMap(map.frame, window: window)
 
@@ -189,6 +242,11 @@ final class MapSocialGestureUITests: XCTestCase {
         edge.press(forDuration: 0.05, thenDragTo: edge.withOffset(CGVector(dx: -120, dy: 0)))
         let emptyRail = app.images["Aucun ami"]
         XCTAssertTrue(emptyRail.waitForExistence(timeout: 3))
+        let railSettled = NSPredicate { _, _ in
+            emptyRail.isHittable && emptyRail.frame.maxX < landscapeWindow.maxX - 14
+        }
+        expectation(for: railSettled, evaluatedWith: emptyRail)
+        waitForExpectations(timeout: 3)
         XCTAssertTrue(emptyRail.isHittable)
         XCTAssertLessThan(emptyRail.frame.maxX, landscapeWindow.maxX - 14)
         attachScreenshot(named: "Carte plein écran et rail accessible en paysage")
@@ -456,7 +514,7 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     private func attachScreenshot(named name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -514,7 +572,7 @@ final class MapDeviceSmokeUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["MTL_DEBUG_LAYER"] = "1"
         app.launch()
-        let explore = app.tabBars.buttons["Explorer"]
+        let explore = app.buttons["motion-dock-explore"]
         if explore.waitForExistence(timeout: 15) { explore.tap() }
         let nativeMap = app.maps.firstMatch
         XCTAssertTrue(nativeMap.waitForExistence(timeout: 15))
@@ -524,7 +582,7 @@ final class MapDeviceSmokeUITests: XCTestCase {
         assertFullScreenMap(viewport.frame, window: window)
         XCTAssertTrue(app.buttons["Filtres de la carte"].isHittable)
         XCTAssertTrue(app.buttons["Recentrer la carte sur ma position"].isHittable)
-        let fullScreenCapture = XCTAttachment(screenshot: app.screenshot())
+        let fullScreenCapture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         fullScreenCapture.name = "Carte plein écran sur iPhone"
         fullScreenCapture.lifetime = .keepAlways
         add(fullScreenCapture)
@@ -554,7 +612,7 @@ final class MapDeviceSmokeUITests: XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
             XCTAssertEqual(nativeMap.frame.height, nativeSize.height, accuracy: 1)
             if cycle == 0 {
-                let screenshot = XCTAttachment(screenshot: app.screenshot())
+                let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
                 screenshot.name = "Fiche arrondie sur iPhone avec Metal actif"
                 screenshot.lifetime = .keepAlways
                 add(screenshot)
