@@ -14,6 +14,11 @@ final class OutingPlanService: ObservableObject {
 
     /// Events indexed by their stable Firestore `eventId`.
     @Published private(set) var events: [String: OutingPlan] = [:]
+    @Published private var pendingOwnerIDs: Set<String> = []
+    @Published private var failedOwnerIDs: Set<String> = []
+
+    var isLoading: Bool { !pendingOwnerIDs.isEmpty }
+    var hasLoadError: Bool { !failedOwnerIDs.isEmpty }
 
     private let database: Firestore
     private let currentUserID: @MainActor () -> String?
@@ -75,6 +80,13 @@ final class OutingPlanService: ObservableObject {
         observedCurrentUserID = nil
         if !events.isEmpty {
             events = [:]
+        }
+    }
+
+    func retryFailedObservations() {
+        for userID in failedOwnerIDs.sorted() {
+            removeEventListener(for: userID)
+            addEventListener(for: userID)
         }
     }
 
@@ -176,6 +188,8 @@ final class OutingPlanService: ObservableObject {
     // MARK: - Listener reconciliation
 
     private func addEventListener(for userID: String) {
+        pendingOwnerIDs.insert(userID)
+        failedOwnerIDs.remove(userID)
         let token = UUID()
         listenerTokens[userID] = token
         eventListeners[userID] = eventsCollection(ownerID: userID)
@@ -199,10 +213,14 @@ final class OutingPlanService: ObservableObject {
         error: Error?,
         expectedOwnerID: String
     ) {
+        pendingOwnerIDs.remove(expectedOwnerID)
         guard error == nil, let snapshot else {
+            failedOwnerIDs.insert(expectedOwnerID)
             replaceEvents(for: expectedOwnerID, with: [:])
             return
         }
+
+        failedOwnerIDs.remove(expectedOwnerID)
 
         let validEvents = snapshot.documents.reduce(
             into: [String: OutingPlan]()
@@ -232,6 +250,8 @@ final class OutingPlanService: ObservableObject {
     }
 
     private func removeEventListener(for userID: String) {
+        pendingOwnerIDs.remove(userID)
+        failedOwnerIDs.remove(userID)
         listenerTokens.removeValue(forKey: userID)
         eventListeners.removeValue(forKey: userID)?.remove()
         replaceEvents(for: userID, with: [:])
@@ -239,6 +259,8 @@ final class OutingPlanService: ObservableObject {
     }
 
     private func removeAllEventListeners() {
+        pendingOwnerIDs.removeAll()
+        failedOwnerIDs.removeAll()
         listenerTokens.removeAll()
         eventListeners.values.forEach { $0.remove() }
         eventListeners.removeAll()

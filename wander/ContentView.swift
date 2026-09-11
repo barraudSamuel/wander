@@ -116,6 +116,7 @@ struct ContentView: View {
     @State private var centerOnFriendUserID: String?
     @State private var centerOnOutingPlanEventID: String?
     @State private var selectedMapDetail: MapDetailSelection?
+    @State private var visibleRosterEventIDs: Set<String> = []
     @State private var heatMapEnabled = false
     @State private var cityProgress: CityProgress?
     @State private var friendNavigationSelection: FriendSelection?
@@ -307,6 +308,9 @@ struct ContentView: View {
         .onChange(of: selectedOutingPlanEventID) {
             synchronizeOutingAttendanceObservation()
         }
+        .onChange(of: visibleRosterEventIDs) {
+            synchronizeOutingAttendanceObservation()
+        }
         .onChange(of: isProfileAccountFlowActive) { _, isActive in
             guard !isActive else { return }
             openPendingNotificationRouteIfPossible()
@@ -404,38 +408,63 @@ struct ContentView: View {
             outingPlans[$0]
         }
 
-        return MapDetailSplitView(isPresented: selectedMapDetail != nil) {
-            if let selectedOutingPlan {
-                OutingPlanDetailCardView(
-                    outing: selectedOutingPlan,
-                    onDismiss: { selectedMapDetail = nil },
-                    onEdit: {
-                        pendingOutingCoordinate = nil
-                        editingOutingEvent = selectedOutingPlan.plan
-                        outingComposerDetent = .large
-                        outingComposerVisible = true
-                    },
-                    onOpenDirections: {
-                        presentOutingNavigationOptions(
-                            eventID: selectedOutingPlan.plan.eventIDValue
-                        )
-                    },
-                    onSetAttendance: { shouldAttend in
-                        setOutingAttendance(
-                            shouldAttend,
-                            eventID: selectedOutingPlan.plan.eventIDValue
-                        )
-                    }
-                )
-                .id(selectedOutingPlan.plan.eventIDValue)
-            } else if let userID = selectedMapDetail?.friendUserID {
-                FriendProfilePanel(
-                    userID: userID,
-                    service: friendSyncService,
-                    onDismiss: { selectedMapDetail = nil },
-                    onOpenDirections: { presentNavigationOptions(userID) }
-                )
-                .id(userID)
+        return MapDetailSplitView(isPresented: true) {
+            MapEventsPanelView(
+                outings: outingPlans,
+                showsDetail: selectedMapDetail != nil,
+                currentLocation: locationTracker.lastLocation,
+                isLoading: outingPlanService.isLoading,
+                hasLoadError: outingPlanService.hasLoadError,
+                onRetry: { outingPlanService.retryFailedObservations() },
+                isListActive: dockSelection == .explore && scenePhase == .active,
+                onVisibleEventIDsChange: { visibleRosterEventIDs = $0 },
+                onSetAttendance: { eventID, shouldAttend in
+                    setOutingAttendance(shouldAttend, eventID: eventID)
+                },
+                onEdit: { eventID in
+                    guard let outing = outingPlans[eventID], outing.isCurrentUser else { return }
+                    pendingOutingCoordinate = nil
+                    editingOutingEvent = outing.plan
+                    outingComposerDetent = .large
+                    outingComposerVisible = true
+                },
+                onSelect: { eventID in
+                    selectedMapDetail = .outing(eventID)
+                    centerOnOutingPlanEventID = eventID
+                }
+            ) {
+                if let selectedOutingPlan {
+                    OutingPlanDetailCardView(
+                        outing: selectedOutingPlan,
+                        onDismiss: { selectedMapDetail = nil },
+                        onEdit: {
+                            pendingOutingCoordinate = nil
+                            editingOutingEvent = selectedOutingPlan.plan
+                            outingComposerDetent = .large
+                            outingComposerVisible = true
+                        },
+                        onOpenDirections: {
+                            presentOutingNavigationOptions(
+                                eventID: selectedOutingPlan.plan.eventIDValue
+                            )
+                        },
+                        onSetAttendance: { shouldAttend in
+                            setOutingAttendance(
+                                shouldAttend,
+                                eventID: selectedOutingPlan.plan.eventIDValue
+                            )
+                        }
+                    )
+                    .id(selectedOutingPlan.plan.eventIDValue)
+                } else if let userID = selectedMapDetail?.friendUserID {
+                    FriendProfilePanel(
+                        userID: userID,
+                        service: friendSyncService,
+                        onDismiss: { selectedMapDetail = nil },
+                        onOpenDirections: { presentNavigationOptions(userID) }
+                    )
+                    .id(userID)
+                }
             }
         } map: {
             FriendEdgeRailView(
@@ -1186,7 +1215,8 @@ struct ContentView: View {
         outingAttendanceService.observe(
             events: outingPlanService.events,
             acceptedFriendUserIDs: acceptedFriendUserIDs,
-            selectedEventID: selectedOutingPlanEventID
+            selectedEventID: selectedOutingPlanEventID,
+            visibleRosterEventIDs: visibleRosterEventIDs
         )
     }
 

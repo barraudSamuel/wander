@@ -90,7 +90,7 @@ struct MapDetailSplitView<Detail: View, MapContent: View>: View {
         }
         .buttonStyle(.plain)
         .background(.black)
-        .accessibilityLabel("Taille de la fiche")
+        .accessibilityLabel("Taille du panneau")
         .accessibilityValue(position.accessibilityValue(
             displayedFraction: availableHeight > 0 ? displayedHeight / availableHeight : 0
         ))
@@ -285,6 +285,7 @@ struct MapDetailPanel<Supporting: View, Actions: View>: View {
 
     let title: String
     let closeLabel: String
+    var showsBackButton = false
     let scrollIdentifier: String
     let narrativeIdentifier: String
     let content: MapDetailTextContent
@@ -295,19 +296,19 @@ struct MapDetailPanel<Supporting: View, Actions: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
+                if showsBackButton {
+                    dismissButton
+                }
+
                 Text(title)
                     .font(.headline)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityAddTraits(.isHeader)
 
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
+                if !showsBackButton {
+                    dismissButton
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .frame(minWidth: 44, minHeight: 44)
-                .accessibilityLabel(closeLabel)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -341,6 +342,16 @@ struct MapDetailPanel<Supporting: View, Actions: View>: View {
         }
         .background(Color(uiColor: .secondarySystemGroupedBackground))
         .accessibilityElement(children: .contain)
+    }
+
+    private var dismissButton: some View {
+        Button(action: onDismiss) {
+            Image(systemName: showsBackButton ? "chevron.backward" : "xmark")
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .frame(minWidth: 44, minHeight: 44)
+        .accessibilityLabel(closeLabel)
     }
 }
 

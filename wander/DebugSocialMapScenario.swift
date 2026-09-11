@@ -84,7 +84,7 @@ struct DebugSocialMapScenarioView: View {
     }
 
     private var mapScene: some View {
-        DebugSocialMapScene(kind: scene)
+        DebugSocialMapScene(kind: scene, isListActive: dockSelection == .explore)
             .id("\(scene.rawValue)-\(revision)")
     }
 }
@@ -95,6 +95,9 @@ private struct DebugSocialMapScene: View {
     private static let arguments = Set(ProcessInfo.processInfo.arguments)
 
     private let friends: [String: FriendLocation]
+    private let isListActive: Bool
+    @State private var requestedRosterIDs: Set<String> = []
+    @State private var didSuspendRosters = false
     @StateObject private var locationTracker: LocationTracker
     @State private var plans: [String: OutingPlan]
     @State private var selectedDetail: MapDetailSelection?
@@ -110,7 +113,8 @@ private struct DebugSocialMapScene: View {
         arguments.contains("-debug-social-map-" + argument)
     }
 
-    init(kind: DebugSocialMapScenarioView.SceneKind) {
+    init(kind: DebugSocialMapScenarioView.SceneKind, isListActive: Bool) {
+        self.isListActive = isListActive
         self.friends = Self.makeFriends(kind: kind)
         let coordinate = Self.coordinate
         _locationTracker = StateObject(wrappedValue: LocationTracker(
@@ -119,10 +123,10 @@ private struct DebugSocialMapScene: View {
                 longitude: coordinate.longitude
             )
         ))
-        let events = kind == .people ? [] : [
-            Self.plan(number: 1, category: .meal),
-            Self.plan(number: 2, category: .coffee)
-        ]
+        let events: [OutingPlan] = kind == .people || Self.hasArgument("empty-list") ? [] :
+            (1...(Self.hasArgument("many-events") ? 18 : Self.hasArgument("social-list") || Self.hasArgument("participants-list") ? 4 : 2)).map {
+                Self.plan(number: $0, category: $0 % 2 == 0 ? .coffee : .meal)
+            }
         _plans = State(initialValue: Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0) }))
         if Self.hasArgument("open-event"), let event = events.last {
             _selectedDetail = State(initialValue: .outing(event.id))
@@ -147,13 +151,18 @@ private struct DebugSocialMapScene: View {
 
     private var presentations: [String: MapOutingPlan] {
         plans.mapValues { plan in
-            let isGuest = Self.hasArgument("guest")
-            let response = responses[plan.id] ?? (isGuest ? .notResponded : .attending)
+            let isGuest = Self.hasArgument("guest") || (Self.hasArgument("social-list") && !plan.id.hasSuffix("3"))
+            let initialResponse: OutingAttendanceParticipationState = Self.hasArgument("social-list") && plan.id.hasSuffix("2")
+                ? .attending : Self.hasArgument("social-list") && plan.id.hasSuffix("4") ? .declined
+                : isGuest ? .notResponded : .attending
+            let response = responses[plan.id] ?? initialResponse
             let state: OutingAttendanceParticipationState = Self.hasArgument("loading")
                 ? .loading : Self.hasArgument("unavailable") ? .unavailable : response
             let roster: OutingAttendanceRosterState = Self.hasArgument("loading")
                 ? .loading : Self.hasArgument("unavailable") ? .unavailable : .available
-            let count = Self.hasArgument("stress") ? 9 : isGuest ? 2 : 0
+            let participantCounts = ["1": 0, "2": 1, "3": 3, "4": 5]
+            let count = Self.hasArgument("participants-list") ? participantCounts[String(plan.id.suffix(1)), default: 0]
+                : Self.hasArgument("stress") ? 9 : isGuest ? 2 : 0
             var attendees = (0..<count).map { index in
                 MapOutingAttendee(
                     userID: "scenario-attendee-\(index)", displayName: "Invité \(index + 1)",
@@ -179,28 +188,49 @@ private struct DebugSocialMapScene: View {
 
     var body: some View {
         let presentations = presentations
-        MapDetailSplitView(isPresented: selectedDetail != nil) {
-            if let id = selectedDetail?.outingEventID, let outing = presentations[id] {
-                OutingPlanDetailCardView(
-                    outing: outing,
-                    onDismiss: { selectedDetail = nil },
-                    onEdit: { editingEvent = outing.plan },
-                    onOpenDirections: { showsDirections = true },
-                    onSetAttendance: { responses[id] = $0 ? .attending : .declined }
-                )
-                .id(id)
-            } else if let id = selectedDetail?.friendUserID, let friend = friends[id] {
-                FriendProfileContentView(
-                    displayName: friend.displayName,
-                    avatarID: friend.avatarID,
-                    profileColorHex: friend.profileColorHex,
-                    isGhostModeEnabled: Self.hasArgument("ghost"),
-                    location: Self.hasArgument("missing-location") ? nil : friend,
-                    isLocationFresh: !Self.hasArgument("stale"),
-                    onDismiss: { selectedDetail = nil },
-                    onOpenDirections: { showsDirections = true }
-                )
-                .id(id)
+        MapDetailSplitView(isPresented: true) {
+            MapEventsPanelView(
+                outings: Self.hasArgument("list-loading") || Self.hasArgument("list-error") ? [:] : presentations,
+                showsDetail: selectedDetail != nil,
+                currentLocation: listLocation,
+                isLoading: Self.hasArgument("list-loading"),
+                hasLoadError: Self.hasArgument("list-error") || Self.hasArgument("partial-list-error"),
+                isListActive: isListActive,
+                onVisibleEventIDsChange: { ids in
+                    if !isListActive && ids.isEmpty { didSuspendRosters = true }
+                    requestedRosterIDs = ids
+                },
+                onSetAttendance: { id, shouldAttend in
+                    responses[id] = shouldAttend ? .attending : .declined
+                },
+                onEdit: { id in editingEvent = plans[id] },
+                onSelect: { id in
+                    selectedDetail = .outing(id)
+                    centerOnEvent = id
+                }
+            ) {
+                if let id = selectedDetail?.outingEventID, let outing = presentations[id] {
+                    OutingPlanDetailCardView(
+                        outing: outing,
+                        onDismiss: { selectedDetail = nil },
+                        onEdit: { editingEvent = outing.plan },
+                        onOpenDirections: { showsDirections = true },
+                        onSetAttendance: { responses[id] = $0 ? .attending : .declined }
+                    )
+                    .id(id)
+                } else if let id = selectedDetail?.friendUserID, let friend = friends[id] {
+                    FriendProfileContentView(
+                        displayName: friend.displayName,
+                        avatarID: friend.avatarID,
+                        profileColorHex: friend.profileColorHex,
+                        isGhostModeEnabled: Self.hasArgument("ghost"),
+                        location: Self.hasArgument("missing-location") ? nil : friend,
+                        isLocationFresh: !Self.hasArgument("stale"),
+                        onDismiss: { selectedDetail = nil },
+                        onOpenDirections: { showsDirections = true }
+                    )
+                    .id(id)
+                }
             }
         } map: {
             if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
@@ -263,16 +293,34 @@ private struct DebugSocialMapScene: View {
             onSelectFriend: { selectedDetail = .friend($0) },
             onSelectOutingPlan: { selectedDetail = .outing($0) }
         )
+        .overlay(alignment: .topLeading) {
+            if Self.hasArgument("roster-probe") {
+                Text("Groupes : \(requestedRosterIDs.count)")
+                    .font(.caption)
+                    .accessibilityIdentifier("debug-list-rosters")
+                    .accessibilityValue(requestedRosterIDs.sorted().joined(separator: ",") + ";suspended=\(didSuspendRosters)")
+            }
+        }
+    }
+
+    private var listLocation: CLLocation? {
+        guard !Self.hasArgument("list-no-location") else { return nil }
+        return CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: Self.coordinate.latitude + 0.0015, longitude: Self.coordinate.longitude),
+            altitude: 0, horizontalAccuracy: 10, verticalAccuracy: -1,
+            timestamp: Self.hasArgument("list-stale-location") ? Date().addingTimeInterval(-600) : Date()
+        )
     }
 
     private static func plan(number: Int, category: OutingCategory) -> OutingPlan {
-        let id = UUID(uuidString: "00000000-0000-4000-8000-00000000000\(number)")!
+        let id = UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", number))!
         let date = Date()
         return OutingPlan(
             eventID: id, eventIDValue: id.uuidString.lowercased(), ownerID: ownerID,
             publicationID: id, publicationIDValue: id.uuidString.lowercased(),
             displayName: "Moi",
-            placeName: hasArgument("stress") ? "Café du parc et des promenades au bord de la rivière" : category.title,
+            placeName: hasArgument("social-list") ? ["Bistrot du parc", "Café des amis", "Chez vous", "Café de la place"][number - 1]
+                : hasArgument("many-events") ? "Sortie \(number)" : hasArgument("stress") ? "Café du parc et des promenades au bord de la rivière" : category.title,
             address: "Lieu de test",
             category: category, coordinate: coordinate,
             plannedAt: date.addingTimeInterval(Double(number) * 3600),

@@ -55,6 +55,7 @@ final class OutingAttendanceService: ObservableObject {
     private var observedCurrentUserID: String?
     private var acceptedFriendUserIDs: Set<String> = []
     private var selectedEventID: String?
+    private var visibleRosterEventIDs: Set<String> = []
 
     private var attendanceListeners: [String: ListenerRegistration] = [:]
     private var attendanceListenerTokens: [String: UUID] = [:]
@@ -110,7 +111,8 @@ final class OutingAttendanceService: ObservableObject {
     func observe(
         events: [String: OutingPlan],
         acceptedFriendUserIDs: Set<String>,
-        selectedEventID: String?
+        selectedEventID: String?,
+        visibleRosterEventIDs: Set<String> = []
     ) {
         guard let authenticatedUserID = currentUserID(),
               !authenticatedUserID.isEmpty else {
@@ -124,6 +126,7 @@ final class OutingAttendanceService: ObservableObject {
         }
         self.acceptedFriendUserIDs = acceptedFriendUserIDs
         self.selectedEventID = selectedEventID
+        self.visibleRosterEventIDs = visibleRosterEventIDs.intersection(events.keys)
 
         let friendEvents = events.filter { _, event in
             event.ownerID != authenticatedUserID
@@ -149,6 +152,7 @@ final class OutingAttendanceService: ObservableObject {
         observedCurrentUserID = nil
         acceptedFriendUserIDs = []
         selectedEventID = nil
+        visibleRosterEventIDs = []
         updateTokens = [:]
         updatingEventIDs = []
     }
@@ -666,6 +670,7 @@ final class OutingAttendanceService: ObservableObject {
             return false
         }
         return selectedEventID == event.eventIDValue
+            || visibleRosterEventIDs.contains(event.eventIDValue)
             || isAttending(
                 eventIDValue: event.eventIDValue,
                 publicationIDValue: event.publicationIDValue

@@ -15,7 +15,8 @@ struct OutingPlanDetailCardView: View {
     var body: some View {
         MapDetailPanel(
             title: outing.plan.placeName,
-            closeLabel: "Fermer la fiche de la sortie",
+            closeLabel: "Retour aux événements",
+            showsBackButton: true,
             scrollIdentifier: "outing-detail-scroll",
             narrativeIdentifier: "outing-detail-narrative",
             content: narrative,
@@ -38,37 +39,13 @@ struct OutingPlanDetailCardView: View {
         let declines = outing.visibleDeclines
         let fragments: [MapDetailTextContent.Fragment] = [
             .avatars([outing.organizer.avatarID]), .text(" "), .emphasis(organizer),
-            .text(" \(verb) "), .emphasis(activityDescription),
-            .text(" \(activityEmoji), le 📅 "), .emphasis(dateDescription), .text(".\n")
+            .text(" \(verb) "), .emphasis(outing.plan.category.activityDescription),
+            .text(" \(outing.plan.category.emoji), le 📅 "), .emphasis(dateDescription), .text(".\n")
         ]
         return MapDetailTextContent(
             fragments: fragments + rosterFragments(participants: participants, declines: declines),
             accessibilityLabel: narrativeAccessibilityText(participants: participants, declines: declines)
         )
-    }
-
-    private var activityDescription: String {
-        switch outing.plan.category {
-        case .coffee: "un café"
-        case .meal: "un repas"
-        case .drinks: "un verre"
-        case .walk: "une balade"
-        case .culture: "une sortie culturelle"
-        case .sport: "une séance de sport"
-        case .other: "une sortie"
-        }
-    }
-
-    private var activityEmoji: String {
-        switch outing.plan.category {
-        case .coffee: "☕️"
-        case .meal: "🍽️"
-        case .drinks: "🍻"
-        case .walk: "🚶"
-        case .culture: "🎭"
-        case .sport: "🏃"
-        case .other: "✨"
-        }
     }
 
     private var dateDescription: String {
@@ -103,7 +80,7 @@ struct OutingPlanDetailCardView: View {
         let organizer = outing.isCurrentUser
             ? "Vous organisez"
             : "\(outing.organizer.displayName) organise"
-        var result = "\(organizer) \(activityDescription), le "
+        var result = "\(organizer) \(outing.plan.category.activityDescription), le "
             + dateDescription + ". "
         switch outing.rosterState {
         case .available:

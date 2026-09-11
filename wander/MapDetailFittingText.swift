@@ -5,6 +5,7 @@ struct MapDetailTextContent: Equatable {
     enum Fragment: Equatable {
         case text(String)
         case emphasis(String)
+        case highlighted(String)
         case avatars([String])
     }
 
@@ -20,6 +21,7 @@ struct MapDetailFittingText: UIViewRepresentable {
     let content: MapDetailTextContent
     let minimumFontSize: CGFloat
     let identifier: String
+    var expandsToFit = true
 
     func makeUIView(context: Context) -> MapDetailFittingLabel {
         MapDetailFittingLabel()
@@ -42,7 +44,7 @@ struct MapDetailFittingText: UIViewRepresentable {
         context: Context
     ) -> CGSize? {
         guard let width = proposal.width, width.isFinite else { return nil }
-        return uiView.fittedSize(width: width, height: proposal.height)
+        return uiView.fittedSize(width: width, height: expandsToFit ? proposal.height : nil)
     }
 }
 
@@ -56,11 +58,13 @@ final class MapDetailFittingLabel: UILabel {
     private var fittedResult = CGSize.zero
     private var measuredWidth: CGFloat?
     private var measurements: [Measurement] = []
+    private var highlightedLayout: MapDetailHighlightedLayout?
 
     private struct Measurement {
         let fontSize: CGFloat
         let text: NSAttributedString
         let size: CGSize
+        let highlightedLayout: MapDetailHighlightedLayout?
     }
 
     override init(frame: CGRect) {
@@ -137,10 +141,20 @@ final class MapDetailFittingLabel: UILabel {
 
         // A minimum-size overflow is returned at its full height to the ScrollView.
         attributedText = best.text
+        highlightedLayout = best.highlightedLayout
+        setNeedsDisplay()
         preferredMaxLayoutWidth = width
         fittedProposal = proposal
         fittedResult = CGSize(width: width, height: best.size.height)
         return fittedResult
+    }
+
+    override func drawText(in rect: CGRect) {
+        guard let highlightedLayout else {
+            super.drawText(in: rect)
+            return
+        }
+        highlightedLayout.draw(in: rect)
     }
 
     private func measure(fontSize: CGFloat, width: CGFloat) -> Measurement {
@@ -148,12 +162,24 @@ final class MapDetailFittingLabel: UILabel {
             return cached
         }
         let text = attributedContent(fontSize: fontSize, width: width)
-        measuringLabel.attributedText = text
-        let size = measuringLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        let hasHighlights = content.fragments.contains {
+            if case .highlighted = $0 { return true }
+            return false
+        }
+        let highlightedLayout = hasHighlights
+            ? MapDetailHighlightedLayout(text: text, width: width, fontSize: fontSize) : nil
+        let size: CGSize
+        if let highlightedLayout {
+            size = highlightedLayout.size
+        } else {
+            measuringLabel.attributedText = text
+            size = measuringLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        }
         let measurement = Measurement(
             fontSize: fontSize,
             text: text,
-            size: CGSize(width: ceil(size.width), height: ceil(size.height))
+            size: CGSize(width: ceil(size.width), height: ceil(size.height)),
+            highlightedLayout: highlightedLayout
         )
         if measurements.count == 64 { measurements.removeFirst() }
         measurements.append(measurement)
@@ -163,10 +189,10 @@ final class MapDetailFittingLabel: UILabel {
     private func attributedContent(fontSize: CGFloat, width: CGFloat) -> NSAttributedString {
         let result = NSMutableAttributedString(string: "")
         let font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
-        let traits = UITraitCollection(traitsFrom: [
-            UITraitCollection(userInterfaceStyle: appearance),
-            UITraitCollection(accessibilityContrast: contrast)
-        ])
+        let traits = UITraitCollection { traits in
+            traits.userInterfaceStyle = appearance
+            traits.accessibilityContrast = contrast
+        }
         let secondary = UIColor.secondaryLabel.resolvedColor(with: traits)
         let primary = UIColor.label.resolvedColor(with: traits)
         let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: secondary]
@@ -179,6 +205,12 @@ final class MapDetailFittingLabel: UILabel {
                 result.append(NSAttributedString(string: value, attributes: [
                     .font: UIFont.systemFont(ofSize: fontSize, weight: .semibold),
                     .foregroundColor: primary
+                ]))
+            case .highlighted(let value):
+                result.append(NSAttributedString(string: value, attributes: [
+                    .font: UIFont.systemFont(ofSize: fontSize, weight: .semibold),
+                    .foregroundColor: UIColor.systemBlue.resolvedColor(with: traits),
+                    .mapDetailHighlight: UIColor.systemBlue.withAlphaComponent(0.08).resolvedColor(with: traits)
                 ]))
             case .avatars(let avatarIDs):
                 guard !avatarIDs.isEmpty else { continue }
@@ -212,6 +244,66 @@ final class MapDetailFittingLabel: UILabel {
         paragraph.alignment = .natural
         result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
         return result
+    }
+}
+
+private extension NSAttributedString.Key {
+    static let mapDetailHighlight = NSAttributedString.Key("wander.mapDetailHighlight")
+}
+
+/// One TextKit layout supplies the measured height, glyphs and per-line backgrounds.
+/// Plain detail text continues to use UILabel's existing fitting behavior.
+private final class MapDetailHighlightedLayout {
+    private let storage: NSTextStorage
+    private let manager = NSLayoutManager()
+    private let container: NSTextContainer
+    private let inset = CGSize(width: 3, height: 2)
+    private let fontSize: CGFloat
+    private var backgrounds: [(rect: CGRect, color: UIColor)] = []
+    let size: CGSize
+
+    // Avoid the Swift 6.2 isolated-deinit runtime crash also covered by
+    // MapSocialProximityController. This layout is owned only by the main-actor label.
+    nonisolated deinit {}
+
+    init(text: NSAttributedString, width: CGFloat, fontSize: CGFloat) {
+        self.fontSize = fontSize
+        storage = NSTextStorage(attributedString: text)
+        container = NSTextContainer(size: CGSize(
+            width: max(1, width - 6), height: .greatestFiniteMagnitude
+        ))
+        container.lineFragmentPadding = 0
+        container.lineBreakMode = .byWordWrapping
+        storage.addLayoutManager(manager)
+        manager.addTextContainer(container)
+        manager.ensureLayout(for: container)
+        size = CGSize(width: width, height: ceil(manager.usedRect(for: container).maxY) + 4)
+
+        storage.enumerateAttribute(.mapDetailHighlight, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let color = value as? UIColor else { return }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            manager.enumerateLineFragments(forGlyphRange: glyphs) { _, _, _, lineRange, _ in
+                let portion = NSIntersectionRange(glyphs, lineRange)
+                guard portion.length > 0 else { return }
+                let rect = self.manager.boundingRect(forGlyphRange: portion, in: self.container)
+                self.backgrounds.append((rect.insetBy(dx: -2, dy: -0.5), color))
+            }
+        }
+    }
+
+    func draw(in rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        context.saveGState()
+        context.translateBy(x: rect.minX + inset.width, y: rect.minY + inset.height)
+        for background in backgrounds {
+            let path = RoundedRectangle(cornerRadius: fontSize * 0.24, style: .continuous)
+                .path(in: background.rect)
+            context.addPath(path.cgPath)
+            context.setFillColor(background.color.cgColor)
+            context.fillPath()
+        }
+        manager.drawGlyphs(forGlyphRange: manager.glyphRange(for: container), at: .zero)
+        context.restoreGState()
     }
 }
 

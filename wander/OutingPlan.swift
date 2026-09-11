@@ -37,6 +37,30 @@ enum OutingCategory: String, CaseIterable, Identifiable {
         }
     }
 
+    var emoji: String {
+        switch self {
+        case .coffee: "☕️"
+        case .meal: "🍽️"
+        case .drinks: "🍻"
+        case .walk: "🚶"
+        case .culture: "🎭"
+        case .sport: "🏃"
+        case .other: "✨"
+        }
+    }
+
+    var activityDescription: String {
+        switch self {
+        case .coffee: "un café"
+        case .meal: "un repas"
+        case .drinks: "un verre"
+        case .walk: "une balade"
+        case .culture: "une sortie culturelle"
+        case .sport: "une séance de sport"
+        case .other: "une sortie"
+        }
+    }
+
     var systemImageName: String {
         switch self {
         case .coffee:

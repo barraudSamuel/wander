@@ -24,7 +24,7 @@ Use four-space indentation and Xcode's Swift formatting. Use `UpperCamelCase` fo
 
 ## Native iOS Design Direction
 
-Until explicitly changed by the project owner, use only Apple's default iOS visual language. Prefer standard SwiftUI/UIKit controls, navigation, sheets, alerts, toolbars, SF Symbols, semantic system colors, Dynamic Type, and platform spacing. Do not add custom fonts, decorative gradients or shadows, bespoke cards/buttons, nonstandard navigation, or third-party UI libraries. Custom drawing is allowed only where core map, heat-map, or fog behavior requires it; surrounding controls must remain native and accessible.
+Until explicitly changed by the project owner, use only Apple's default iOS visual language. Prefer standard SwiftUI/UIKit controls, navigation, sheets, alerts, toolbars, SF Symbols, semantic system colors and platform spacing. Do not add custom fonts, decorative gradients or shadows, bespoke cards/buttons, nonstandard navigation, or third-party UI libraries. Custom drawing is allowed only where core map, heat-map, or fog behavior requires it; surrounding controls must remain native and accessible.
 
 ## Compound Engineering Workflow
 
@@ -100,6 +100,8 @@ only after its acceptance criteria pass. Then stop and present the next sprint
 for separate approval. Do not implement future sprint scope early.
 
 ## Testing Guidelines
+
+Do not add or run dedicated accessibility tests (large text / Dynamic Type sizes, Display Zoom, Accessibility Zoom, VoiceOver, or Switch Control) unless Samuel explicitly requests them. Do not carry these checks forward as pending validation requirements from older plans or review notes. Keep native accessibility support in the app and use standard text size for functional UI tests.
 
 There is no XCTest target yet. Verify affected flows on a simulator or device. Add non-UI tests to a future `wanderTests` target using `<TypeName>Tests.swift`; record exact validation in the plan and PR.
 
