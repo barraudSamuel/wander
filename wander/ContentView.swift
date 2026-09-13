@@ -404,14 +404,12 @@ struct ContentView: View {
         friendSummaries: [FriendMapSummary]
     ) -> some View {
         let outingPlans = mapOutingPlans
-        let selectedOutingPlan = selectedOutingPlanEventID.flatMap {
-            outingPlans[$0]
-        }
 
         return MapDetailSplitView(isPresented: true) {
             MapEventsPanelView(
                 outings: outingPlans,
-                showsDetail: selectedMapDetail != nil,
+                showsDetail: selectedMapDetail?.friendUserID != nil,
+                selectedEventID: selectedOutingPlanEventID,
                 currentLocation: locationTracker.lastLocation,
                 isLoading: outingPlanService.isLoading,
                 hasLoadError: outingPlanService.hasLoadError,
@@ -428,35 +426,13 @@ struct ContentView: View {
                     outingComposerDetent = .large
                     outingComposerVisible = true
                 },
+                onOpenDirections: presentOutingNavigationOptions,
                 onSelect: { eventID in
                     selectedMapDetail = .outing(eventID)
                     centerOnOutingPlanEventID = eventID
                 }
             ) {
-                if let selectedOutingPlan {
-                    OutingPlanDetailCardView(
-                        outing: selectedOutingPlan,
-                        onDismiss: { selectedMapDetail = nil },
-                        onEdit: {
-                            pendingOutingCoordinate = nil
-                            editingOutingEvent = selectedOutingPlan.plan
-                            outingComposerDetent = .large
-                            outingComposerVisible = true
-                        },
-                        onOpenDirections: {
-                            presentOutingNavigationOptions(
-                                eventID: selectedOutingPlan.plan.eventIDValue
-                            )
-                        },
-                        onSetAttendance: { shouldAttend in
-                            setOutingAttendance(
-                                shouldAttend,
-                                eventID: selectedOutingPlan.plan.eventIDValue
-                            )
-                        }
-                    )
-                    .id(selectedOutingPlan.plan.eventIDValue)
-                } else if let userID = selectedMapDetail?.friendUserID {
+                if let userID = selectedMapDetail?.friendUserID {
                     FriendProfilePanel(
                         userID: userID,
                         service: friendSyncService,
@@ -523,7 +499,7 @@ struct ContentView: View {
                     ownExplorationStatusOverlay
                         .modifier(MapContentSafeArea())
 
-                    if selectedMapDetail == nil {
+                    if selectedMapDetail?.friendUserID == nil {
                         Button {
                             filterSheetVisible = true
                         } label: {

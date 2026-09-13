@@ -191,7 +191,8 @@ private struct DebugSocialMapScene: View {
         MapDetailSplitView(isPresented: true) {
             MapEventsPanelView(
                 outings: Self.hasArgument("list-loading") || Self.hasArgument("list-error") ? [:] : presentations,
-                showsDetail: selectedDetail != nil,
+                showsDetail: selectedDetail?.friendUserID != nil,
+                selectedEventID: selectedDetail?.outingEventID,
                 currentLocation: listLocation,
                 isLoading: Self.hasArgument("list-loading"),
                 hasLoadError: Self.hasArgument("list-error") || Self.hasArgument("partial-list-error"),
@@ -204,21 +205,13 @@ private struct DebugSocialMapScene: View {
                     responses[id] = shouldAttend ? .attending : .declined
                 },
                 onEdit: { id in editingEvent = plans[id] },
+                onOpenDirections: { _ in showsDirections = true },
                 onSelect: { id in
                     selectedDetail = .outing(id)
                     centerOnEvent = id
                 }
             ) {
-                if let id = selectedDetail?.outingEventID, let outing = presentations[id] {
-                    OutingPlanDetailCardView(
-                        outing: outing,
-                        onDismiss: { selectedDetail = nil },
-                        onEdit: { editingEvent = outing.plan },
-                        onOpenDirections: { showsDirections = true },
-                        onSetAttendance: { responses[id] = $0 ? .attending : .declined }
-                    )
-                    .id(id)
-                } else if let id = selectedDetail?.friendUserID, let friend = friends[id] {
+                if let id = selectedDetail?.friendUserID, let friend = friends[id] {
                     FriendProfileContentView(
                         displayName: friend.displayName,
                         avatarID: friend.avatarID,

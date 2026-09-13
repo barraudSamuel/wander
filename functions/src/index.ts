@@ -19,7 +19,7 @@ import {
   onDocumentWritten,
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
-import { expiredEventCutoff } from "./eventCleanupLogic.js";
+import { deleteExpiredEvents, expiredEventCutoff } from "./eventCleanupLogic.js";
 import {
   AttendanceCleanupCandidate,
   FriendshipCleanupDirection,
@@ -767,29 +767,11 @@ export const cleanupExpiredEvents = onSchedule(
   },
   async () => {
     const cutoff = Timestamp.fromDate(expiredEventCutoff(new Date()));
-    let deletedEventCount = 0;
-
-    while (true) {
-      const snapshot = await database
-        .collectionGroup("events")
-        .where("publishedAt", "<=", cutoff)
-        .limit(maximumBatchSize)
-        .get();
-      if (snapshot.empty) {
-        logger.info("Expired event cleanup completed.", {
-          cutoff: cutoff.toDate().toISOString(),
-          deletedEventCount,
-        });
-        return;
-      }
-
-      const batch = database.batch();
-      for (const document of snapshot.docs) {
-        batch.delete(document.ref);
-      }
-      await batch.commit();
-      deletedEventCount += snapshot.size;
-    }
+    const deletedEventCount = await deleteExpiredEvents(database, cutoff);
+    logger.info("Expired event cleanup completed.", {
+      cutoff: cutoff.toDate().toISOString(),
+      deletedEventCount,
+    });
   },
 );
 

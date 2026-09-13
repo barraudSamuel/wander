@@ -133,10 +133,13 @@ changement oui/non reste un événement distinct.
 Les événements sont stockés dans `users/{ownerId}/events/{eventId}` sans champ
 `expiresAt` ni TTL. La fonction planifiée `cleanupExpiredEvents`, déployée dans
 `asia-northeast3`, s’exécute toutes les heures et supprime les événements dont
-`publishedAt` date d’au moins 12 heures. Une modification renouvelle ce timestamp
-serveur : l’événement dispose donc de 12 heures supplémentaires.
-La suppression intervient en pratique entre 12 et 13 heures après la dernière
-publication. Une modification conserve `eventId` et `publicationId` : elle ne
+`plannedAt`, leur heure de début, date d’au moins 12 heures. La suppression
+intervient normalement entre 12 et 13 heures après le début prévu. Une
+modification sans changement d'heure ne prolonge pas cette durée ; une
+reprogrammation utilise la nouvelle heure de début. La sélection et la
+suppression d'un lot se font dans la même transaction Firestore pour protéger
+les événements reprogrammés pendant le nettoyage.
+Une modification conserve `eventId` et `publicationId` : elle ne
 renvoie pas la notification de publication et les réponses restent rattachées
 à l’événement. Seule la suppression, manuelle ou planifiée, nettoie les
 sous-collections `attendees` et `declines` via `cleanupEventAttendances`.
@@ -151,12 +154,17 @@ Elle ne supprime que les documents dont `joinedAt <= revokedAt` ou
 nouvelle réponse. Le tombstone n'est supprimé qu'après la réussite des deux
 directions ; les retries sont donc idempotents.
 
-La requête planifiée utilise l’index collection-group déclaré dans
-`firestore.indexes.json`. Cet index ne change pas avec la nouvelle durée : seul
-`cleanupExpiredEvents` doit être redéployé pour passer de 24 à 12 heures.
+La requête planifiée utilise l'index collection-group `events.plannedAt`
+déclaré dans `firestore.indexes.json`. Déployer les index et attendre que cet
+index soit prêt avant de redéployer uniquement `cleanupExpiredEvents`.
+L'index `events.publishedAt` reste déclaré pour que la fonction précédente
+continue à fonctionner pendant la transition.
 
-La fonction déjà déployée conserve son ancienne rétention de 24 heures jusqu’au
-redéploiement manuel de `cleanupExpiredEvents` avec cette version.
+Le correctif a été déployé le 13 septembre 2026 sur `wander-1954f` : index
+`plannedAt` confirmé `READY`, fonction `ACTIVE`, révision
+`cleanupexpiredevents-00003-cil` et cron `ENABLED` toutes les 60 minutes.
+Les preuves des 52 tests réussis sur l'émulateur et de la mise en service sont
+consignées dans `docs/plans/2026-09-13-expiration-evenements-apres-debut.md`.
 
 Installer et valider localement le backend :
 

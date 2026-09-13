@@ -96,6 +96,7 @@ struct MapEventsPanelView<Detail: View>: View {
 
     let outings: [String: MapOutingPlan]
     let showsDetail: Bool
+    var selectedEventID: String?
     var currentLocation: CLLocation?
     var isLoading = false
     var hasLoadError = false
@@ -104,6 +105,7 @@ struct MapEventsPanelView<Detail: View>: View {
     var onVisibleEventIDsChange: (Set<String>) -> Void = { _ in }
     var onSetAttendance: (String, Bool) -> Void = { _, _ in }
     var onEdit: (String) -> Void = { _ in }
+    var onOpenDirections: (String) -> Void = { _ in }
     let onSelect: (String) -> Void
     @ViewBuilder let detail: () -> Detail
 
@@ -219,17 +221,27 @@ struct MapEventsPanelView<Detail: View>: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("event-list-row-" + outing.plan.id)
-        .accessibilityHint("Ouvrir l’événement et le situer sur la carte")
+        .accessibilityHint("Centrer la carte sur cet événement")
+        .accessibilityAddTraits(selectedEventID == outing.plan.id ? .isSelected : [])
+        .contextMenu {
+            eventActions(for: outing)
+            Button("Itinéraire", systemImage: "map") { onOpenDirections(outing.plan.id) }
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if outing.isCurrentUser {
-                Button("Modifier", systemImage: "pencil") { onEdit(outing.plan.id) }
-                    .tint(.blue)
-            } else if MapEventListPresentation.canRespond(to: outing) {
-                Button("Participer", systemImage: "checkmark") { onSetAttendance(outing.plan.id, true) }
-                    .tint(.blue)
-                Button("Ne pas participer", systemImage: "xmark") { onSetAttendance(outing.plan.id, false) }
-                    .tint(.gray)
-            }
+            eventActions(for: outing)
+        }
+    }
+
+    @ViewBuilder
+    private func eventActions(for outing: MapOutingPlan) -> some View {
+        if outing.isCurrentUser {
+            Button("Modifier", systemImage: "pencil") { onEdit(outing.plan.id) }
+                .tint(.blue)
+        } else if MapEventListPresentation.canRespond(to: outing) {
+            Button("Participer", systemImage: "checkmark") { onSetAttendance(outing.plan.id, true) }
+                .tint(.blue)
+            Button("Refuser", systemImage: "xmark") { onSetAttendance(outing.plan.id, false) }
+                .tint(.gray)
         }
     }
 

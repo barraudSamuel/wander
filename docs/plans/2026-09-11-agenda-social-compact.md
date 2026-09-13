@@ -1,8 +1,9 @@
 ---
 title: Agenda social compact
-status: in_progress
+status: completed
 date: 2026-09-11
 approved_at: 2026-09-11
+completed_at: 2026-09-11
 owner: Samuel
 ---
 
@@ -42,9 +43,9 @@ La liste garde ses observations de groupes et son défilement au retour.
 - [x] Enregistrer l’accord.
 - [x] Remplacer les paragraphes par trois lignes natives compactes.
 - [x] Relier les actions de balayage aux réponses et à l’édition existantes.
-- [ ] Vérifier les noms longs, zéro/une/plusieurs personnes, états et actions directes.
-- [ ] Vérifier la densité, le défilement, le retour et le divider sur l’iPhone 17 existant.
-- [ ] Relire, documenter les résultats et actualiser les quatre notes Obsidian.
+- [x] Vérifier les noms longs, zéro/une/plusieurs personnes, états et actions directes.
+- [x] Vérifier la densité, le défilement, le retour et le divider sur l’iPhone 17 existant.
+- [x] Relire, documenter les résultats et actualiser les quatre notes Obsidian.
 
 ## Risques et validation
 
@@ -74,9 +75,42 @@ et aucune mise à jour en cours. Le scénario local suit exactement les mêmes c
 La première commande de validation a échoué pendant la reconstitution du cache
 SwiftPM : `Package.swift` de Firebase avait changé pendant sa lecture. Aucune
 compilation applicative ni aucun test n’avaient alors démarré. La reprise compile
-correctement, résultats des parcours en cours.
+correctement. Le premier passage a détecté une ligne de 102,33 points ; les marges
+natives de cellule ont été fixées à 8 points en haut et en bas. Le contrôle de
+densité passe ensuite dans l’intervalle 70–94 points et la capture confirme les
+trois lignes compactes. Les dates affichent bien « 11 sept. » même sur un appareil
+configuré en anglais.
 
 La somme SHA du fichier `MapDetailSplitView.swift` correspond à celle enregistrée
 avant les modifications. `git diff --check` passe. Les quatre notes Obsidian du
 périmètre sont mises à jour ; le constat 047 inclut les réponses par balayage avec
 un compte authentifié. Aucun changement de service, schéma ou règle Firebase.
+
+### Validation exacte
+
+Sur l’iPhone 17 déjà démarré `6F13855D-10B8-45AF-9205-17C8393379E3`, Debug :
+
+- 11 tests `MapEventListPresentationTests` réussis dans
+  `/tmp/wander-compact-agenda-validation.xcresult`.
+- Cinq parcours UI réussis dans ce même résultat : réponses inconnues/en cours,
+  lieux longs/localisation absente ou périmée, groupes 0/1/3/5 et états inconnus,
+  observations au défilement/suspension hors Explorer, redimensionnement/retour.
+  Le test de densité avait échoué avant correction des marges.
+- Après correction, deux tests UI réussis dans
+  `/tmp/wander-compact-agenda-density.xcresult` :
+  `testCompactListDensityAndDirectSwipeActions` et
+  `testEventListResizeScrollAndReturnPreservePosition`.
+  Participer/refuser cible la bonne ligne sans ouvrir la fiche ni déplacer le
+  divider ; Modifier ouvre le formulaire de son événement.
+- Bilan : 11 tests unitaires et 6 parcours UI distincts réussis, dont le parcours
+  de redimensionnement rejoué après correction. Dernière commande : `TEST SUCCEEDED`.
+- Captures finales exportées et inspectées dans
+  `/tmp/wander-compact-agenda-density-screens/` ; capture principale
+  `F9DE2663-55A1-4897-9BAC-92A47195277C.png`.
+- Avertissements préexistants : extraction AppIntents et versions des extensions
+  15/27 différentes de celle de l’app 41. Aucun nouvel avertissement Swift observé.
+
+La police emoji absente du simulateur produit encore des glyphes de remplacement
+et un espacement incorrect, déjà suivi dans 048. Les caractères demandés restent
+dans les textes. Aucun runtime ni aucune police n’a été modifié. Les échanges
+distants authentifiés restent la limite de validation 047, sans défaut observé.
