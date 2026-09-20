@@ -1443,7 +1443,7 @@ struct MapWithFogView: UIViewRepresentable {
     /// Fog colour — used by the polygon renderer.
     var fogColor: UIColor = UIColor.black.withAlphaComponent(0.22)
 
-    /// When toggled, follows the user's location while keeping north at the top.
+    /// Restores the local zoom and follows new positions until the next map gesture.
     @Binding var centerOnUser: Bool
 
     /// When toggled, resets the map camera to a north-up, flat orientation.
@@ -1591,7 +1591,9 @@ struct MapWithFogView: UIViewRepresentable {
            !context.coordinator.didCenterOnUser {
             context.coordinator.didCenterOnUser = true
             context.coordinator.didSetInitialRegion = true
-            setFocusedRegion(on: uiView, center: coordinate, animated: true)
+            if !centerOnUser {
+                setFocusedRegion(on: uiView, center: coordinate, animated: true)
+            }
         } else if !context.coordinator.didSetInitialRegion,
                   cityBoundaryCoordinates.count >= 3 {
             context.coordinator.didSetInitialRegion = true
@@ -1599,9 +1601,16 @@ struct MapWithFogView: UIViewRepresentable {
             uiView.setRegion(region, animated: true)
         }
 
-        if centerOnUser, locationTracker.lastLocation != nil {
-            DispatchQueue.main.async { centerOnUser = false }
-            uiView.setUserTrackingMode(.follow, animated: true)
+        if centerOnUser,
+           let coordinate = locationTracker.lastLocation?.coordinate,
+           !context.coordinator.isConsumingRecenterRequest {
+            let coordinator = context.coordinator
+            coordinator.isConsumingRecenterRequest = true
+            DispatchQueue.main.async {
+                centerOnUser = false
+                coordinator.isConsumingRecenterRequest = false
+            }
+            coordinator.userCamera.recenter(on: uiView, at: coordinate)
         }
 
         if resetMapOrientation {
@@ -1627,6 +1636,10 @@ struct MapWithFogView: UIViewRepresentable {
                 context: context
             )
         }
+
+        if let coordinate = locationTracker.lastLocation?.coordinate {
+            context.coordinator.userCamera.updateLocation(coordinate, on: uiView)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1647,6 +1660,7 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.removeLongPressRecognizer(from: uiView)
         coordinator.removeImmediateSocialAnnotationRecognizer(from: uiView)
         coordinator.removeMapOffscreenIndicatorContainer()
+        coordinator.userCamera.stopFollowing()
         coordinator.socialProximityController.tearDown()
     }
 
@@ -1890,6 +1904,7 @@ struct MapWithFogView: UIViewRepresentable {
             return
         }
 
+        coordinator.userCamera.stopFollowing()
         guard focusDraftOuting(
             at: pendingOutingCoordinate,
             on: mapView,
@@ -1908,8 +1923,6 @@ struct MapWithFogView: UIViewRepresentable {
         guard visibleBounds.width > 0, visibleBounds.height > 0 else {
             return false
         }
-
-        mapView.setUserTrackingMode(.none, animated: false)
 
         let topInset = visibleBounds.minY + 24
         let exposedBottom = max(
@@ -1993,11 +2006,7 @@ struct MapWithFogView: UIViewRepresentable {
         center: CLLocationCoordinate2D,
         animated: Bool
     ) {
-        let region = MKCoordinateRegion(
-            center: center,
-            latitudinalMeters: 800,
-            longitudinalMeters: 800
-        )
+        let region = MapUserCameraController.focusedRegion(at: center)
         mapView.setRegion(region, animated: animated)
     }
 
@@ -2027,6 +2036,7 @@ struct MapWithFogView: UIViewRepresentable {
         // Publish the request before selection can synchronously call its delegate.
         coordinator.lastRequestedDetailSelection = requested
         if let requested {
+            coordinator.userCamera.stopFollowing()
             coordinator.socialProximityController.select(requested, on: mapView)
         } else {
             coordinator.socialProximityController.collapse(on: mapView)
@@ -2039,7 +2049,7 @@ struct MapWithFogView: UIViewRepresentable {
         friendLocations: [String: FriendLocation],
         context: Context
     ) {
-        mapView.setUserTrackingMode(.none, animated: false)
+        context.coordinator.userCamera.stopFollowing()
 
         if let coordinate = friendLocations[userID]?.coordinate {
             setFocusedRegion(on: mapView, center: coordinate, animated: true)
@@ -2060,7 +2070,7 @@ struct MapWithFogView: UIViewRepresentable {
             return
         }
 
-        mapView.setUserTrackingMode(.none, animated: false)
+        context.coordinator.userCamera.stopFollowing()
         setFocusedRegion(
             on: mapView,
             center: annotation.coordinate,
@@ -2175,6 +2185,8 @@ struct MapWithFogView: UIViewRepresentable {
         var lastHeatMapRevision = 0
         var didSetInitialRegion = false
         var didCenterOnUser = false
+        var isConsumingRecenterRequest = false
+        let userCamera = MapUserCameraController()
         var userLocationAnnotation: UserLocationAnnotation?
         private var userDisplayName = ""
         private var userAvatarID = ""
@@ -2594,6 +2606,7 @@ struct MapWithFogView: UIViewRepresentable {
             let indicatorView = FriendOffscreenIndicatorView(userID: userID)
             indicatorView.onActivate = { [weak self, weak mapView] userID in
                 guard let self, let mapView else { return }
+                self.userCamera.stopFollowing()
                 self.socialProximityController.center(on: .friend(userID), on: mapView)
             }
             container.addSubview(indicatorView)
@@ -2613,6 +2626,7 @@ struct MapWithFogView: UIViewRepresentable {
             let indicatorView = OutingOffscreenIndicatorView(eventID: eventID)
             indicatorView.onActivate = { [weak self, weak mapView] eventID in
                 guard let self, let mapView else { return }
+                self.userCamera.stopFollowing()
                 self.socialProximityController.center(on: .outing(eventID), on: mapView)
             }
             container.addSubview(indicatorView)
@@ -2981,10 +2995,14 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            let userInitiated = hasActiveMapGesture(in: mapView)
+            if userInitiated {
+                userCamera.stopFollowing()
+            }
             socialProximityController.visibleRegionDidChange(
                 on: mapView,
                 userInitiated: socialProximityController.hasActivePresentation
-                    && hasActiveMapGesture(in: mapView)
+                    && userInitiated
             )
             refreshMapOffscreenIndicators(on: mapView)
         }
@@ -2993,10 +3011,14 @@ struct MapWithFogView: UIViewRepresentable {
             _ mapView: MKMapView,
             regionWillChangeAnimated animated: Bool
         ) {
+            let userInitiated = hasActiveMapGesture(in: mapView)
+            if userInitiated {
+                userCamera.stopFollowing()
+            }
             socialProximityController.regionWillChange(
                 on: mapView,
                 userInitiated: socialProximityController.hasActivePresentation
-                    && hasActiveMapGesture(in: mapView)
+                    && userInitiated
             )
         }
 
@@ -3023,6 +3045,7 @@ struct MapWithFogView: UIViewRepresentable {
             regionDidChangeAnimated animated: Bool
         ) {
             socialProximityController.regionDidChange(on: mapView)
+            userCamera.regionDidChange(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -3209,6 +3232,7 @@ struct MapWithFogView: UIViewRepresentable {
             view: MKAnnotationView,
             on mapView: MKMapView
         ) {
+            userCamera.stopFollowing()
             guard let memberID = socialProximityController.activate(
                 annotation,
                 view: view,
@@ -3308,5 +3332,85 @@ struct MapWithFogView: UIViewRepresentable {
             )
             annotationView.accessibilityHint = "Afficher le profil de cet ami"
         }
+    }
+}
+
+// MARK: - User camera
+
+/// Owns the user camera without enabling MapKit's independent follow/zoom policy.
+@MainActor
+final class MapUserCameraController {
+    private(set) var isFollowing = false
+    private var isAnimating = false
+    private var latestCoordinate: CLLocationCoordinate2D?
+    private var lastAppliedCoordinate: CLLocationCoordinate2D?
+
+    static func focusedRegion(at coordinate: CLLocationCoordinate2D) -> MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: 800,
+            longitudinalMeters: 800
+        )
+    }
+
+    func recenter(on mapView: MKMapView, at coordinate: CLLocationCoordinate2D) {
+        guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+        latestCoordinate = coordinate
+        isFollowing = true
+        guard !isAnimating else { return }
+
+        let target = mapView.regionThatFits(Self.focusedRegion(at: coordinate))
+        let current = mapView.region
+        let isAtTarget = distance(current.center, coordinate) <= 5
+            && abs(current.span.latitudeDelta - target.span.latitudeDelta)
+                <= target.span.latitudeDelta * 0.01
+            && abs(current.span.longitudeDelta - target.span.longitudeDelta)
+                <= target.span.longitudeDelta * 0.01
+        lastAppliedCoordinate = coordinate
+        guard !isAtTarget else { return }
+
+        // Publish before MapKit can synchronously call its delegate.
+        isAnimating = true
+        mapView.setRegion(target, animated: true)
+    }
+
+    func updateLocation(_ coordinate: CLLocationCoordinate2D, on mapView: MKMapView) {
+        guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+        latestCoordinate = coordinate
+        followLatestLocation(on: mapView)
+    }
+
+    func regionDidChange(on mapView: MKMapView) {
+        isAnimating = false
+        followLatestLocation(on: mapView)
+    }
+
+    func stopFollowing() {
+        isFollowing = false
+        isAnimating = false
+        latestCoordinate = nil
+        lastAppliedCoordinate = nil
+    }
+
+    private func followLatestLocation(on mapView: MKMapView) {
+        guard isFollowing, !isAnimating,
+              let coordinate = latestCoordinate,
+              let lastAppliedCoordinate,
+              distance(lastAppliedCoordinate, coordinate) > 5 else { return }
+
+        // Updating only the center preserves the zoom, heading and pitch.
+        // Keep the latest position received during an animation for its completion.
+        self.lastAppliedCoordinate = coordinate
+        isAnimating = true
+        mapView.setCenter(coordinate, animated: true)
+    }
+
+    private func distance(
+        _ first: CLLocationCoordinate2D,
+        _ second: CLLocationCoordinate2D
+    ) -> CLLocationDistance {
+        CLLocation(latitude: first.latitude, longitude: first.longitude).distance(
+            from: CLLocation(latitude: second.latitude, longitude: second.longitude)
+        )
     }
 }

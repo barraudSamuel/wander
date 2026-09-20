@@ -112,7 +112,6 @@ struct ContentView: View {
     @State private var editingOutingEvent: OutingPlan?
     @State private var pendingOutingCoordinate: CLLocationCoordinate2D?
     @State private var centerOnUser = false
-    @State private var resetMapOrientation = false
     @State private var centerOnFriendUserID: String?
     @State private var centerOnOutingPlanEventID: String?
     @State private var selectedMapDetail: MapDetailSelection?
@@ -457,7 +456,7 @@ struct ContentView: View {
                     userAvatarID: avatarID,
                     userProfileColorHex: profileColorHex,
                     centerOnUser: $centerOnUser,
-                    resetMapOrientation: $resetMapOrientation,
+                    resetMapOrientation: .constant(false),
                     centerOnFriendUserID: $centerOnFriendUserID,
                     centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
                     pendingOutingCoordinate: pendingOutingCoordinate,
@@ -506,34 +505,16 @@ struct ContentView: View {
                     .modifier(MapContentSafeArea(edges: [.top, .trailing]))
                 }
             }
-            .overlay(alignment: .bottom) {
-                HStack(alignment: .bottom) {
-                    GhostModeMapControl(service: friendSyncService)
-
-                    Spacer()
-
-                    VStack(spacing: 10) {
-                        Button {
-                            resetMapOrientation = true
-                        } label: {
-                            Image(systemName: "safari")
-                        }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.large)
-                        .accessibilityLabel("Orienter la carte vers le nord")
-
-                        Button {
-                            centerOnUser = true
-                        } label: {
-                            Image(systemName: "scope")
-                        }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.large)
-                        .accessibilityLabel("Recentrer la carte sur ma position")
-                    }
+            .overlay(alignment: .bottomTrailing) {
+                Button {
+                    centerOnUser = true
+                } label: {
+                    Image(systemName: "scope")
                 }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .accessibilityLabel("Recentrer la carte sur ma position")
                 .padding(.horizontal)
                 .padding(.bottom, 8)
                 .modifier(MapContentSafeArea(edges: [.bottom, .horizontal]))
@@ -1348,100 +1329,6 @@ struct ContentView: View {
 }
 
 // MARK: - Ghost mode
-
-private struct GhostModeMapControl: View {
-    @ObservedObject var service: FriendSyncService
-    @State private var errorDetailsPresented = false
-    @State private var conflictDetailsPresented = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let conflictMessage = service.ghostModeConflictMessage {
-                Button {
-                    conflictDetailsPresented = true
-                } label: {
-                    Label("Visibilité mise à jour", systemImage: "info.circle")
-                }
-                .buttonStyle(.glass)
-                .accessibilityHint(
-                    "Lire pourquoi ton précédent choix n’a pas été appliqué"
-                )
-                .alert(
-                    "Visibilité mise à jour",
-                    isPresented: $conflictDetailsPresented
-                ) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(conflictMessage)
-                }
-            }
-
-            if service.ghostModeErrorMessage != nil {
-                Label("Réessayer", systemImage: "exclamationmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if service.isGhostModePending {
-                Text("En attente")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if service.isGhostModeEnabled {
-                Text("Indisponible")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            modeButton
-        }
-    }
-
-    private var modeButton: some View {
-        Button {
-            if service.ghostModeErrorMessage != nil {
-                errorDetailsPresented = true
-            } else if service.isGhostModePending {
-                service.retryGhostModeChange()
-            } else {
-                service.setGhostModeEnabled(!service.isGhostModeEnabled)
-            }
-        } label: {
-            Text("👻")
-                .accessibilityHidden(true)
-        }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .controlSize(.large)
-        .disabled(!service.canChangeGhostMode)
-        .accessibilityLabel("Mode fantôme")
-        .accessibilityValue(accessibilityStatus)
-        .accessibilityHint(
-            service.isGhostModePending || service.ghostModeErrorMessage != nil
-                ? "Réessayer la synchronisation de ton choix"
-                : service.isGhostModeEnabled
-                    ? "Reprendre le partage de ta position"
-                    : "Masquer ta position à tous tes amis"
-        )
-        .alert(
-            "Mode fantôme en attente",
-            isPresented: $errorDetailsPresented
-        ) {
-            Button("Réessayer") {
-                service.retryGhostModeChange()
-            }
-            Button("Fermer", role: .cancel) {}
-        } message: {
-            Text(service.ghostModeErrorMessage ?? "Vérifie ta connexion et réessaie.")
-        }
-    }
-
-    private var accessibilityStatus: String {
-        if service.isGhostModePending || service.ghostModeErrorMessage != nil {
-            return service.isGhostModeEnabled
-                ? "Activation en attente"
-                : "Désactivation en attente"
-        }
-        return service.isGhostModeEnabled ? "Activé" : "Désactivé"
-    }
-}
 
 struct GhostModeStatusView: View {
     @ObservedObject var service: FriendSyncService
