@@ -1,10 +1,11 @@
 ---
 id: "056"
 title: "Vérifier le zoom du recentrage sur iPhone 17"
-status: ready
+status: done
 priority: P3
 source: review
 created: 2026-09-20
+completed_at: 2026-09-20T12:43:20+09:00
 tags: [todo, map]
 ---
 
@@ -18,14 +19,15 @@ cadrages sociaux arrêtent ce suivi.
 
 L’application et les six tests MapKit compilent. Aucun test exécuté : Samuel a
 refusé le démarrage du simulateur et choisi de vérifier sur son iPhone.
-La disparition du symptôme reste donc à confirmer.
+Samuel confirme ensuite « c good mtn » après son test sur iPhone. Le symptôme
+est résolu selon ce retour et le finding est clôturé. Les tests automatisés
+restent non exécutés ; les scénarios secondaires ne sont pas confirmés un par un.
 
-## Validation attendue
+## Scénarios prévus, détail d’exécution non fourni
 
 - [ ] Depuis un zoom proche et éloigné, appuyer sur le recentrage et constater
   le retour au cadrage initial de 800 mètres autour de la position.
-- [ ] Après stabilisation, appuyer de nouveau sans geste intermédiaire :
-  aucun dézoom/rezoom ni mouvement si le cadrage est déjà atteint.
+- [x] Résolution du dézoom/rezoom au second appui confirmée par Samuel sur iPhone.
 - [ ] Appuyer rapidement pendant l’animation : pas de relance du cadrage.
 - [ ] Répéter après zoom manuel pendant le suivi et après interruption par
   un panoramique : retour au cadrage normal sans verrouillage du bouton.

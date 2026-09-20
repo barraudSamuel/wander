@@ -102,6 +102,99 @@ final class MapSocialGestureUITests: XCTestCase {
         waitForExpectations(timeout: 3)
     }
 
+    func testBothMapEdgesCenterOwnProfileWithoutSelectingGroup() {
+        let group = app.buttons["Groupe, 2 sorties prévues"]
+        let user = app.buttons["Moi, Vous"]
+        XCTAssertTrue(group.waitForExistence(timeout: 10))
+        XCTAssertTrue(user.exists)
+
+        func anchor(_ element: XCUIElement) -> CGPoint {
+            CGPoint(x: element.frame.midX, y: element.frame.maxY)
+        }
+        func separation() -> CGFloat {
+            let first = anchor(group)
+            let second = anchor(user)
+            return hypot(first.x - second.x, first.y - second.y)
+        }
+
+        for rightEdge in [false, true] {
+            let before = separation()
+            let x = rightEdge ? map.frame.width - 12 : 12
+            let origin = map.coordinate(withNormalizedOffset: .zero)
+            let lower = origin.withOffset(CGVector(dx: x, dy: map.frame.height * 0.65))
+            let upper = origin.withOffset(CGVector(dx: x, dy: map.frame.height * 0.25))
+            lower.press(forDuration: 0.05, thenDragTo: upper)
+            let zoomed = NSPredicate { _, _ in separation() > before * 1.1 }
+            expectation(for: zoomed, evaluatedWith: app)
+            waitForExpectations(timeout: 3)
+            // The scenario starts centered on the current user, now an eligible target.
+            XCTAssertEqual(anchor(user).x, map.frame.midX, accuracy: 8)
+            XCTAssertEqual(anchor(user).y, map.frame.midY, accuracy: 40)
+            XCTAssertFalse(app.buttons["Groupe ouvert, 2 sorties prévues"].exists)
+
+            let afterZoom = separation()
+            upper.press(forDuration: 0.05, thenDragTo: lower)
+            let zoomedOut = NSPredicate { _, _ in separation() < afterZoom * 0.9 }
+            expectation(for: zoomedOut, evaluatedWith: app)
+            waitForExpectations(timeout: 3)
+            XCTAssertEqual(anchor(user).x, map.frame.midX, accuracy: 8)
+            XCTAssertEqual(anchor(user).y, map.frame.midY, accuracy: 40)
+        }
+        attachScreenshot(named: "Zoom des deux bords, après relâchement")
+    }
+
+    func testEdgeZoomCentersOwnProfileWhenNoOtherMarkersExist() {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map", "-debug-social-map-empty-list"]
+        app.launch()
+        let user = app.buttons["Moi, Vous"]
+        XCTAssertTrue(user.waitForExistence(timeout: 10))
+        let paneWasVisible = detailPane.exists
+        let start = map.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.65))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 60, dy: 0)))
+        XCTAssertGreaterThan(abs(user.frame.midX - map.frame.midX), 20)
+        let origin = map.coordinate(withNormalizedOffset: .zero)
+        let lower = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.65))
+        let upper = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.35))
+        lower.press(forDuration: 0.05, thenDragTo: upper)
+        let centered = NSPredicate { _, _ in abs(user.frame.midX - self.map.frame.midX) < 8 }
+        expectation(for: centered, evaluatedWith: app)
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(user.frame.maxY, map.frame.midY, accuracy: 40)
+        XCTAssertEqual(detailPane.exists, paneWasVisible)
+    }
+
+    func testHorizontalDragStartingAtEdgeStillPansMap() {
+        let group = app.buttons["Groupe, 2 sorties prévues"]
+        XCTAssertTrue(group.waitForExistence(timeout: 10))
+        let before = group.frame.midX
+        let origin = map.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.65))
+        let end = origin.withOffset(CGVector(dx: map.frame.width * 0.4, dy: map.frame.height * 0.65))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        let moved = NSPredicate { _, _ in abs(group.frame.midX - before) > 30 }
+        expectation(for: moved, evaluatedWith: app)
+        waitForExpectations(timeout: 3)
+    }
+
+    func testEdgeZoomWithAnOpenDetailPane() {
+        openGroupedEvent(index: 0, eventNumber: 2)
+        let user = app.buttons["Moi, Vous"]
+        XCTAssertTrue(user.waitForExistence(timeout: 3))
+        let before = user.frame
+        let origin = map.coordinate(withNormalizedOffset: .zero)
+        let lower = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.8))
+        let upper = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.25))
+        lower.press(forDuration: 0.05, thenDragTo: upper)
+        let moved = NSPredicate { _, _ in
+            abs(user.frame.midX - before.midX) + abs(user.frame.midY - before.midY) > 5
+        }
+        expectation(for: moved, evaluatedWith: app)
+        waitForExpectations(timeout: 3)
+        XCTAssertTrue(detailPane.exists)
+        attachScreenshot(named: "Zoom de bord avec une fiche ouverte")
+    }
+
     func testEventPaneDragResizesMapAndKeepsSelection() {
         openGroupedEvent(index: 0, eventNumber: 2)
         XCTAssertLessThanOrEqual(detailPane.frame.maxY, resizeHandle.frame.minY + 2)

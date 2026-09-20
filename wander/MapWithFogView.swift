@@ -1531,8 +1531,18 @@ struct MapWithFogView: UIViewRepresentable {
         )
         let coordinator = context.coordinator
         coordinator.viewport = viewport
+        coordinator.edgeZoom = MapEdgeZoomController(
+            viewport: viewport,
+            targets: { [weak coordinator] mapView in
+                coordinator?.edgeZoomTargets(on: mapView) ?? []
+            },
+            onBegin: { [weak coordinator] in
+                coordinator?.userCamera.stopFollowing()
+            }
+        )
         viewport.onViewportChange = { [weak coordinator, weak mapView] in
             guard let coordinator, let mapView else { return }
+            coordinator.edgeZoom?.cancel()
             coordinator.socialProximityController.viewportDidChange(on: mapView)
             coordinator.refreshMapOffscreenIndicators(on: mapView)
         }
@@ -1656,6 +1666,8 @@ struct MapWithFogView: UIViewRepresentable {
 
     static func dismantleUIView(_ viewport: MapViewportView, coordinator: Coordinator) {
         viewport.onViewportChange = nil
+        coordinator.edgeZoom?.uninstall()
+        coordinator.edgeZoom = nil
         let uiView = viewport.mapView
         coordinator.removeLongPressRecognizer(from: uiView)
         coordinator.removeImmediateSocialAnnotationRecognizer(from: uiView)
@@ -2175,6 +2187,7 @@ struct MapWithFogView: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         weak var viewport: MapViewportView?
+        var edgeZoom: MapEdgeZoomController?
         let explorationEngine = ExplorationEngine()
         let fogColor: UIColor
         var fogOverlay: FogOfWarOverlay?
@@ -2340,6 +2353,39 @@ struct MapWithFogView: UIViewRepresentable {
                 sources[.currentUser] = userLocationAnnotation
             }
             socialProximityController.update(sources: sources, on: mapView)
+        }
+
+        func edgeZoomTargets(on mapView: MKMapView) -> [MapEdgeZoomController.Target] {
+            mapView.annotations.compactMap { annotation in
+                guard let id = Self.edgeZoomTargetID(for: annotation),
+                      let view = mapView.view(for: annotation),
+                      view.isDescendant(of: mapView), !view.isHidden, view.alpha > 0.01,
+                      view.cluster == nil else { return nil }
+                return MapEdgeZoomController.Target(
+                    id: id,
+                    coordinate: annotation.coordinate,
+                    screenPoint: mapView.convert(annotation.coordinate, toPointTo: mapView)
+                )
+            }
+        }
+
+        static func edgeZoomTargetID(for annotation: any MKAnnotation) -> String? {
+            if annotation is UserLocationAnnotation {
+                return "current-user"
+            }
+            if let friend = annotation as? FriendLocationAnnotation {
+                return "friend:\(friend.userID)"
+            }
+            if let outing = annotation as? OutingPlanAnnotation {
+                return "outing:\(outing.eventID)"
+            }
+            if let group = annotation as? MapSocialProximityGroupAnnotation,
+               group.memberAnnotations.contains(where: {
+                   $0 is UserLocationAnnotation || $0 is FriendLocationAnnotation || $0 is OutingPlanAnnotation
+               }) {
+                return "group:\(group.identifier)"
+            }
+            return nil
         }
 
         private func socialClusterPresentation(
@@ -2720,6 +2766,10 @@ struct MapWithFogView: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
+            if edgeZoom?.owns(gestureRecognizer) == true
+                || edgeZoom?.owns(otherGestureRecognizer) == true {
+                return false
+            }
             guard let longPressRecognizer,
                   gestureRecognizer === longPressRecognizer
                     || otherGestureRecognizer === longPressRecognizer else {

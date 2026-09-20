@@ -1,7 +1,8 @@
 ---
 title: Rétablir le zoom au recentrage
-status: in_progress
+status: completed
 date: 2026-09-20
+completed_at: 2026-09-20T12:43:20+09:00
 owner: Samuel
 ---
 
@@ -57,7 +58,7 @@ supplémentaire ne sera démarré et aucun test dédié d’accessibilité ne se
 - Les deux notes Obsidian et leur propriété updated ont été actualisées.
 - `xcrun simctl list devices booted` : aucun appareil démarré. Aucun démarrage effectué.
 - Incertitude restante : comportement réel de MapKit pendant le suivi et
-  l’animation. Suivi dans `todos/056-ready-p3-valider-zoom-recentrage.md`.
+  l’animation. Suivi dans `todos/056-done-p3-valider-zoom-recentrage.md`.
 - Le plan reste `in_progress` jusqu’à la validation fonctionnelle requise.
 - Pas de nouvelle leçon vérifiée à consigner dans `docs/solutions/`.
 
@@ -74,7 +75,7 @@ ne prouvaient pas le comportement interactif.
 - [ ] Vérifier les appuis répétés et le suivi sur l’iPhone 17 déjà démarré.
 
 Les fichiers concernés restent ceux du plan, avec mise à jour du suivi existant
-`todos/056-ready-p3-valider-zoom-recentrage.md`.
+`todos/056-done-p3-valider-zoom-recentrage.md`.
 
 ### Validation du correctif
 
@@ -108,7 +109,7 @@ ses tests et ne constituent pas une résolution.
 - `wanderTests/MapUserCameraControllerTests.swift` : régression des appuis répétés,
   suivi sans changement de zoom, interruption et reprise.
 - `docs/plans/2026-09-20-recentrage-zoom-carte.md` et
-  `todos/056-ready-p3-valider-zoom-recentrage.md` : validation.
+  `todos/056-done-p3-valider-zoom-recentrage.md` : validation.
 - `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Documentation UX.md`.
 - `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Documentation technique.md`.
 - `/Users/samuelbarraud/Library/Mobile Documents/iCloud~md~obsidian/Documents/sam/wander/Backlog features.md`.
@@ -119,10 +120,9 @@ ses tests et ne constituent pas une résolution.
 - [x] Déplacements suivis en changeant seulement le centre, jamais le zoom.
 - [x] Interruption sur geste et cadrage ami/événement ; reprise par le bouton.
 - [x] Six tests de régression écrits et compilés ; revue du diff réalisée.
-- [ ] Exécution des tests MapKit sur simulateur ou appareil.
+- Tests MapKit compilés mais non exécutés : Samuel a choisi la validation manuelle sur son iPhone.
 - [x] Actualisation des trois notes Obsidian et de leur propriété updated.
-- [ ] Vérification en exécution sur iPhone 17 ; ne pas conclure à une résolution
-  sur la seule base d’une compilation.
+- [x] Validation du correctif par Samuel sur son iPhone, retour « c good mtn ».
 
 Le risque principal est la reprise du suivi après manipulation manuelle. Le
 contrôleur doit aussi traiter la dernière position reçue pendant une animation
@@ -153,3 +153,20 @@ et ne jamais reprendre un suivi interrompu par l’utilisateur.
 - Journal : `/tmp/wander-user-camera-final-build.log`. Extraction AppIntents
   ignorée faute de dépendance, avertissement déjà présent. Aucune erreur ni
   nouvel avertissement Swift dans l’application ou les tests.
+
+## Clôture
+
+Le 20 septembre 2026, après avoir choisi de tester sur son iPhone, Samuel
+confirme « c good mtn ». Ce retour valide la résolution du dézoom/rezoom signalé
+et clôt le correctif. Les sections précédentes conservent l’historique des
+tentatives et de leurs validations alors en attente.
+
+La compilation de l’application et des six tests avait réussi. Les tests
+MapKit n’ont pas été exécutés. Le retour utilisateur ne détaille pas chacun des
+scénarios secondaires ; leur exécution individuelle n’est pas revendiquée.
+Le test sur simulateur a été remplacé par le test sur iPhone choisi par Samuel.
+Les cases non cochées dans les sections historiques ne sont pas des validations
+annoncées comme réussies.
+
+Apprentissage consigné dans
+`docs/solutions/2026-09-20-eviter-concurrence-suivi-zoom-mapkit.md`.
