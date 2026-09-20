@@ -226,13 +226,7 @@ private struct DebugSocialMapScene: View {
                 }
             }
         } map: {
-            if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
-                FriendEdgeRailView(friends: [], onSelect: { _ in }) {
-                    mapView(presentations: presentations)
-                }
-            } else {
-                mapView(presentations: presentations)
-            }
+            mapView(presentations: presentations)
         }
         .alert("Itinéraire de test", isPresented: $showsDirections) {
             Button("Fermer", role: .cancel) {}

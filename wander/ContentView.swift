@@ -140,7 +140,7 @@ struct ContentView: View {
 
         return GeometryReader { geometry in
             MotionDockView(selection: dockSelectionBinding) {
-                exploreTab(friendSummaries: summaries)
+                exploreTab()
             } friends: {
                 FriendsPanelView(
                     service: friendSyncService,
@@ -400,9 +400,7 @@ struct ContentView: View {
         selectedMapDetail?.outingEventID
     }
 
-    private func exploreTab(
-        friendSummaries: [FriendMapSummary]
-    ) -> some View {
+    private func exploreTab() -> some View {
         let outingPlans = mapOutingPlans
 
         return MapDetailSplitView(isPresented: true) {
@@ -443,110 +441,102 @@ struct ContentView: View {
                 }
             }
         } map: {
-            FriendEdgeRailView(
-                friends: friendSummaries,
-                onSelect: { friend in
-                    guard friend.canShowOnMap else { return }
-                    showFriendOnMap(friend)
-                }
-            ) {
-                ZStack(alignment: .topTrailing) {
-                    MapWithFogView(
-                        locationTracker: locationTracker,
-                        discoveredCellIDs: locationTracker.discoveredCellIDs,
-                        cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
-                        friendLocations: friendSyncService.friendLocations,
-                        freshFriendLocationUserIDs:
-                            friendSyncService.freshFriendLocationUserIDs,
-                        refreshingFriendLocationUserIDs:
-                            locationPushService.refreshingFriendUserIDs,
-                        outingPlans: outingPlans,
-                        userExplorationProgress: cityProgress,
-                        userDisplayName: displayName,
-                        userAvatarID: avatarID,
-                        userProfileColorHex: profileColorHex,
-                        centerOnUser: $centerOnUser,
-                        resetMapOrientation: $resetMapOrientation,
-                        centerOnFriendUserID: $centerOnFriendUserID,
-                        centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
-                        pendingOutingCoordinate: pendingOutingCoordinate,
-                        isEventCreationEnabled: !outingComposerVisible,
-                        selectedOutingPlanEventID: selectedOutingPlanEventID,
-                        selectedFriendProfileUserID: selectedMapDetail?.friendUserID,
-                        showsHeatMap: heatMapEnabled,
-                        heatMapCellData: locationTracker.heatMapCellData,
-                        heatMapRevision: locationTracker.heatMapRevision,
-                        onJoinFriend: presentNavigationOptions,
-                        onSelectFriend: presentMapFriendProfile,
-                        onViewFriendProfile: presentMapFriendProfile,
-                        onSelectOutingPlan: { eventID in
-                            selectedMapDetail = .outing(eventID)
-                        },
-                        onCreateEvent: { coordinate in
-                            guard CLLocationCoordinate2DIsValid(coordinate),
-                                  !outingComposerVisible else {
-                                return
-                            }
-                            selectedMapDetail = nil
-                            editingOutingEvent = nil
-                            pendingOutingCoordinate = coordinate
-                            outingComposerDetent =
-                                OutingComposerPresentation.creationDetent
-                            outingComposerVisible = true
+            ZStack(alignment: .topTrailing) {
+                MapWithFogView(
+                    locationTracker: locationTracker,
+                    discoveredCellIDs: locationTracker.discoveredCellIDs,
+                    cityBoundaryCoordinates: cityBoundary.boundaryCoordinates,
+                    friendLocations: friendSyncService.friendLocations,
+                    freshFriendLocationUserIDs:
+                        friendSyncService.freshFriendLocationUserIDs,
+                    refreshingFriendLocationUserIDs:
+                        locationPushService.refreshingFriendUserIDs,
+                    outingPlans: outingPlans,
+                    userExplorationProgress: cityProgress,
+                    userDisplayName: displayName,
+                    userAvatarID: avatarID,
+                    userProfileColorHex: profileColorHex,
+                    centerOnUser: $centerOnUser,
+                    resetMapOrientation: $resetMapOrientation,
+                    centerOnFriendUserID: $centerOnFriendUserID,
+                    centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
+                    pendingOutingCoordinate: pendingOutingCoordinate,
+                    isEventCreationEnabled: !outingComposerVisible,
+                    selectedOutingPlanEventID: selectedOutingPlanEventID,
+                    selectedFriendProfileUserID: selectedMapDetail?.friendUserID,
+                    showsHeatMap: heatMapEnabled,
+                    heatMapCellData: locationTracker.heatMapCellData,
+                    heatMapRevision: locationTracker.heatMapRevision,
+                    onJoinFriend: presentNavigationOptions,
+                    onSelectFriend: presentMapFriendProfile,
+                    onViewFriendProfile: presentMapFriendProfile,
+                    onSelectOutingPlan: { eventID in
+                        selectedMapDetail = .outing(eventID)
+                    },
+                    onCreateEvent: { coordinate in
+                        guard CLLocationCoordinate2DIsValid(coordinate),
+                              !outingComposerVisible else {
+                            return
                         }
-                    )
+                        selectedMapDetail = nil
+                        editingOutingEvent = nil
+                        pendingOutingCoordinate = coordinate
+                        outingComposerDetent =
+                            OutingComposerPresentation.creationDetent
+                        outingComposerVisible = true
+                    }
+                )
 
-                    ownExplorationStatusOverlay
-                        .modifier(MapContentSafeArea())
+                ownExplorationStatusOverlay
+                    .modifier(MapContentSafeArea())
 
-                    if selectedMapDetail?.friendUserID == nil {
+                if selectedMapDetail?.friendUserID == nil {
+                    Button {
+                        filterSheetVisible = true
+                    } label: {
+                        Image(systemName: "line.3.horizontal.decrease")
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .accessibilityLabel("Filtres de la carte")
+                    .accessibilityHint("Choisir les informations visibles sur la carte")
+                    .padding(.top, 8)
+                    .padding(.trailing, 16)
+                    .modifier(MapContentSafeArea(edges: [.top, .trailing]))
+                }
+            }
+            .overlay(alignment: .bottom) {
+                HStack(alignment: .bottom) {
+                    GhostModeMapControl(service: friendSyncService)
+
+                    Spacer()
+
+                    VStack(spacing: 10) {
                         Button {
-                            filterSheetVisible = true
+                            resetMapOrientation = true
                         } label: {
-                            Image(systemName: "line.3.horizontal.decrease")
+                            Image(systemName: "safari")
                         }
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .controlSize(.large)
-                        .accessibilityLabel("Filtres de la carte")
-                        .accessibilityHint("Choisir les informations visibles sur la carte")
-                        .padding(.top, 8)
-                        .padding(.trailing, 16)
-                        .modifier(MapContentSafeArea(edges: [.top, .trailing]))
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    HStack(alignment: .bottom) {
-                        GhostModeMapControl(service: friendSyncService)
+                        .accessibilityLabel("Orienter la carte vers le nord")
 
-                        Spacer()
-
-                        VStack(spacing: 10) {
-                            Button {
-                                resetMapOrientation = true
-                            } label: {
-                                Image(systemName: "safari")
-                            }
-                            .buttonStyle(.glass)
-                            .buttonBorderShape(.circle)
-                            .controlSize(.large)
-                            .accessibilityLabel("Orienter la carte vers le nord")
-
-                            Button {
-                                centerOnUser = true
-                            } label: {
-                                Image(systemName: "scope")
-                            }
-                            .buttonStyle(.glass)
-                            .buttonBorderShape(.circle)
-                            .controlSize(.large)
-                            .accessibilityLabel("Recentrer la carte sur ma position")
+                        Button {
+                            centerOnUser = true
+                        } label: {
+                            Image(systemName: "scope")
                         }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.large)
+                        .accessibilityLabel("Recentrer la carte sur ma position")
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                    .modifier(MapContentSafeArea(edges: [.bottom, .horizontal]))
                 }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+                .modifier(MapContentSafeArea(edges: [.bottom, .horizontal]))
             }
         }
         .sheet(isPresented: $filterSheetVisible) {
