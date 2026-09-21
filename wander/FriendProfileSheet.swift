@@ -175,6 +175,7 @@ struct FriendProfileBody: View {
                         .resizable()
                         .scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                        .blur(radius: 3)
                         .mask {
                             if let nameBounds {
                                 ProfileCardBackgroundShape(nameBounds: geometry[nameBounds])
