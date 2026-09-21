@@ -1049,9 +1049,10 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     private func assertEventsBelowMap(nativeSize: CGSize) {
-        XCTAssertEqual(map.frame.maxY, eventsResizeHandle.frame.minY, accuracy: 2)
+        XCTAssertEqual(map.frame.maxY, eventsResizeHandle.frame.midY - 10, accuracy: 2)
         XCTAssertEqual(eventsResizeHandle.frame.height, 44, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(eventsPane.frame.minY, eventsResizeHandle.frame.maxY - 2)
+        XCTAssertEqual(eventsPane.frame.minY - map.frame.maxY, 20, accuracy: 2)
+        XCTAssertEqual(eventsPane.frame.minY, eventsResizeHandle.frame.midY + 10, accuracy: 2)
         XCTAssertGreaterThanOrEqual(eventList.frame.minY, eventsResizeHandle.frame.maxY - 2)
         XCTAssertLessThanOrEqual(eventList.frame.maxY, app.buttons["motion-dock-explore"].frame.minY)
         XCTAssertLessThanOrEqual(eventList.frame.maxY, eventsButton.frame.minY)
@@ -1255,7 +1256,7 @@ final class MapDeviceSmokeUITests: XCTestCase {
         XCTAssertTrue(list.waitForExistence(timeout: 3))
         XCTAssertTrue(handle.waitForExistence(timeout: 3))
         XCTAssertTrue(eventsButton.isSelected)
-        XCTAssertEqual(viewport.frame.maxY, handle.frame.minY, accuracy: 2)
+        XCTAssertEqual(viewport.frame.maxY, handle.frame.midY - 10, accuracy: 2)
         XCTAssertLessThanOrEqual(list.frame.maxY, eventsButton.frame.minY)
         let events = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "event-detail-row-"
@@ -1273,7 +1274,7 @@ final class MapDeviceSmokeUITests: XCTestCase {
             XCTAssertFalse(app.buttons["map-detail-resize-handle"].exists)
             XCTAssertEqual(nativeMap.frame.width, nativeSize.width, accuracy: 1)
             XCTAssertEqual(nativeMap.frame.height, nativeSize.height, accuracy: 1)
-            XCTAssertEqual(viewport.frame.maxY, handle.frame.minY, accuracy: 2)
+            XCTAssertEqual(viewport.frame.maxY, handle.frame.midY - 10, accuracy: 2)
             XCTAssertEqual(app.state, .runningForeground)
             XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
             if cycle == 0 {

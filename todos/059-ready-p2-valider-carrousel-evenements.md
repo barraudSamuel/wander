@@ -14,7 +14,7 @@ tags: [todo, events, ui]
 
 Un bouton calendrier séparé à droite de la barre native ouvre et ferme la liste
 sous la carte. Le rail de badges est supprimé. La poignée règle la hauteur et
-replie le panneau. Samuel limite la session à la compilation, sans simulateur.
+replie le panneau. La validation initiale était limitée à la compilation, sans simulateur.
 La capture fournie le 21 septembre montre le calendrier plus bas que les
 onglets. Le correctif l'ancre au bord supérieur converti de la barre au lieu
 de le centrer dans une zone qui inclut l'espace sous la capsule. La compilation
@@ -35,6 +35,24 @@ réussie, mais résolution du défaut visuel encore à confirmer.
 
 ## Preuves
 
+- Ajustement approuvé à 20 points après la révision à 12 : métrique et
+  assertions mises à jour, cible tactile de 44 points conservée. App/tests
+  compilés avec succès, `/tmp/wander-events-20-build.log`. Rendu à vérifier,
+  car l'iPhone 17 est éteint ; aucun simulateur démarré. Les preuves
+  visuelles ci-dessous concernent le réglage précédent à 12 points.
+
+- [Séparation affinée](../docs/plans/2026-09-21-separation-carte-evenements-fine.md) :
+  bande noire ramenée de 44 à 12 points, poignée blanche et arrondis d'origine,
+  cible tactile de 44 points. Le projet de verre et de dégradé a été abandonné
+  à la demande de Samuel. App et tests compilés, code 0 ; journal
+  `/tmp/wander-events-thin-build.log`. Captures clair/sombre inspectées sur
+  l'iPhone 17 existant : `/tmp/wander-events-thin-light.png` et
+  `/tmp/wander-events-thin-dark.png`. Ouverture calendrier, agrandissement et
+  fermeture par toucher de la poignée vérifiés directement. Glissement et
+  défilement non validés pour cette révision. Aucun succès XCTest revendiqué.
+  Les tentatives de la version abandonnée échouaient avant ouverture de la
+  liste via le calendrier, malgré une ouverture possible par clic direct ;
+  détails dans `/tmp/wander-events-glass-ui-final.xcresult`.
 - [Nouvelle icône calendrier](../docs/plans/2026-09-21-icone-evenements.md) :
   illustration fournie, fond bleu et rendu original, variantes 40/80/120 pixels,
   image circulaire de 36 points dans le bouton de 54 points. Rendu sur appareil
@@ -53,6 +71,13 @@ réussie, mais résolution du défaut visuel encore à confirmer.
 
 ## Critères d'acceptation
 
+- [ ] Vérifier le rendu à 20 points sur l'iPhone 17 et les touchers de la poignée.
+
+- [x] Confirmer la séparation noire de 12 points et la poignée blanche dans
+  les deux apparences, ainsi que l'agrandissement et la fermeture par toucher.
+- [ ] Confirmer le redimensionnement par glissement de la zone tactile de
+  44 points, la première ligne dégagée et le défilement indépendant avec la
+  séparation affinée. Les assertions géométriques ont été adaptées et compilées.
 - [ ] Confirmer le cadrage circulaire, la lisibilité et la taille de la nouvelle
   icône calendrier par rapport aux autres icônes, dans les deux états du bouton.
 - [ ] Vérifier que le cercle garde le même diamètre après Profil → Événements,

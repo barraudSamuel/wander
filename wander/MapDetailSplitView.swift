@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 
+private enum EventsSeparatorMetrics {
+    static let height: CGFloat = 20
+    static let hitHeight: CGFloat = 44
+    static let overlap = (hitHeight - height) / 2
+}
+
 struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .body) private var minimumPaneHeight = 140
@@ -46,6 +52,10 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
                     0,
                     geometry.size.height - safeInsets.top - safeInsets.bottom - separatorHeight
                 )
+                let eventsSeparatorHeight = min(EventsSeparatorMetrics.height, max(0, geometry.size.height))
+                let eventsAvailableHeight = max(
+                    0, geometry.size.height - safeInsets.top - safeInsets.bottom - eventsSeparatorHeight
+                )
                 let detailHeight = isPresented
                     ? safeInsets.top + height(for: position, availableHeight: availableHeight)
                     : 0
@@ -55,9 +65,9 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
                     detailHeight: detailHeight,
                     separatorHeight: isPresented ? separatorHeight : 0,
                     eventsHeight: showsEventsPane
-                        ? eventsHeight(availableHeight: availableHeight)
+                        ? eventsHeight(availableHeight: eventsAvailableHeight)
                         : 0,
-                    eventsSeparatorHeight: showsEventsPane ? separatorHeight : 0,
+                    eventsSeparatorHeight: showsEventsPane ? eventsSeparatorHeight : 0,
                     windowSize: geometry.size,
                     safeInsets: safeInsets,
                     isPresented: isPresented,
@@ -67,7 +77,7 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
                 ) { displayedHeight in
                     resizeHandle(availableHeight: availableHeight, displayedHeight: displayedHeight)
                 } eventsHandle: { displayedHeight in
-                    eventsResizeHandle(availableHeight: availableHeight, displayedHeight: displayedHeight)
+                    eventsResizeHandle(availableHeight: eventsAvailableHeight, displayedHeight: displayedHeight)
                 }
                 .animation(resizeAnimation, value: isPresented)
                 .animation(resizeAnimation, value: isEventsExpanded)
@@ -204,11 +214,10 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
+                .frame(height: EventsSeparatorMetrics.hitHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(.black)
         .accessibilityLabel("Taille de la liste des événements")
         .accessibilityValue(eventsPosition.accessibilityValue(
             displayedFraction: availableHeight > 0 ? displayedHeight / availableHeight : 0
@@ -382,9 +391,11 @@ private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View
     }
 
     var body: some View {
-        let expansion = min(1, max(0, eventsSeparatorHeight / 44))
+        let expansion = min(1, max(0, eventsSeparatorHeight / EventsSeparatorMetrics.height))
         let eventsBottomInset = safeInsets.bottom * expansion
         let eventsPaneHeight = (eventsHeight + safeInsets.bottom) * expansion
+        let displayedEventsHeight = max(0, eventsHeight * expansion)
+        let eventsTopInset = min(EventsSeparatorMetrics.overlap, displayedEventsHeight)
         let mapHeight = max(
             0, windowSize.height - detailHeight - separatorHeight - eventsSeparatorHeight - eventsPaneHeight
         )
@@ -420,18 +431,20 @@ private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View
                 .accessibilityHidden(!isPresented)
                 .allowsHitTesting(isPresented)
 
-            handle(max(0, detailHeight - safeInsets.top))
-                .frame(height: max(0, separatorHeight))
-                .clipped()
-                .accessibilityHidden(!isPresented)
-                .allowsHitTesting(isPresented)
+            if separatorHeight > 0 {
+                handle(max(0, detailHeight - safeInsets.top))
+                    .frame(height: separatorHeight)
+                    .clipped()
+                    .accessibilityHidden(!isPresented)
+                    .allowsHitTesting(isPresented)
+            }
 
             mapContent
                 .environment(\.mapRenderSize, windowSize)
                 .environment(\.mapContentInsets, EdgeInsets(
                     top: isPresented ? 0 : safeInsets.top,
                     leading: safeInsets.leading,
-                    bottom: safeInsets.bottom * (1 - expansion),
+                    bottom: max(safeInsets.bottom * (1 - expansion), EventsSeparatorMetrics.overlap * expansion),
                     trailing: safeInsets.trailing
                 ))
                 .frame(maxWidth: .infinity)
@@ -439,11 +452,9 @@ private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View
                 .clipShape(mapShape)
                 .contentShape(mapShape)
 
-            eventsHandle(eventsHeight)
+            Color.black
                 .frame(height: max(0, eventsSeparatorHeight))
-                .clipped()
-                .accessibilityHidden(isPresented || eventsSeparatorHeight == 0)
-                .allowsHitTesting(!isPresented && eventsSeparatorHeight > 0)
+                .accessibilityHidden(true)
 
             Color.clear.frame(height: max(0, eventsPaneHeight))
         }
@@ -451,9 +462,9 @@ private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View
         .overlay(alignment: .bottom) {
             // Keep the list mounted while its pane is closed.
             events
-                .frame(height: max(0, eventsHeight))
+                .frame(height: max(0, displayedEventsHeight - eventsTopInset))
                 .padding(EdgeInsets(
-                    top: 0, leading: safeInsets.leading,
+                    top: eventsTopInset, leading: safeInsets.leading,
                     bottom: eventsBottomInset, trailing: safeInsets.trailing
                 ))
                 .background(Color(.secondarySystemGroupedBackground).opacity(expansion))
@@ -467,6 +478,18 @@ private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View
                 .accessibilityIdentifier("map-events-pane")
                 .accessibilityHidden(isPresented || eventsSeparatorHeight == 0)
                 .allowsHitTesting(!isPresented && eventsSeparatorHeight > 0)
+        }
+        .overlay(alignment: .top) {
+            if eventsSeparatorHeight > 0 {
+                // Keep the hit target larger than the visible black separator.
+                eventsHandle(displayedEventsHeight)
+                    .frame(height: EventsSeparatorMetrics.hitHeight)
+                    .offset(y: windowSize.height - eventsPaneHeight
+                        - eventsSeparatorHeight / 2 - EventsSeparatorMetrics.hitHeight / 2)
+                    .opacity(expansion)
+                    .accessibilityHidden(isPresented)
+                    .allowsHitTesting(!isPresented)
+            }
         }
         .transaction { $0.animation = nil }
     }
