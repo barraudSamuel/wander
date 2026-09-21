@@ -226,8 +226,7 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     func testFriendDismissalRecentersAfterSheetResize() {
-        launchDetailScenario(["mixed", "fullscreen"])
-        openMixedFriend(eventCount: 2)
+        launchDetailScenario(["mixed", "open-friend", "fullscreen"])
         let initialTop = detailPane.frame.minY
         detailPane.swipeUp()
         let expanded = NSPredicate { _, _ in self.detailPane.frame.minY < initialTop - 50 }
@@ -236,28 +235,26 @@ final class MapSocialGestureUITests: XCTestCase {
         closeFriendSheet()
         let group = app.buttons["Groupe, 3 personnes et 2 sorties prévues"]
         let centeredAfterDismissal = NSPredicate { _, _ in
-            group.exists && abs(group.frame.midY - self.usableMapCenterY) < 40
+            // The group annotation anchors eight points below its bottom edge.
+            group.exists && abs(group.frame.maxY + 8 - self.usableMapCenterY) < 40
         }
         expectation(for: centeredAfterDismissal, evaluatedWith: group)
         waitForExpectations(timeout: 3)
         XCTAssertFalse(detailPane.exists)
     }
 
-    func testFriendCloseButtonAcceptsSingleTapsAtCenterAndBothSides() {
-        launchDetailScenario(["mixed", "fullscreen"])
-        for horizontalPosition in [CGFloat(0.5), 0.1, 0.9] {
-            openMixedFriend(eventCount: 2)
-            let close = app.buttons["Fermer la fiche de l’ami"]
-            XCTAssertTrue(close.waitForExistence(timeout: 3))
-            XCTAssertTrue(close.isHittable)
-
-            // Keep side taps near the native control's edges at any size.
-            // Each opening gets one coordinate tap, without a retry.
-            close.coordinate(withNormalizedOffset: CGVector(dx: horizontalPosition, dy: 0.5)).tap()
-            XCTAssertTrue(
-                detailPane.waitForNonExistence(timeout: 3),
-                "La fiche doit fermer après un clic à la position horizontale \(horizontalPosition)."
-            )
+    func testFriendSheetHasNoCloseButtonAndDismissesFromBothHeights() {
+        for expandSheet in [false, true] {
+            launchDetailScenario(["mixed", "open-friend", "fullscreen"])
+            XCTAssertFalse(app.buttons["Fermer la fiche de l’ami"].exists)
+            if expandSheet {
+                let initialTop = detailPane.frame.minY
+                detailPane.swipeUp()
+                let expanded = NSPredicate { _, _ in self.detailPane.frame.minY < initialTop - 50 }
+                expectation(for: expanded, evaluatedWith: detailPane)
+                waitForExpectations(timeout: 3)
+            }
+            closeFriendSheet()
         }
     }
 
@@ -470,7 +467,7 @@ final class MapSocialGestureUITests: XCTestCase {
             XCTAssertTrue(directions.waitForExistence(timeout: 3))
             XCTAssertTrue(directions.isHittable)
             XCTAssertEqual(directions.isEnabled, state == "stale")
-            XCTAssertTrue(app.buttons["Fermer la fiche de l’ami"].isHittable)
+            XCTAssertFalse(app.buttons["Fermer la fiche de l’ami"].exists)
             XCTAssertFalse(resizeHandle.exists)
             let mapFrame = map.frame
             detailPane.swipeUp()
@@ -1148,9 +1145,10 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     private func closeFriendSheet() {
-        let close = app.buttons["Fermer la fiche de l’ami"]
-        XCTAssertTrue(close.isHittable)
-        close.tap()
+        XCTAssertTrue(detailPane.exists)
+        let start = detailPane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
         XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
     }
 

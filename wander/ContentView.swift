@@ -402,7 +402,6 @@ struct ContentView: View {
             FriendProfileSheet(
                 userID: selection.userID,
                 service: friendSyncService,
-                onClose: { closeFriendProfile(userID: selection.userID) },
                 onOpenDirections: {
                     pendingFriendDirectionsUserID = selection.userID
                     selectedMapDetail = nil
@@ -710,14 +709,6 @@ struct ContentView: View {
                 }
             }
         )
-    }
-
-    private func closeFriendProfile(userID: String) {
-        guard selectedMapDetail?.friendUserID == userID else { return }
-        selectedMapDetail = nil
-        // Consume the closing profile now so onDismiss cannot recenter again.
-        presentedFriendProfileUserID = nil
-        recenterAfterFriendProfile(userID: userID)
     }
 
     private func recenterAfterFriendProfile(userID: String) {

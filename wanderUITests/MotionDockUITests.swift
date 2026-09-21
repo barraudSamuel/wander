@@ -108,7 +108,9 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(friendPane.staticTexts["Amina"].exists)
         XCTAssertFalse(command("events").isSelected)
         let nativeMapSize = app.maps.firstMatch.frame.size
-        app.buttons["Fermer la fiche de l’ami"].tap()
+        let start = friendPane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
         XCTAssertTrue(friendPane.waitForNonExistence(timeout: 3))
         command("events").tap()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))

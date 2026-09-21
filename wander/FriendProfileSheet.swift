@@ -36,20 +36,17 @@ struct FriendProfileSheet: View {
     @ObservedObject private var service: FriendSyncService
 
     private let userID: String
-    private let onClose: () -> Void
     private let onOpenDirections: () -> Void
     private let onPreparePresentation: (CGFloat) -> Void
 
     init(
         userID: String,
         service: FriendSyncService,
-        onClose: @escaping () -> Void,
         onOpenDirections: @escaping () -> Void,
         onPreparePresentation: @escaping (CGFloat) -> Void
     ) {
         self.userID = userID
         self.service = service
-        self.onClose = onClose
         self.onOpenDirections = onOpenDirections
         self.onPreparePresentation = onPreparePresentation
     }
@@ -63,7 +60,6 @@ struct FriendProfileSheet: View {
             isGhostModeEnabled: profile.isGhostModeEnabled,
             location: profile.location,
             isLocationFresh: profile.isLocationFresh,
-            onClose: onClose,
             onOpenDirections: {
                 guard FriendProfileData(userID: userID, service: service).canOpenDirections else {
                     return
@@ -89,7 +85,6 @@ struct FriendProfileContentView: View {
     let isGhostModeEnabled: Bool
     let location: FriendLocation?
     let isLocationFresh: Bool
-    let onClose: () -> Void
     let onOpenDirections: () -> Void
     let onPreparePresentation: (CGFloat) -> Void
 
@@ -99,7 +94,7 @@ struct FriendProfileContentView: View {
                 displayName: displayName, avatarID: avatarID,
                 profileColorHex: profileColorHex, isGhostModeEnabled: isGhostModeEnabled,
                 location: location, isLocationFresh: isLocationFresh,
-                onClose: onClose, onOpenDirections: onOpenDirections
+                onOpenDirections: onOpenDirections
             ),
             onPreparePresentation: onPreparePresentation
         )
@@ -108,13 +103,14 @@ struct FriendProfileContentView: View {
 
 /// The same content is used for preflight sizing and the visible scroll view.
 struct FriendProfileBody: View {
+    @ScaledMetric(relativeTo: .title3) private var nameFontSize: CGFloat = 17
+
     let displayName: String
     let avatarID: String
     let profileColorHex: String
     let isGhostModeEnabled: Bool
     let location: FriendLocation?
     let isLocationFresh: Bool
-    let onClose: () -> Void
     let onOpenDirections: () -> Void
 
     var body: some View {
@@ -152,24 +148,49 @@ struct FriendProfileBody: View {
 
     private var identity: some View {
         VStack(spacing: 12) {
-            FriendAvatarBadge(
-                avatarID: avatarID,
-                profileColorHex: profileColorHex,
-                size: 128
-            )
-            .accessibilityHidden(true)
+            VStack(spacing: 0) {
+                FriendAvatarBadge(
+                    avatarID: avatarID,
+                    profileColorHex: profileColorHex,
+                    size: 128
+                )
+                .accessibilityHidden(true)
+                .frame(maxWidth: .infinity)
+                .frame(height: 176)
 
-            VStack(spacing: 6) {
                 Text(displayName)
-                    .font(.title2.bold())
+                    .font(.system(size: nameFontSize, weight: .bold))
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 36)
+                    .padding(.vertical, 10)
+                    .anchorPreference(key: ProfileNameBoundsKey.self, value: .bounds) { $0 }
+                    .padding(.horizontal, 16)
                     .accessibilityAddTraits(.isHeader)
-
-                Label(statusTitle, systemImage: statusSymbol)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
             }
+            .backgroundPreferenceValue(ProfileNameBoundsKey.self) { nameBounds in
+                GeometryReader { geometry in
+                    Image("ProfileCardBackground")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .mask {
+                            if let nameBounds {
+                                ProfileCardBackgroundShape(nameBounds: geometry[nameBounds])
+                                    .fill(.white)
+                            } else {
+                                Rectangle().fill(.white)
+                            }
+                        }
+                        .accessibilityHidden(true)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+
+            Label(statusTitle, systemImage: statusSymbol)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -236,6 +257,53 @@ struct FriendProfileBody: View {
     }
 }
 
+private struct ProfileNameBoundsKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+private struct ProfileCardBackgroundShape: Shape {
+    let nameBounds: CGRect
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(18, min(nameBounds.width / 4, (rect.maxY - nameBounds.minY) / 2))
+        let left = nameBounds.minX + radius
+        let right = nameBounds.maxX - radius
+
+        // A single contour avoids a shared closing edge beneath the name.
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: nameBounds.minX, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: left, y: rect.maxY - radius),
+            control: CGPoint(x: left, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: left, y: nameBounds.minY + radius))
+        path.addQuadCurve(
+            to: CGPoint(x: left + radius, y: nameBounds.minY),
+            control: CGPoint(x: left, y: nameBounds.minY)
+        )
+        path.addLine(to: CGPoint(x: right - radius, y: nameBounds.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: right, y: nameBounds.minY + radius),
+            control: CGPoint(x: right, y: nameBounds.minY)
+        )
+        path.addLine(to: CGPoint(x: right, y: rect.maxY - radius))
+        path.addQuadCurve(
+            to: CGPoint(x: nameBounds.maxX, y: rect.maxY),
+            control: CGPoint(x: right, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct FriendProfileNativeContent: UIViewControllerRepresentable {
     let content: FriendProfileBody
     let onPreparePresentation: (CGFloat) -> Void
@@ -256,16 +324,6 @@ private struct FriendProfileNativeContent: UIViewControllerRepresentable {
         let scroll = AnyView(ScrollView { content }
             .scrollBounceBehavior(.basedOnSize)
             .accessibilityIdentifier("friend-profile-scroll")
-            .overlay(alignment: .topTrailing) {
-                Button(role: .close, action: content.onClose)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.regular)
-                    .contentShape(.interaction, Circle())
-                    .accessibilityLabel("Fermer la fiche de l’ami")
-                    .padding(16)
-            }
             .environment(\.locale, environment.locale)
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
             .environment(\.layoutDirection, environment.layoutDirection)

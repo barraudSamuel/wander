@@ -280,7 +280,6 @@ private struct DebugSocialMapScene: View {
                     isGhostModeEnabled: Self.hasArgument("ghost"),
                     location: Self.hasArgument("missing-location") ? nil : friend,
                     isLocationFresh: !Self.hasArgument("stale"),
-                    onClose: { closeFriendProfile(userID: id) },
                     onOpenDirections: {
                         opensDirectionsAfterDismiss = true
                         selectedDetail = nil
@@ -331,13 +330,6 @@ private struct DebugSocialMapScene: View {
                 showsNotificationSettings: false
             )
         }
-    }
-
-    private func closeFriendProfile(userID: String) {
-        guard selectedDetail?.friendUserID == userID else { return }
-        selectedDetail = nil
-        presentedFriendProfileUserID = nil
-        recenterAfterFriendProfile(userID: userID)
     }
 
     private func recenterAfterFriendProfile(userID: String) {

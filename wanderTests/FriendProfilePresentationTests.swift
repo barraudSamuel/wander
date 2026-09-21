@@ -81,7 +81,7 @@ final class FriendProfilePresentationTests: XCTestCase {
             avatarID: ProfileAvatar.generatedID(seed: "measurement"),
             profileColorHex: "#3366FF", isGhostModeEnabled: false,
             location: nil, isLocationFresh: false,
-            onClose: {}, onOpenDirections: {}
+            onOpenDirections: {}
         )
     }
 }
