@@ -7,6 +7,41 @@ import XCTest
 /// Exercises the controller through real MapKit annotations, views, and delegate callbacks.
 @MainActor
 final class MapSocialProximityControllerTests: XCTestCase {
+    func testProfileCameraOwnsFriendOpeningFromPinGroupAndOffscreenTarget() async throws {
+        var requests: [String] = []
+        let fixture = try await makeFixture(onRequestFriendProfile: { requests.append($0) })
+        defer { fixture.close() }
+        let friend = fixture.annotation("Amina", meters: 0)
+        fixture.update([.friend("amina"): friend])
+        try await eventually("The friend pin is rendered") { fixture.mapView.view(for: friend) != nil }
+        let view = try XCTUnwrap(fixture.mapView.view(for: friend))
+        let centers = fixture.mapView.centerRequestCount
+        let regions = fixture.mapView.regionRequestCount
+        XCTAssertEqual(fixture.controller.activate(friend, view: view, on: fixture.mapView), .friend("amina"))
+        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
+        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+
+        fixture.controller.collapse(on: fixture.mapView)
+        fixture.update(fixture.mixedSources())
+        let group = try XCTUnwrap(fixture.groups.first)
+        try await eventually("The group is rendered") { fixture.groupView(for: group) != nil }
+        fixture.groupView(for: group)?.onSelectMember?(.friend("amina"))
+        XCTAssertEqual(requests, ["amina"])
+        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
+        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+
+        fixture.update([.friend("far"): fixture.annotation("Far away", meters: 50_000)])
+        fixture.controller.center(on: .friend("far"), on: fixture.mapView)
+        XCTAssertEqual(requests, ["amina", "far"], "Offscreen selection must not wait for a visible pin")
+        await flushMainQueue()
+        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
+        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+
+        fixture.update([.outing("event"): fixture.annotation("Event", meters: 100)])
+        fixture.controller.center(on: .outing("event"), on: fixture.mapView)
+        XCTAssertEqual(fixture.mapView.regionRequestCount, regions + 1, "Events keep native centering")
+    }
+
     func testExpandedGroupFitsChangingViewportWithoutLosingSelectionOrRepeatedCentering() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -689,10 +724,10 @@ final class MapSocialProximityControllerTests: XCTestCase {
         }
     }
 
-    private func makeFixture() async throws -> MapFixture {
+    private func makeFixture(onRequestFriendProfile: ((String) -> Void)? = nil) async throws -> MapFixture {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = try XCTUnwrap(scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)
-        let fixture = MapFixture(windowScene: scene)
+        let fixture = MapFixture(windowScene: scene, onRequestFriendProfile: onRequestFriendProfile)
         do {
             try await eventually("The test map finishes its initial region change") {
                 fixture.hasSettledInitialRegion
@@ -741,6 +776,7 @@ private final class ObserverTestTouch: UITouch {
 
 @MainActor
 private final class MapFixture: NSObject, MKMapViewDelegate {
+    private let onRequestFriendProfile: ((String) -> Void)?
     private let window: UIWindow
     private weak var previousKeyWindow: UIWindow?
     private var sources: [MapSocialClusterMemberID: MKPointAnnotation] = [:]
@@ -759,12 +795,14 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         onDeselectMember: { [weak self] memberID in
             self?.deselectedMembers.append(memberID)
         },
+        onRequestFriendProfile: onRequestFriendProfile,
         visibleBounds: { [weak self] mapView in
             self?.visibleBounds ?? mapView.bounds.inset(by: mapView.safeAreaInsets)
         }
     )
 
-    init(windowScene: UIWindowScene) {
+    init(windowScene: UIWindowScene, onRequestFriendProfile: ((String) -> Void)? = nil) {
+        self.onRequestFriendProfile = onRequestFriendProfile
         previousKeyWindow = windowScene.windows.first(where: \.isKeyWindow)
         window = UIWindow(windowScene: windowScene)
         window.frame = windowScene.effectiveGeometry.coordinateSpace.bounds
@@ -947,6 +985,12 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
 @MainActor
 private final class CenterTrackingMapView: MKMapView {
     private(set) var centerRequestCount = 0
+    private(set) var regionRequestCount = 0
+
+    override func setRegion(_ region: MKCoordinateRegion, animated: Bool) {
+        regionRequestCount += 1
+        super.setRegion(region, animated: animated)
+    }
 
     override func setCenter(_ coordinate: CLLocationCoordinate2D, animated: Bool) {
         centerRequestCount += 1

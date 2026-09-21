@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct FriendAvatarBadge: View {
     private let avatarID: String
@@ -33,120 +34,50 @@ struct FriendAvatarBadge: View {
 struct FriendProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var service: FriendSyncService
-    @State private var opensDirectionsAfterDismiss = false
 
     private let userID: String
     private let onOpenDirections: () -> Void
+    private let onPreparePresentation: (CGFloat) -> Void
 
     init(
         userID: String,
         service: FriendSyncService,
-        onOpenDirections: @escaping () -> Void
+        onOpenDirections: @escaping () -> Void,
+        onPreparePresentation: @escaping (CGFloat) -> Void
     ) {
         self.userID = userID
         self.service = service
         self.onOpenDirections = onOpenDirections
+        self.onPreparePresentation = onPreparePresentation
     }
 
     var body: some View {
-        let renderedProfile = profile
-        return NavigationStack {
-            Form {
-                FriendProfileFields(
-                    displayName: renderedProfile.displayName,
-                    avatarID: renderedProfile.avatarID,
-                    profileColorHex: renderedProfile.profileColorHex,
-                    isGhostModeEnabled: renderedProfile.isGhostModeEnabled,
-                    location: renderedProfile.location,
-                    isLocationFresh: renderedProfile.isLocationFresh,
-                    onOpenDirections: {
-                        guard self.profile.canOpenDirections else { return }
-                        opensDirectionsAfterDismiss = true
-                        dismiss()
-                    }
-                )
-            }
-            .navigationTitle("Profil")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Fermer") {
-                        dismiss()
-                    }
+        let profile = FriendProfileData(userID: userID, service: service)
+        FriendProfileContentView(
+            displayName: profile.displayName,
+            avatarID: profile.avatarID,
+            profileColorHex: profile.profileColorHex,
+            isGhostModeEnabled: profile.isGhostModeEnabled,
+            location: profile.location,
+            isLocationFresh: profile.isLocationFresh,
+            onDismiss: { dismiss() },
+            onOpenDirections: {
+                guard FriendProfileData(userID: userID, service: service).canOpenDirections else {
+                    return
                 }
-            }
-        }
-        .onChange(of: renderedProfile.isFriendAccepted, initial: true) { _, isAccepted in
+                onOpenDirections()
+            },
+            onPreparePresentation: onPreparePresentation
+        )
+        .onChange(of: profile.isFriendAccepted, initial: true) { _, isAccepted in
             if !isAccepted {
                 dismiss()
             }
         }
-        .onChange(of: renderedProfile.canOpenDirections) { _, canOpenDirections in
-            if !canOpenDirections {
-                opensDirectionsAfterDismiss = false
-            }
-        }
-        .onDisappear {
-            guard opensDirectionsAfterDismiss else { return }
-            opensDirectionsAfterDismiss = false
-            Task { @MainActor in
-                await Task.yield()
-                guard self.profile.canOpenDirections else { return }
-                onOpenDirections()
-            }
-        }
-    }
-
-    private var profile: FriendProfileData {
-        FriendProfileData(userID: userID, service: service)
     }
 }
 
-struct FriendProfilePanel: View {
-    @ObservedObject private var service: FriendSyncService
-
-    private let userID: String
-    private let onDismiss: () -> Void
-    private let onOpenDirections: () -> Void
-
-    init(
-        userID: String,
-        service: FriendSyncService,
-        onDismiss: @escaping () -> Void,
-        onOpenDirections: @escaping () -> Void
-    ) {
-        self.userID = userID
-        self.service = service
-        self.onDismiss = onDismiss
-        self.onOpenDirections = onOpenDirections
-    }
-
-    var body: some View {
-        let renderedProfile = profile
-        return FriendProfileContentView(
-            displayName: renderedProfile.displayName,
-            avatarID: renderedProfile.avatarID,
-            profileColorHex: renderedProfile.profileColorHex,
-            isGhostModeEnabled: renderedProfile.isGhostModeEnabled,
-            location: renderedProfile.location,
-            isLocationFresh: renderedProfile.isLocationFresh,
-            onDismiss: onDismiss,
-            onOpenDirections: {
-                guard self.profile.canOpenDirections else { return }
-                onOpenDirections()
-            }
-        )
-        .onChange(of: renderedProfile.isFriendAccepted, initial: true) { _, isAccepted in
-            if !isAccepted {
-                onDismiss()
-            }
-        }
-    }
-
-    private var profile: FriendProfileData {
-        FriendProfileData(userID: userID, service: service)
-    }
-}
+// MARK: - Shared bottom sheet
 
 struct FriendProfileContentView: View {
     let displayName: String
@@ -157,226 +88,264 @@ struct FriendProfileContentView: View {
     let isLocationFresh: Bool
     let onDismiss: () -> Void
     let onOpenDirections: () -> Void
+    let onPreparePresentation: (CGFloat) -> Void
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1, paused: isGhostModeEnabled || location == nil)) { context in
-            MapDetailPanel(
-                title: displayName,
-                closeLabel: "Fermer la fiche de l’ami",
-                scrollIdentifier: "friend-profile-scroll",
-                narrativeIdentifier: "friend-profile-narrative",
-                content: narrative(relativeTo: context.date),
-                onDismiss: onDismiss
-            ) {
-                if location != nil || isGhostModeEnabled {
-                    fields.locationFooter
-                }
-            } actions: {
-                fields.directionsButton
-                    .labelStyle(.iconOnly)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .accessibilityLabel("Itinéraire")
-            }
-        }
-    }
-
-    private func narrative(relativeTo now: Date) -> MapDetailTextContent {
-        var fragments: [MapDetailTextContent.Fragment] = [
-            .avatars([avatarID]), .text(" "), .emphasis(displayName), .text(".\n")
-        ]
-        var status: String
-        if isGhostModeEnabled {
-            fragments += [.text("👻 Mode fantôme activé. "), .emphasis("Indisponible"), .text(".")]
-            status = "Mode fantôme activé. Indisponible."
-        } else if let location {
-            let updated = duration(since: location.sampledAt, now: now)
-            let date = location.sampledAt.formatted(.dateTime.day().month(.abbreviated).hour().minute())
-            let freshness = isLocationFresh ? "Position actualisée" : "Dernière position reçue"
-            fragments += [
-                .text("📍 \(freshness) il y a "), .emphasis(updated),
-                .text(", le 📅 "), .emphasis(date), .text(".")
-            ]
-            status = "\(freshness) il y a \(updated), le \(date)."
-            if isLocationFresh, let spotEnteredAt = location.spotEnteredAt {
-                let presenceDuration = duration(since: spotEnteredAt, now: now)
-                fragments += [.text(" Au même endroit depuis "), .emphasis(presenceDuration), .text(".")]
-                status += " Au même endroit depuis \(presenceDuration)."
-            } else if !isLocationFresh {
-                let stale = " Position non actualisée récemment."
-                fragments += [.text(stale)]
-                status += stale
-            }
-        } else {
-            fragments += [.text("📍 Position indisponible.")]
-            status = "Position indisponible."
-        }
-        return MapDetailTextContent(fragments: fragments, accessibilityLabel: "\(displayName). \(status)")
-    }
-
-    private func duration(since date: Date, now: Date) -> String {
-        Self.durationFormatter.string(from: max(0, now.timeIntervalSince(date))) ?? "0 s"
-    }
-
-    private static let durationFormatter: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.day, .hour, .minute, .second]
-        formatter.maximumUnitCount = 2
-        formatter.unitsStyle = .full
-        formatter.zeroFormattingBehavior = .dropAll
-        return formatter
-    }()
-
-    private var fields: FriendProfileFields {
-        FriendProfileFields(
-            displayName: displayName,
-            avatarID: avatarID,
-            profileColorHex: profileColorHex,
-            isGhostModeEnabled: isGhostModeEnabled,
-            location: location,
-            isLocationFresh: isLocationFresh,
-            onOpenDirections: onOpenDirections
+        FriendProfileNativeContent(
+            content: FriendProfileBody(
+                displayName: displayName, avatarID: avatarID,
+                profileColorHex: profileColorHex, isGhostModeEnabled: isGhostModeEnabled,
+                location: location, isLocationFresh: isLocationFresh,
+                onDismiss: onDismiss, onOpenDirections: onOpenDirections
+            ),
+            onPreparePresentation: onPreparePresentation
         )
     }
 }
 
-// MARK: - Shared profile content
-
-private struct FriendProfileFields: View {
+/// The same content is used for preflight sizing and the visible scroll view.
+struct FriendProfileBody: View {
     let displayName: String
     let avatarID: String
     let profileColorHex: String
     let isGhostModeEnabled: Bool
     let location: FriendLocation?
     let isLocationFresh: Bool
+    let onDismiss: () -> Void
     let onOpenDirections: () -> Void
 
     var body: some View {
-        Section {
+        VStack(spacing: 20) {
             identity
-                .padding(.vertical, 8)
-        }
 
-        Section {
-            locationDetails
-            directionsButton
-        } header: {
-            Text("Position")
-        } footer: {
-            locationFooter
-        }
-    }
-
-    var identity: some View {
-        FriendProfileIdentityView(
-            displayName: displayName,
-            avatarID: avatarID,
-            profileColorHex: profileColorHex,
-            isGhostModeEnabled: isGhostModeEnabled
-        )
-    }
-
-    @ViewBuilder
-    var locationDetails: some View {
-        if isGhostModeEnabled {
-            Text("Cet ami a activé le mode fantôme.")
-                .foregroundStyle(.secondary)
-        } else if let location {
-            LabeledContent(
-                isLocationFresh
-                    ? "Dernière mise à jour"
-                    : "Dernière position reçue"
-            ) {
-                Text(location.sampledAt, style: .relative)
+            if !isGhostModeEnabled, let location {
+                locationDetails(location)
             }
 
-            LabeledContent("Date") {
-                Text(
-                    location.sampledAt.formatted(
-                        date: .abbreviated,
-                        time: .shortened
-                    )
-                )
+            Button {
+                guard canOpenDirections else { return }
+                onOpenDirections()
+            } label: {
+                Label("Itinéraire", systemImage: "map")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!canOpenDirections)
+            .accessibilityHint("Choisir une application pour rejoindre cet ami")
 
-            if isLocationFresh, let spotEnteredAt = location.spotEnteredAt {
-                LabeledContent("Au même endroit depuis") {
-                    Text(spotEnteredAt, style: .relative)
-                }
-            } else if !isLocationFresh {
-                Label(
-                    "Position non actualisée récemment",
-                    systemImage: "clock"
-                )
-                .foregroundStyle(.secondary)
+            if let explanation {
+                Text(explanation)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-        } else {
-            Text("Position indisponible")
-                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
+        .padding(.bottom, 16)
     }
 
-    var directionsButton: some View {
-        Button {
-            guard !isGhostModeEnabled, location != nil else { return }
-            onOpenDirections()
-        } label: {
-            Label("Itinéraire", systemImage: "map")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-        .disabled(isGhostModeEnabled || location == nil)
-        .accessibilityHint("Choisir une application pour rejoindre cet ami")
-    }
-
-    var locationFooter: some View {
-        Text(
-            isGhostModeEnabled
-                ? "Sa position est masquée. L’itinéraire et l’actualisation sont indisponibles jusqu’à son retour."
-                : "L’action Itinéraire utilise la dernière position connue, même si elle n’a pas été actualisée récemment."
-        )
-    }
-}
-
-private struct FriendProfileIdentityView: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    let displayName: String
-    let avatarID: String
-    let profileColorHex: String
-    let isGhostModeEnabled: Bool
-
-    var body: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
-            : AnyLayout(HStackLayout(spacing: 16))
-
-        return layout {
+    private var identity: some View {
+        VStack(spacing: 12) {
             FriendAvatarBadge(
                 avatarID: avatarID,
                 profileColorHex: profileColorHex,
-                size: 64
+                size: 128
             )
             .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(spacing: 6) {
                 Text(displayName)
                     .font(.title2.bold())
+                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
 
-                if isGhostModeEnabled {
-                    Text("👻 Indisponible")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Indisponible, mode fantôme activé")
-                } else {
-                    Label("Ami", systemImage: "person.2.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                Label(statusTitle, systemImage: statusSymbol)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func locationDetails(_ location: FriendLocation) -> some View {
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Position reçue")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(location.sampledAt, style: .relative)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                if isLocationFresh,
+                   let enteredAt = location.spotEnteredAt,
+                   enteredAt <= location.sampledAt {
+                    Text("Au même endroit")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(enteredAt, style: .relative)
+                        .font(.subheadline.weight(.semibold))
+                } else {
+                    Text("Reçue le")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(location.sampledAt.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 4)
+    }
+
+    private var canOpenDirections: Bool {
+        !isGhostModeEnabled && location != nil
+    }
+
+    private var statusTitle: String {
+        if isGhostModeEnabled { return "Mode fantôme" }
+        guard location != nil else { return "Position indisponible" }
+        return isLocationFresh ? "Position actualisée" : "Position ancienne"
+    }
+
+    private var statusSymbol: String {
+        if isGhostModeEnabled { return "eye.slash" }
+        guard location != nil else { return "location.slash" }
+        return isLocationFresh ? "location" : "clock"
+    }
+
+    private var explanation: String? {
+        if isGhostModeEnabled {
+            return "Sa position est masquée. L’itinéraire sera disponible à son retour."
+        }
+        guard location != nil else {
+            return "L’itinéraire sera disponible dès qu’une position sera partagée."
+        }
+        return isLocationFresh ? nil : "L’itinéraire utilise la dernière position connue."
+    }
+}
+
+private struct FriendProfileNativeContent: UIViewControllerRepresentable {
+    let content: FriendProfileBody
+    let onPreparePresentation: (CGFloat) -> Void
+
+    func makeUIViewController(context: Context) -> FriendProfilePresentationController {
+        let controller = FriendProfilePresentationController()
+        updateUIViewController(controller, context: context)
+        return controller
+    }
+
+    func updateUIViewController(_ controller: FriendProfilePresentationController, context: Context) {
+        let environment = context.environment
+        let body = AnyView(content
+            .environment(\.locale, environment.locale)
+            .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
+            .environment(\.layoutDirection, environment.layoutDirection)
+            .environment(\.colorScheme, environment.colorScheme))
+        let scroll = AnyView(ScrollView { content }
+            .scrollBounceBehavior(.basedOnSize)
+            .accessibilityIdentifier("friend-profile-scroll")
+            .overlay(alignment: .topTrailing) {
+                Button("Fermer la fiche de l’ami", systemImage: "xmark", action: content.onDismiss)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.regular)
+                    .padding(16)
+            }
+            .environment(\.locale, environment.locale)
+            .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
+            .environment(\.layoutDirection, environment.layoutDirection)
+            .environment(\.colorScheme, environment.colorScheme))
+        controller.update(content: body, scroll: scroll, onPrepare: onPreparePresentation)
+    }
+}
+
+/// Prepares the native detent in the first appearance transaction, before rendering.
+/// Later layout passes, detent changes and live data updates never reframe the map.
+final class FriendProfilePresentationController: UIViewController {
+    static let compactDetent = UISheetPresentationController.Detent.Identifier("friend-profile-compact")
+    private let measurementHost = UIHostingController(rootView: AnyView(EmptyView()))
+    private let visibleHost = UIHostingController(rootView: AnyView(EmptyView()))
+    private var onPrepare: (CGFloat) -> Void = { _ in }
+    private(set) var preparedHeight: CGFloat?
+
+    func update(content: AnyView, scroll: AnyView, onPrepare: @escaping (CGFloat) -> Void) {
+        if preparedHeight == nil { measurementHost.rootView = content }
+        visibleHost.rootView = scroll
+        self.onPrepare = onPrepare
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        for host in [measurementHost, visibleHost] {
+            addChild(host)
+            host.view.backgroundColor = .clear
+            host.view.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(host.view)
+            NSLayoutConstraint.activate([
+                host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                host.view.topAnchor.constraint(equalTo: view.topAnchor),
+                host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            ])
+            host.didMove(toParent: self)
+        }
+        measurementHost.safeAreaRegions = []
+        measurementHost.view.isHidden = true
+        measurementHost.view.isAccessibilityElement = false
+    }
+
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        guard preparedHeight == nil else { return }
+        var ancestor = parent
+        while let controller = ancestor {
+            if let sheet = controller.presentationController as? UISheetPresentationController {
+                prepare(sheet: sheet)
+                return
+            }
+            ancestor = controller.parent
+        }
+    }
+
+    func prepare(sheet: UISheetPresentationController) {
+        guard preparedHeight == nil,
+              let container = sheet.containerView, let window = container.window else { return }
+        view.layoutIfNeeded()
+        let width = view.bounds.width - view.safeAreaInsets.left - view.safeAreaInsets.right
+        guard width.isFinite, width > 0 else { return }
+        let measured = measurementHost.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
+        guard measured.height.isFinite, measured.height > 0 else { return }
+        let height = ceil(measured.height) + 20
+        preparedHeight = height
+        measurementHost.rootView = AnyView(EmptyView())
+        // UIKit resolves the safe-area and floating-sheet margins. Configure and
+        // lay out before the appearance transaction commits, never in viewDidAppear.
+        UIView.performWithoutAnimation {
+            sheet.animateChanges {
+                sheet.detents = [
+                    .custom(identifier: Self.compactDetent) { min(height, $0.maximumDetentValue) },
+                    .large()
+                ]
+                sheet.selectedDetentIdentifier = Self.compactDetent
+                sheet.largestUndimmedDetentIdentifier = Self.compactDetent
+                sheet.prefersGrabberVisible = true
+                sheet.prefersScrollingExpandsWhenScrolledToEdge = true
+            }
+        }
+        let frame = container.convert(sheet.frameOfPresentedViewInContainerView, to: window)
+        guard frame.minY.isFinite, frame.height > 0 else { return }
+        onPrepare(frame.minY)
     }
 }
 

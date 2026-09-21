@@ -1467,6 +1467,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// Friend whose profile is visible above the map.
     var selectedFriendProfileUserID: String?
 
+    /// One-shot framing from prepared sheet geometry, or after complete dismissal.
+    var friendCameraRequest: MapFriendCameraRequest?
+
     var showsSystemUserLocation = true
     var showsHeatMap = false
     var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
@@ -1537,12 +1540,14 @@ struct MapWithFogView: UIViewRepresentable {
                 coordinator?.edgeZoomTargets(on: mapView) ?? []
             },
             onBegin: { [weak coordinator] in
+                coordinator?.friendCamera.cancel()
                 coordinator?.userCamera.stopFollowing()
             }
         )
         viewport.onViewportChange = { [weak coordinator, weak mapView] in
             guard let coordinator, let mapView else { return }
             coordinator.edgeZoom?.cancel()
+            coordinator.friendCamera.cancel()
             coordinator.socialProximityController.viewportDidChange(on: mapView)
             coordinator.refreshMapOffscreenIndicators(on: mapView)
         }
@@ -1615,6 +1620,7 @@ struct MapWithFogView: UIViewRepresentable {
            let coordinate = locationTracker.lastLocation?.coordinate,
            !context.coordinator.isConsumingRecenterRequest {
             let coordinator = context.coordinator
+            coordinator.friendCamera.cancel()
             coordinator.isConsumingRecenterRequest = true
             DispatchQueue.main.async {
                 centerOnUser = false
@@ -1624,11 +1630,13 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         if resetMapOrientation {
+            context.coordinator.friendCamera.cancel()
             DispatchQueue.main.async { resetMapOrientation = false }
             resetCameraOrientation(on: uiView)
         }
 
         if let friendUserID = centerOnFriendUserID {
+            context.coordinator.friendCamera.cancel()
             DispatchQueue.main.async { centerOnFriendUserID = nil }
             centerMap(
                 onFriend: friendUserID,
@@ -1639,6 +1647,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         if let outingEventID = centerOnOutingPlanEventID {
+            context.coordinator.friendCamera.cancel()
             DispatchQueue.main.async { centerOnOutingPlanEventID = nil }
             centerMap(
                 onOutingPlan: outingEventID,
@@ -1649,6 +1658,20 @@ struct MapWithFogView: UIViewRepresentable {
 
         if let coordinate = locationTracker.lastLocation?.coordinate {
             context.coordinator.userCamera.updateLocation(coordinate, on: uiView)
+        }
+
+        if let request = friendCameraRequest {
+            let matchesSelection = request.sheetTopInWindow != nil
+                ? selectedFriendProfileUserID == request.userID
+                : selectedFriendProfileUserID == nil && selectedOutingPlanEventID == nil
+            context.coordinator.applyFriendCameraRequest(
+                request,
+                coordinate: friendLocations[request.userID]?.coordinate,
+                viewport: viewport,
+                isAllowed: matchesSelection && isEventCreationEnabled
+                    && !centerOnUser && !resetMapOrientation
+                    && centerOnFriendUserID == nil && centerOnOutingPlanEventID == nil
+            )
         }
     }
 
@@ -1672,6 +1695,7 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.removeLongPressRecognizer(from: uiView)
         coordinator.removeImmediateSocialAnnotationRecognizer(from: uiView)
         coordinator.removeMapOffscreenIndicatorContainer()
+        coordinator.friendCamera.cancel()
         coordinator.userCamera.stopFollowing()
         coordinator.socialProximityController.tearDown()
     }
@@ -2046,6 +2070,7 @@ struct MapWithFogView: UIViewRepresentable {
         guard requested != coordinator.lastRequestedDetailSelection else { return }
         // Pane selection outlives native focus while the user pans or zooms.
         // Publish the request before selection can synchronously call its delegate.
+        coordinator.friendCamera.cancel()
         coordinator.lastRequestedDetailSelection = requested
         if let requested {
             coordinator.userCamera.stopFollowing()
@@ -2064,9 +2089,9 @@ struct MapWithFogView: UIViewRepresentable {
         context.coordinator.userCamera.stopFollowing()
 
         if let coordinate = friendLocations[userID]?.coordinate {
-            setFocusedRegion(on: mapView, center: coordinate, animated: true)
-            context.coordinator.socialProximityController.select(
-                .friend(userID),
+            guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+            context.coordinator.socialProximityController.center(
+                on: .friend(userID),
                 on: mapView
             )
         }
@@ -2214,6 +2239,7 @@ struct MapWithFogView: UIViewRepresentable {
         fileprivate var draftOutingAnnotation: DraftOutingAnnotation?
         fileprivate var lastFocusedDraftCoordinate: MapUserCoordinate?
         fileprivate var lastRequestedDetailSelection: MapSocialClusterMemberID?
+        let friendCamera = MapFriendCameraController()
         var onJoinFriend: (String) -> Void
         var onSelectFriend: (String) -> Void
         var onViewFriendProfile: (String) -> Void
@@ -2251,6 +2277,11 @@ struct MapWithFogView: UIViewRepresentable {
                 if case .outing(let eventID) = memberID {
                     self?.onDeselectOutingPlan(eventID)
                 }
+            },
+            onRequestFriendProfile: { [weak self] userID in
+                self?.friendCamera.cancel()
+                self?.userCamera.stopFollowing()
+                self?.onSelectFriend(userID)
             },
             visibleBounds: { [weak self] mapView in
                 self?.visibleSafeBounds(on: mapView)
@@ -3047,6 +3078,7 @@ struct MapWithFogView: UIViewRepresentable {
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
             let userInitiated = hasActiveMapGesture(in: mapView)
             if userInitiated {
+                friendCamera.cancel()
                 userCamera.stopFollowing()
             }
             socialProximityController.visibleRegionDidChange(
@@ -3063,6 +3095,7 @@ struct MapWithFogView: UIViewRepresentable {
         ) {
             let userInitiated = hasActiveMapGesture(in: mapView)
             if userInitiated {
+                friendCamera.cancel()
                 userCamera.stopFollowing()
             }
             socialProximityController.regionWillChange(
@@ -3070,6 +3103,27 @@ struct MapWithFogView: UIViewRepresentable {
                 userInitiated: socialProximityController.hasActivePresentation
                     && userInitiated
             )
+        }
+
+        func applyFriendCameraRequest(
+            _ request: MapFriendCameraRequest,
+            coordinate: CLLocationCoordinate2D?,
+            viewport: MapViewportView,
+            isAllowed: Bool
+        ) {
+            guard isAllowed, let coordinate,
+                  CLLocationCoordinate2DIsValid(coordinate) else {
+                friendCamera.cancel(consuming: request)
+                return
+            }
+            guard friendCamera.lastRequestID != request.id else { return }
+            guard !hasActiveMapGesture(in: viewport.mapView) else {
+                friendCamera.cancel(consuming: request)
+                return
+            }
+            viewport.layoutIfNeeded()
+            userCamera.stopFollowing()
+            friendCamera.apply(request, coordinate: coordinate, viewport: viewport)
         }
 
         private func hasActiveMapGesture(in view: UIView) -> Bool {
@@ -3282,6 +3336,10 @@ struct MapWithFogView: UIViewRepresentable {
             view: MKAnnotationView,
             on mapView: MKMapView
         ) {
+            // MapKit can finish selecting this friend after its pin enters view.
+            if !socialProximityController.isFocused(annotation) {
+                friendCamera.cancel()
+            }
             userCamera.stopFollowing()
             guard let memberID = socialProximityController.activate(
                 annotation,

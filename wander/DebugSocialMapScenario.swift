@@ -142,6 +142,9 @@ private struct DebugSocialMapScene: View {
     @State private var centerOnEvent: String?
     @State private var responses: [String: OutingAttendanceParticipationState] = [:]
     @State private var showsDirections = false
+    @State private var opensDirectionsAfterDismiss = false
+    @State private var presentedFriendProfileUserID: String?
+    @State private var friendCameraRequest: MapFriendCameraRequest?
 
     private static func hasArgument(_ argument: String) -> Bool {
         arguments.contains("-debug-social-map-" + argument)
@@ -193,7 +196,7 @@ private struct DebugSocialMapScene: View {
                 userID: id, displayName: name, avatarID: ProfileAvatar.cyclopsHorns.rawValue,
                 profileColorHex: "#3478F6", coordinate: Self.coordinate,
                 horizontalAccuracy: 5, sampledAt: Self.hasArgument("stale") ? referenceDate.addingTimeInterval(-7200) : referenceDate, updatedAt: referenceDate,
-                receivedAt: referenceDate, spotEnteredAt: nil
+                receivedAt: referenceDate, spotEnteredAt: referenceDate.addingTimeInterval(-1800)
             ))
         })
     }
@@ -238,22 +241,11 @@ private struct DebugSocialMapScene: View {
     var body: some View {
         let presentations = presentations
         MapDetailSplitView(
-            isPresented: selectedDetail?.friendUserID != nil,
-            isEventsExpanded: $eventsExpanded
+            isPresented: false,
+            isEventsExpanded: $eventsExpanded,
+            areEventsObscured: selectedDetail?.friendUserID != nil
         ) {
-            if let id = selectedDetail?.friendUserID, let friend = friends[id] {
-                FriendProfileContentView(
-                    displayName: friend.displayName,
-                    avatarID: friend.avatarID,
-                    profileColorHex: friend.profileColorHex,
-                    isGhostModeEnabled: Self.hasArgument("ghost"),
-                    location: Self.hasArgument("missing-location") ? nil : friend,
-                    isLocationFresh: !Self.hasArgument("stale"),
-                    onDismiss: { selectedDetail = nil },
-                    onOpenDirections: { showsDirections = true }
-                )
-                .id(id)
-            }
+            EmptyView()
         } events: {
             MapEventsPanelView(
                 outings: Self.hasArgument("list-loading") || Self.hasArgument("list-error") ? [:] : presentations,
@@ -278,6 +270,33 @@ private struct DebugSocialMapScene: View {
             )
         } map: {
             mapView(presentations: presentations)
+        }
+        .sheet(isPresented: friendProfileIsPresented, onDismiss: friendProfileDidDismiss) {
+            if let id = selectedDetail?.friendUserID, let friend = friends[id] {
+                FriendProfileContentView(
+                    displayName: friend.displayName,
+                    avatarID: friend.avatarID,
+                    profileColorHex: friend.profileColorHex,
+                    isGhostModeEnabled: Self.hasArgument("ghost"),
+                    location: Self.hasArgument("missing-location") ? nil : friend,
+                    isLocationFresh: !Self.hasArgument("stale"),
+                    onDismiss: { selectedDetail = nil },
+                    onOpenDirections: {
+                        opensDirectionsAfterDismiss = true
+                        selectedDetail = nil
+                    },
+                    onPreparePresentation: { sheetTop in
+                        guard selectedDetail?.friendUserID == id,
+                              !Self.hasArgument("ghost"),
+                              !Self.hasArgument("missing-location") else { return }
+                        friendCameraRequest = MapFriendCameraRequest(
+                            userID: id, sheetTopInWindow: sheetTop
+                        )
+                    }
+                )
+                .onAppear { presentedFriendProfileUserID = id }
+                .id(id)
+            }
         }
         .alert("Itinéraire de test", isPresented: $showsDirections) {
             Button("Fermer", role: .cancel) {}
@@ -314,6 +333,34 @@ private struct DebugSocialMapScene: View {
         }
     }
 
+    private func friendProfileDidDismiss() {
+        guard selectedDetail?.friendUserID == nil else { return }
+        let dismissedUserID = presentedFriendProfileUserID
+        presentedFriendProfileUserID = nil
+        if let dismissedUserID,
+           selectedDetail == nil,
+           isListActive,
+           editingEvent == nil,
+           !Self.hasArgument("ghost"),
+           !Self.hasArgument("missing-location") {
+            friendCameraRequest = MapFriendCameraRequest(userID: dismissedUserID)
+        }
+        guard opensDirectionsAfterDismiss else { return }
+        opensDirectionsAfterDismiss = false
+        showsDirections = true
+    }
+
+    private var friendProfileIsPresented: Binding<Bool> {
+        Binding(
+            get: { selectedDetail?.friendUserID != nil },
+            set: { isPresented in
+                if !isPresented, selectedDetail?.friendUserID != nil {
+                    selectedDetail = nil
+                }
+            }
+        )
+    }
+
     private func mapView(presentations: [String: MapOutingPlan]) -> some View {
         MapWithFogView(
             locationTracker: locationTracker,
@@ -327,6 +374,7 @@ private struct DebugSocialMapScene: View {
             isEventCreationEnabled: editingEvent == nil,
             selectedOutingPlanEventID: selectedDetail?.outingEventID,
             selectedFriendProfileUserID: selectedDetail?.friendUserID,
+            friendCameraRequest: friendCameraRequest,
             showsSystemUserLocation: false,
             onSelectFriend: { selectedDetail = .friend($0) },
             onSelectOutingPlan: { selectedDetail = .outing($0) }

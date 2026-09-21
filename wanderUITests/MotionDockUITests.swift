@@ -73,7 +73,7 @@ final class MotionDockUITests: XCTestCase {
         attachScreenshot("Bouton événements à droite de la barre native")
     }
 
-    func testEventsButtonReturnsFromPanelsAndReplacesFriendDetail() {
+    func testEventsButtonReturnsFromPanelsAndOpensAfterFriendSheetCloses() {
         command("events").tap()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         for (panel, field) in [("friends", "Code ami"), ("profile", "Pseudo")] {
@@ -92,13 +92,14 @@ final class MotionDockUITests: XCTestCase {
         app.terminate()
         app.launchArguments += ["-debug-social-map-mixed", "-debug-social-map-open-friend"]
         app.launch()
-        let friendPane = app.descendants(matching: .any)["map-detail-pane"].firstMatch
+        let friendPane = app.scrollViews["friend-profile-scroll"].firstMatch
         XCTAssertTrue(friendPane.waitForExistence(timeout: 10))
         XCTAssertTrue(friendPane.staticTexts["Amina"].exists)
         XCTAssertFalse(command("events").isSelected)
         let nativeMapSize = app.maps.firstMatch.frame.size
-        command("events").tap()
+        app.buttons["Fermer la fiche de l’ami"].tap()
         XCTAssertTrue(friendPane.waitForNonExistence(timeout: 3))
+        command("events").tap()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertTrue(eventList.isHittable)
         XCTAssertTrue(command("events").isSelected)
@@ -166,7 +167,7 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertEqual(map.frame, mapFrame)
         XCTAssertEqual(group.frame.midX, groupFrame.midX, accuracy: 2)
         XCTAssertEqual(group.frame.midY, groupFrame.midY, accuracy: 2)
-        XCTAssertFalse(app.descendants(matching: .any)["map-detail-pane"].firstMatch.isHittable)
+        XCTAssertFalse(app.scrollViews["friend-profile-scroll"].firstMatch.isHittable)
         XCTAssertFalse(eventList.isHittable)
         XCTAssertFalse(command("events").isSelected)
     }

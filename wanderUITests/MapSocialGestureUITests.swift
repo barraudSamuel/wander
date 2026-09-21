@@ -177,16 +177,19 @@ final class MapSocialGestureUITests: XCTestCase {
         waitForExpectations(timeout: 3)
     }
 
-    func testEdgeZoomWithAnOpenDetailPane() {
+    func testEdgeZoomWithAnOpenFriendSheet() {
         launchDetailScenario(["mixed", "open-friend"])
         let group = app.buttons["Groupe, 3 personnes et 2 sorties prévues"]
         XCTAssertTrue(group.waitForExistence(timeout: 3))
-        let pan = map.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.7))
+        let mapFrame = map.frame
+        let exposedHeight = detailPane.frame.minY - map.frame.minY
+        XCTAssertGreaterThan(exposedHeight, 100)
+        let origin = map.coordinate(withNormalizedOffset: .zero)
+        let pan = origin.withOffset(CGVector(dx: map.frame.width * 0.2, dy: exposedHeight * 0.6))
         pan.press(forDuration: 0.05, thenDragTo: pan.withOffset(CGVector(dx: 60, dy: 0)))
         let before = group.frame
-        let origin = map.coordinate(withNormalizedOffset: .zero)
-        let lower = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.8))
-        let upper = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.25))
+        let lower = origin.withOffset(CGVector(dx: 12, dy: exposedHeight * 0.8))
+        let upper = origin.withOffset(CGVector(dx: 12, dy: exposedHeight * 0.25))
         lower.press(forDuration: 0.05, thenDragTo: upper)
         let moved = NSPredicate { _, _ in
             abs(group.frame.midX - before.midX) + abs(group.frame.midY - before.midY) > 5
@@ -194,32 +197,63 @@ final class MapSocialGestureUITests: XCTestCase {
         expectation(for: moved, evaluatedWith: app)
         waitForExpectations(timeout: 3)
         XCTAssertTrue(detailPane.exists)
-        attachScreenshot(named: "Zoom de bord avec une fiche ouverte")
+        XCTAssertEqual(map.frame, mapFrame)
+        attachScreenshot(named: "Zoom de bord au-dessus de la fiche ami")
     }
 
-    func testFriendPaneDragResizesMapAndKeepsSelection() {
-        launchDetailScenario(["mixed", "open-friend"])
-        XCTAssertLessThanOrEqual(detailPane.frame.maxY, resizeHandle.frame.minY + 2)
-        XCTAssertLessThanOrEqual(resizeHandle.frame.maxY, map.frame.minY + 2)
-        XCTAssertEqual(resizeHandle.frame.height, 44, accuracy: 1)
-        attachScreenshot(named: "Fiche ami arrondie, ouverture au tiers")
-        let initialDetailHeight = detailPane.frame.height
-        let initialMapHeight = map.frame.height
-        let dragDistance: CGFloat = 137
-        let start = resizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dragDistance)))
-
-        let retainedHeight = NSPredicate { _, _ in
-            abs(self.detailPane.frame.height - initialDetailHeight - dragDistance) < 8
+    func testFriendSheetExpandsWithoutResizingMapAndKeepsSelection() {
+        launchDetailScenario(["mixed"])
+        let fullMapFrame = map.frame
+        openMixedFriend(eventCount: 2)
+        XCTAssertFalse(resizeHandle.exists)
+        XCTAssertEqual(map.frame, fullMapFrame)
+        XCTAssertTrue(map.frame.intersects(detailPane.frame))
+        XCTAssertGreaterThan(detailPane.frame.minY, map.frame.minY)
+        XCTAssertTrue(app.buttons["Itinéraire"].isHittable)
+        attachScreenshot(named: "Fiche ami compacte superposée à la carte")
+        let initialTop = detailPane.frame.minY
+        detailPane.swipeUp()
+        let expanded = NSPredicate { _, _ in
+            self.detailPane.frame.minY < initialTop - 50
         }
-        expectation(for: retainedHeight, evaluatedWith: detailPane)
+        expectation(for: expanded, evaluatedWith: detailPane)
         waitForExpectations(timeout: 3)
-        XCTAssertEqual(detailPane.frame.height, initialDetailHeight + dragDistance, accuracy: 8)
-        XCTAssertEqual(map.frame.height, initialMapHeight - dragDistance, accuracy: 8)
+        XCTAssertEqual(map.frame, fullMapFrame)
         XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
         XCTAssertFalse(app.buttons["Retour aux événements"].exists)
-        XCTAssertLessThanOrEqual(resizeHandle.frame.maxY, map.frame.minY + 2)
-        attachScreenshot(named: "Fiche ami à hauteur libre, carte visible")
+        XCTAssertFalse(resizeHandle.exists)
+        attachScreenshot(named: "Fiche ami agrandie sur une carte de taille constante")
+    }
+
+    func testFriendDismissalRecentersAfterSheetResize() {
+        launchDetailScenario(["mixed", "fullscreen"])
+        openMixedFriend(eventCount: 2)
+        let initialTop = detailPane.frame.minY
+        detailPane.swipeUp()
+        let expanded = NSPredicate { _, _ in self.detailPane.frame.minY < initialTop - 50 }
+        expectation(for: expanded, evaluatedWith: detailPane)
+        waitForExpectations(timeout: 3)
+        closeFriendSheet()
+        let group = app.buttons["Groupe, 3 personnes et 2 sorties prévues"]
+        let centeredAfterDismissal = NSPredicate { _, _ in
+            group.exists && abs(group.frame.midY - self.usableMapCenterY) < 40
+        }
+        expectation(for: centeredAfterDismissal, evaluatedWith: group)
+        waitForExpectations(timeout: 3)
+        XCTAssertFalse(detailPane.exists)
+    }
+
+    func testPreparedFriendOpeningLeavesTheWholePinAboveTheSheet() {
+        launchDetailScenario(["mixed", "fullscreen"])
+        openMixedFriend(eventCount: 2)
+        let friend = app.buttons["Amina, Ami"]
+        let framed = NSPredicate { _, _ in
+            friend.exists && friend.frame.maxY + 8 < self.detailPane.frame.minY
+                && friend.frame.minY >= self.app.statusBars.firstMatch.frame.maxY
+        }
+        expectation(for: framed, evaluatedWith: friend)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(detailPane.buttons["Itinéraire"].isHittable)
     }
 
     func testNativeMapRenderSizeStaysStableAcrossPaneChanges() {
@@ -233,60 +267,37 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
         XCTAssertEqual(nativeMap.frame.size, initialSize)
         app.segmentedControls.buttons["Mixte"].tap()
+        let fullMapFrame = map.frame
         openMixedFriend(eventCount: 2)
-        for _ in 0..<3 {
-            resizeHandle.tap()
-            XCTAssertEqual(nativeMap.frame.width, initialSize.width, accuracy: 1)
-            XCTAssertEqual(nativeMap.frame.height, initialSize.height, accuracy: 1)
-            XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
-        }
-        app.buttons["Fermer la fiche de l’ami"].tap()
-        XCTAssertTrue(resizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(map.frame, fullMapFrame)
+        detailPane.swipeUp()
+        XCTAssertEqual(nativeMap.frame.width, initialSize.width, accuracy: 1)
+        XCTAssertEqual(nativeMap.frame.height, initialSize.height, accuracy: 1)
+        XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
+        closeFriendSheet()
+        XCTAssertFalse(resizeHandle.exists)
         XCTAssertFalse(eventList.isHittable)
+        XCTAssertEqual(map.frame, fullMapFrame)
         XCTAssertEqual(nativeMap.frame.height, initialSize.height, accuracy: 1)
     }
 
-    func testDockPanelsPreserveResizedMapDetail() {
+    func testDockPanelsRemainAvailableAfterClosingFriendSheet() {
         launchDetailScenario(["mixed", "open-friend", "fullscreen"])
-        let initialHeight = detailPane.frame.height
-        let handle = resizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        handle.press(forDuration: 0.05, thenDragTo: handle.withOffset(CGVector(dx: 0, dy: 70)))
-        XCTAssertGreaterThan(detailPane.frame.height, initialHeight + 40)
-        let detailFrame = detailPane.frame
         let mapFrame = map.frame
         let nativeSize = app.maps.firstMatch.frame.size
-
-        func assertPreservedDetail() {
-            XCTAssertTrue(detailPane.waitForExistence(timeout: 3))
-            XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
-            XCTAssertEqual(detailPane.frame.minY, detailFrame.minY, accuracy: 1)
-            XCTAssertEqual(detailPane.frame.height, detailFrame.height, accuracy: 1)
+        closeFriendSheet()
+        for (panel, field) in [("friends", "Code ami"), ("profile", "Pseudo")] {
+            app.buttons["motion-dock-" + panel].tap()
+            XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 3))
+            app.buttons["motion-dock-explore"].tap()
+            XCTAssertTrue(app.textFields[field].waitForNonExistence(timeout: 3))
+            XCTAssertFalse(detailPane.exists)
             XCTAssertEqual(map.frame, mapFrame)
             XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
         }
-
-        app.buttons["motion-dock-friends"].tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
-        attachScreenshot(named: "Amis superposé à la fiche redimensionnée")
-        app.buttons["motion-dock-profile"].tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
-        attachScreenshot(named: "Profil superposé à la fiche redimensionnée")
-        app.buttons["motion-dock-explore"].tap()
-        assertPreservedDetail()
-
-        app.buttons["motion-dock-friends"].tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
-        app.buttons["motion-dock-friends"].tap()
-        assertPreservedDetail()
-
-        app.buttons["motion-dock-profile"].tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
-        // Tap over the underlying detail: only the overlay closes.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.13)).tap()
-        assertPreservedDetail()
-        attachScreenshot(named: "Fiche et carte conservées après fermeture du panneau")
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
         XCTAssertFalse(eventList.isHittable)
+        attachScreenshot(named: "Carte conservée après fermeture de la fiche et des panneaux")
     }
 
     func testFullMapRestoresAfterEventsAndDockPanels() {
@@ -322,33 +333,22 @@ final class MapSocialGestureUITests: XCTestCase {
         attachScreenshot(named: "Carte plein écran après fermeture de la liste en paysage")
     }
 
-    func testFriendResizeButtonCyclesSizesAndCloseRestoresFullMap() {
+    func testFriendSheetDragDismissesAndKeepsFullMap() {
         launchDetailScenario(["mixed"])
-        let fullMapHeight = map.frame.height
+        let fullMapFrame = map.frame
         openMixedFriend(eventCount: 2)
-        waitForResizeValue("Un tiers de l’écran")
-        let initialHeight = detailPane.frame.height
-
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
-        XCTAssertGreaterThan(detailPane.frame.height, initialHeight + 50)
-        let expandedHeight = detailPane.frame.height
-
-        resizeHandle.tap()
-        waitForResizeValue("Fiche réduite")
-        XCTAssertLessThan(detailPane.frame.height, expandedHeight)
-        // Minimum readable height can clamp both compact and one-third presets.
-        XCTAssertLessThanOrEqual(detailPane.frame.height, initialHeight)
-
-        resizeHandle.tap()
-        waitForResizeValue("Un tiers de l’écran")
-        XCTAssertEqual(detailPane.frame.height, initialHeight, accuracy: 2)
-        XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(resizeHandle.isHittable)
-        app.buttons["Fermer la fiche de l’ami"].tap()
-        XCTAssertTrue(resizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(resizeHandle.exists)
+        XCTAssertTrue(app.buttons["Itinéraire"].isHittable)
+        let start = detailPane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
+        XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
         XCTAssertFalse(eventList.isHittable)
-        XCTAssertEqual(map.frame.height, fullMapHeight, accuracy: 2)
+        XCTAssertEqual(map.frame, fullMapFrame)
+        openMixedFriend(eventCount: 2)
+        XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
+        closeFriendSheet()
+        XCTAssertEqual(map.frame, fullMapFrame)
     }
 
     func testVerticalScrollAfterSelectionKeepsActionsHidden() {
@@ -390,7 +390,8 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertEqual(map.frame.height, mapHeight, accuracy: 2)
     }
 
-    func testMixedGroupOpensFriendAboveMap() {
+    func testMixedGroupOpensFriendSheetOverMap() {
+        let fullMapFrame = map.frame
         app.segmentedControls.buttons["Mixte"].tap()
         let group = app.buttons["Groupe, 3 personnes et 2 sorties prévues"]
         XCTAssertTrue(group.waitForExistence(timeout: 3))
@@ -402,13 +403,12 @@ final class MapSocialGestureUITests: XCTestCase {
 
         XCTAssertTrue(detailPane.waitForExistence(timeout: 3))
         XCTAssertTrue(detailPane.staticTexts["Amina"].waitForExistence(timeout: 3))
-        XCTAssertLessThanOrEqual(detailPane.frame.maxY, map.frame.minY)
-        let profileScroll = app.scrollViews["friend-profile-scroll"]
-        XCTAssertTrue(profileScroll.exists)
-        reveal(app.buttons["Itinéraire"], in: profileScroll)
-        XCTAssertTrue(app.buttons["Fermer la fiche de l’ami"].isHittable)
-        app.buttons["Fermer la fiche de l’ami"].tap()
-        XCTAssertTrue(resizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(map.frame, fullMapFrame)
+        XCTAssertTrue(map.frame.intersects(detailPane.frame))
+        XCTAssertGreaterThan(detailPane.frame.minY, map.frame.minY)
+        XCTAssertTrue(app.buttons["Itinéraire"].isHittable)
+        XCTAssertFalse(resizeHandle.exists)
+        closeFriendSheet()
         XCTAssertFalse(eventList.isHittable)
     }
 
@@ -450,21 +450,21 @@ final class MapSocialGestureUITests: XCTestCase {
             launchDetailScenario(["mixed", "open-friend", state])
             let directions = app.buttons["Itinéraire"]
             XCTAssertTrue(directions.waitForExistence(timeout: 3))
+            XCTAssertTrue(directions.isHittable)
             XCTAssertEqual(directions.isEnabled, state == "stale")
-            for _ in 0..<3 {
-                XCTAssertTrue(app.buttons["Fermer la fiche de l’ami"].isHittable)
-                XCTAssertLessThanOrEqual(directions.frame.maxY, resizeHandle.frame.minY)
-                resizeHandle.tap()
-                let settled = NSPredicate { _, _ in
-                    directions.frame.maxY <= self.resizeHandle.frame.minY
-                        && abs(self.detailPane.frame.maxY - self.resizeHandle.frame.minY) < 2
-                }
-                expectation(for: settled, evaluatedWith: app)
-                waitForExpectations(timeout: 3)
-            }
+            XCTAssertTrue(app.buttons["Fermer la fiche de l’ami"].isHittable)
+            XCTAssertFalse(resizeHandle.exists)
+            let mapFrame = map.frame
+            detailPane.swipeUp()
+            XCTAssertTrue(directions.isHittable)
+            XCTAssertEqual(directions.isEnabled, state == "stale")
+            XCTAssertEqual(map.frame, mapFrame)
             if state == "stale" {
                 directions.tap()
+                XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
                 XCTAssertTrue(app.alerts["Itinéraire de test"].waitForExistence(timeout: 3))
+            } else {
+                closeFriendSheet()
             }
         }
     }
@@ -590,7 +590,7 @@ final class MapSocialGestureUITests: XCTestCase {
         expectation(for: rostersSuspended, evaluatedWith: probe)
         waitForExpectations(timeout: 3)
         XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
-        app.buttons["Fermer la fiche de l’ami"].tap()
+        closeFriendSheet()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         let rostersResumed = NSPredicate { _, _ in !requestedIDs().isEmpty }
         expectation(for: rostersResumed, evaluatedWith: probe)
@@ -958,9 +958,15 @@ final class MapSocialGestureUITests: XCTestCase {
         }
     }
 
-    func testDetailedListReturnsAtSameScrollAfterFriendProfile() {
+    func testDetailedListReturnsAtSameHeightAndScrollAfterFriendProfile() {
         launchDetailScenario(["mixed", "many-events", "fullscreen", "roster-probe"])
         openEventList()
+        let initialHeight = eventList.frame.height
+        let handle = eventsResizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        handle.press(forDuration: 0.05, thenDragTo: handle.withOffset(CGVector(dx: 0, dy: -80)))
+        let resized = NSPredicate { _, _ in self.eventList.frame.height > initialHeight + 50 }
+        expectation(for: resized, evaluatedWith: eventList)
+        waitForExpectations(timeout: 3)
         let row = revealEvent(12)
         row.tap()
         let listFrame = eventList.frame
@@ -976,7 +982,7 @@ final class MapSocialGestureUITests: XCTestCase {
         }
         expectation(for: suspended, evaluatedWith: probe)
         waitForExpectations(timeout: 3)
-        app.buttons["Fermer la fiche de l’ami"].tap()
+        closeFriendSheet()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertEqual(eventList.frame, listFrame)
         XCTAssertEqual(row.frame.minY, rowFrame.minY, accuracy: 2)
@@ -1116,17 +1122,18 @@ final class MapSocialGestureUITests: XCTestCase {
     private var map: XCUIElement { app.otherElements["map-visible-viewport"].firstMatch }
 
     private var detailPane: XCUIElement {
-        app.descendants(matching: .any)["map-detail-pane"].firstMatch
+        app.scrollViews["friend-profile-scroll"].firstMatch
     }
 
     private var resizeHandle: XCUIElement {
         app.descendants(matching: .any)["map-detail-resize-handle"].firstMatch
     }
 
-    private func waitForResizeValue(_ value: String) {
-        let resized = NSPredicate(format: "value == %@", value)
-        expectation(for: resized, evaluatedWith: resizeHandle)
-        waitForExpectations(timeout: 3)
+    private func closeFriendSheet() {
+        let close = app.buttons["Fermer la fiche de l’ami"]
+        XCTAssertTrue(close.isHittable)
+        close.tap()
+        XCTAssertTrue(detailPane.waitForNonExistence(timeout: 3))
     }
 
     private func openGroupedEvent(index: Int) {
@@ -1191,14 +1198,6 @@ final class MapSocialGestureUITests: XCTestCase {
         cancel.tap()
         app.buttons["Annuler l’événement"].tap()
         XCTAssertTrue(cancel.waitForNonExistence(timeout: 3))
-    }
-
-    private func reveal(_ element: XCUIElement, in scrollView: XCUIElement) {
-        XCTAssertTrue(scrollView.waitForExistence(timeout: 3))
-        for _ in 0..<8 where !element.isHittable {
-            scrollView.swipeUp()
-        }
-        XCTAssertTrue(element.isHittable)
     }
 
     private func eventPin(_ title: String) -> XCUIElement {

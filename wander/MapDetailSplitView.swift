@@ -15,6 +15,7 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
     @State private var didEmitEventsClosingFeedback = false
 
     let isPresented: Bool
+    private let areEventsObscured: Bool
     @Binding private var isEventsExpanded: Bool
     private let detail: Detail
     private let events: Events
@@ -23,12 +24,14 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
     init(
         isPresented: Bool,
         isEventsExpanded: Binding<Bool>,
+        areEventsObscured: Bool = false,
         @ViewBuilder detail: () -> Detail,
         @ViewBuilder events: () -> Events,
         @ViewBuilder map: () -> MapContent
     ) {
         self.isPresented = isPresented
         self._isEventsExpanded = isEventsExpanded
+        self.areEventsObscured = areEventsObscured
         self.detail = detail()
         self.events = events()
         self.mapContent = map()
@@ -46,7 +49,7 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
                 let detailHeight = isPresented
                     ? safeInsets.top + height(for: position, availableHeight: availableHeight)
                     : 0
-                let showsEventsPane = isEventsExpanded && !isPresented
+                let showsEventsPane = isEventsExpanded && !isPresented && !areEventsObscured
 
                 MapDetailArrangement(
                     detailHeight: detailHeight,
@@ -68,6 +71,7 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
                 }
                 .animation(resizeAnimation, value: isPresented)
                 .animation(resizeAnimation, value: isEventsExpanded)
+                .animation(resizeAnimation, value: areEventsObscured)
                 .onChange(of: isDragging) { _, dragging in
                     if !dragging {
                         dragOrigin = nil
@@ -90,6 +94,9 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
         .onChange(of: isPresented) { _, _ in
             cancelDrags()
             position = .third
+        }
+        .onChange(of: areEventsObscured) { _, _ in
+            cancelDrags()
         }
         .onChange(of: isEventsExpanded) { _, _ in
             cancelDrags()

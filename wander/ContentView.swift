@@ -121,7 +121,9 @@ struct ContentView: View {
     @State private var cityProgress: CityProgress?
     @State private var friendNavigationSelection: FriendSelection?
     @State private var selectedOutingNavigationEventID: String?
-    @State private var selectedFriendProfile: FriendSelection?
+    @State private var pendingFriendDirectionsUserID: String?
+    @State private var presentedFriendProfileUserID: String?
+    @State private var friendCameraRequest: MapFriendCameraRequest?
     @State private var outingAttendanceErrorMessage: String?
 
     #if DEBUG
@@ -150,7 +152,7 @@ struct ContentView: View {
                     service: friendSyncService,
                     friends: summaries,
                     onShowOnMap: showFriendOnMap,
-                    onViewProfile: presentFriendProfile,
+                    onViewProfile: presentMapFriendProfile,
                     friendCodeInput: $friendCodeInput
                 )
             } profile: {
@@ -396,17 +398,26 @@ struct ContentView: View {
             outingPlanService.stopObserving()
             outingAttendanceService.stopObserving()
         }
-        .sheet(item: $selectedFriendProfile) { selection in
+        .sheet(item: friendProfileSelection, onDismiss: friendProfileDidDismiss) { selection in
             FriendProfileSheet(
                 userID: selection.userID,
                 service: friendSyncService,
                 onOpenDirections: {
-                    dockSelection = .explore
-                    presentNavigationOptions(selection.userID)
+                    pendingFriendDirectionsUserID = selection.userID
+                    selectedMapDetail = nil
+                },
+                onPreparePresentation: { sheetTop in
+                    guard selectedMapDetail?.friendUserID == selection.userID,
+                          currentNavigationDestination(for: selection.userID) != nil else { return }
+                    friendCameraRequest = MapFriendCameraRequest(
+                        userID: selection.userID, sheetTopInWindow: sheetTop
+                    )
                 }
             )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            .onAppear {
+                presentedFriendProfileUserID = selection.userID
+            }
+            .id(selection.id)
         }
     }
 
@@ -420,18 +431,11 @@ struct ContentView: View {
         let outingPlans = mapOutingPlans
 
         return MapDetailSplitView(
-            isPresented: selectedMapDetail?.friendUserID != nil,
-            isEventsExpanded: $eventsExpanded
+            isPresented: false,
+            isEventsExpanded: $eventsExpanded,
+            areEventsObscured: selectedMapDetail?.friendUserID != nil
         ) {
-            if let userID = selectedMapDetail?.friendUserID {
-                FriendProfilePanel(
-                    userID: userID,
-                    service: friendSyncService,
-                    onDismiss: { selectedMapDetail = nil },
-                    onOpenDirections: { presentNavigationOptions(userID) }
-                )
-                .id(userID)
-            }
+            EmptyView()
         } events: {
             MapEventsPanelView(
                 outings: outingPlans,
@@ -482,6 +486,7 @@ struct ContentView: View {
                     isEventCreationEnabled: !outingComposerVisible,
                     selectedOutingPlanEventID: selectedOutingPlanEventID,
                     selectedFriendProfileUserID: selectedMapDetail?.friendUserID,
+                    friendCameraRequest: friendCameraRequest,
                     showsHeatMap: heatMapEnabled,
                     heatMapCellData: locationTracker.heatMapCellData,
                     heatMapRevision: locationTracker.heatMapRevision,
@@ -682,6 +687,8 @@ struct ContentView: View {
 
     private func presentMapFriendProfile(_ userID: String) {
         guard acceptedFriendUserIDs.contains(userID) else { return }
+        guard selectedMapDetail?.friendUserID != userID else { return }
+        dockSelection = .explore
         selectedMapDetail = .friend(userID)
         guard !friendSyncService.ghostFriendUserIDs.contains(userID),
               let location = friendSyncService.friendLocation(for: userID) else {
@@ -690,10 +697,37 @@ struct ContentView: View {
         locationPushService.requestRefresh(for: userID, currentLocation: location)
     }
 
-    private func presentFriendProfile(_ userID: String) {
-        guard acceptedFriendUserIDs.contains(userID) else { return }
-        dockSelection = .explore
-        selectedFriendProfile = FriendSelection(userID: userID)
+    private var friendProfileSelection: Binding<FriendSelection?> {
+        Binding(
+            get: { selectedMapDetail?.friendUserID.map { FriendSelection(userID: $0) } },
+            set: { selection in
+                if let selection {
+                    selectedMapDetail = .friend(selection.userID)
+                } else if selectedMapDetail?.friendUserID != nil {
+                    // A map event may already have replaced the friend selection.
+                    selectedMapDetail = nil
+                }
+            }
+        )
+    }
+
+    private func friendProfileDidDismiss() {
+        // Switching sheet items must not recenter over the newly opened friend.
+        guard selectedMapDetail?.friendUserID == nil else { return }
+        let dismissedUserID = presentedFriendProfileUserID
+        presentedFriendProfileUserID = nil
+        if let dismissedUserID,
+           selectedMapDetail == nil,
+           dockSelection == .explore,
+           !outingComposerVisible,
+           !filterSheetVisible,
+           currentNavigationDestination(for: dismissedUserID) != nil {
+            friendCameraRequest = MapFriendCameraRequest(userID: dismissedUserID)
+        }
+        guard let userID = pendingFriendDirectionsUserID else { return }
+        pendingFriendDirectionsUserID = nil
+        // Revalidate live data only after the sheet has finished dismissing.
+        presentNavigationOptions(userID)
     }
 
     private var navigationAlertIsPresented: Binding<Bool> {
@@ -968,10 +1002,6 @@ struct ContentView: View {
             selectedMapDetail = nil
         }
 
-        if let userID = selectedFriendProfile?.userID,
-           !acceptedUserIDs.contains(userID) {
-            selectedFriendProfile = nil
-        }
     }
 
     // MARK: - Friends
@@ -1012,8 +1042,7 @@ struct ContentView: View {
     private func showFriendOnMap(_ friend: FriendMapSummary) {
         guard friend.canShowOnMap,
               currentNavigationDestination(for: friend.userID) != nil else { return }
-        centerOnFriendUserID = friend.userID
-        dockSelection = .explore
+        presentMapFriendProfile(friend.userID)
     }
 
     private func synchronizeLocationPushRegistration() {
