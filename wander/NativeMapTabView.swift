@@ -73,6 +73,13 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
 }
 
 final class NativeMapTabController: UIViewController {
+    private static let eventsButtonSide: CGFloat = 54
+    // Match the 40-point tab artwork after the navigation container's 0.9 scale.
+    private static let eventsIconSide: CGFloat = 36
+    private static let eventsIcon = UIImage(named: "TabIconEvents")?
+        .preparingThumbnail(of: CGSize(width: eventsIconSide, height: eventsIconSide))?
+        .withRenderingMode(.alwaysOriginal)
+
     private let contentController: UIHostingController<AnyView>
     private let tabsController = CompactTabBarController()
     private let navigationContainer = TabBarHitTestingView()
@@ -192,13 +199,15 @@ final class NativeMapTabController: UIViewController {
         )
         let controlsFrame = tabBar.convert(controlsRect, to: view)
         if controlsFrame.height > 0 {
-            let side = min(54, max(44, controlsFrame.height))
+            let side = Self.eventsButtonSide
             // The floating bar's bounds extend below its visible capsule.
-            // Keep the capped button at the top instead of centering in that gap.
-            eventsButton.frame = CGRect(
-                x: controlsFrame.maxX,
-                y: controlsFrame.minY,
-                width: side, height: side
+            // Keep a stable diameter at its top, independent of safe-area changes.
+            // Glass can transform the button during interaction; setting frame
+            // then would resize its bounds to compensate for that transform.
+            eventsButton.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+            eventsButton.center = CGPoint(
+                x: controlsFrame.maxX + side / 2,
+                y: controlsFrame.minY + side / 2
             )
         }
         reportContentInsets()
@@ -210,7 +219,10 @@ final class NativeMapTabController: UIViewController {
             tabsController.contentLayoutGuide.layoutFrame, to: view
         )
         guard navigationContentFrame.height > 0 else { return }
-        let buttonTop = eventsButton.bounds.height > 0 ? eventsButton.frame.minY - 8 : safeFrame.maxY
+        // Reserve the resting geometry, not the glass interaction's transformed frame.
+        let buttonTop = eventsButton.bounds.height > 0
+            ? eventsButton.center.y - eventsButton.bounds.height / 2 - 8
+            : safeFrame.maxY
         let bottom = min(
             safeFrame.maxY, navigationContentFrame.maxY, buttonTop,
             view.keyboardLayoutGuide.layoutFrame.minY
@@ -240,10 +252,13 @@ final class NativeMapTabController: UIViewController {
 
     private func updateEventsButtonAppearance() {
         var configuration: UIButton.Configuration = eventsButton.isSelected ? .prominentGlass() : .glass()
-        configuration.image = UIImage(systemName: "calendar")
-        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22, weight: .medium)
+        configuration.image = Self.eventsIcon
+        let inset = (Self.eventsButtonSide - Self.eventsIconSide) / 2
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset)
         configuration.cornerStyle = .capsule
         eventsButton.configuration = configuration
+        eventsButton.imageView?.layer.cornerRadius = Self.eventsIconSide / 2
+        eventsButton.imageView?.clipsToBounds = true
         eventsButton.accessibilityValue = eventsButton.isSelected ? "Liste affichée" : "Liste masquée"
         eventsButton.accessibilityHint = eventsButton.isSelected ? "Fermer la liste des événements" : "Afficher la liste des événements"
     }

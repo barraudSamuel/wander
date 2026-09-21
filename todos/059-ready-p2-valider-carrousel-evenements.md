@@ -24,9 +24,25 @@ lui paraît correct. Le calendrier est ensuite rapproché de 8 points de la barr
 et le recentrage remonté de 12 points, selon le nouvel ajustement approuvé.
 Leurs nouveaux espacements restent à vérifier avec clavier et en vue partagée.
 
+La vidéo du 21 septembre montre aussi le cercle du calendrier réduit après
+Profil → Événements, puis toujours réduit après fermeture. Le correctif approuvé
+fixe sa géométrie au repos à 54 points via `bounds`/`center` et calcule la réserve
+du contenu sans lire son `frame` transformé. Il supprime le diamètre variable
+44–54 points et l'assignation de `frame` pendant les interactions natives.
+La cause dynamique précise reste non mesurée. Aucun simulateur n'était démarré
+lors du contrôle ; aucun appareil n'a été lancé. Compilation app et tests
+réussie, mais résolution du défaut visuel encore à confirmer.
+
 ## Preuves
 
+- [Nouvelle icône calendrier](../docs/plans/2026-09-21-icone-evenements.md) :
+  illustration fournie, fond bleu et rendu original, variantes 40/80/120 pixels,
+  image circulaire de 36 points dans le bouton de 54 points. Rendu sur appareil
+  encore à confirmer ; les fichiers d'asset sont inspectés localement.
 - [Plan approuvé](../docs/plans/2026-09-20-bouton-evenements-navigation.md).
+- [Correctif de stabilité](../docs/plans/2026-09-21-stabiliser-bouton-evenements.md),
+  compilation `TEST BUILD SUCCEEDED`, code 0,
+  `/tmp/wander-events-stable-size-build.log`.
 - `wander/NativeMapTabView.swift` et `wander/MotionDockView.swift` : bouton natif,
   alignement avec la barre, clavier et état de présentation.
 - `wander/MapEventsPanelView.swift` : liste persistante et observations actives.
@@ -37,6 +53,12 @@ Leurs nouveaux espacements restent à vérifier avec clavier et en vue partagée
 
 ## Critères d'acceptation
 
+- [ ] Confirmer le cadrage circulaire, la lisibilité et la taille de la nouvelle
+  icône calendrier par rapport aux autres icônes, dans les deux états du bouton.
+- [ ] Vérifier que le cercle garde le même diamètre après Profil → Événements,
+  Amis → Événements et plusieurs ouvertures/fermetures, y compris au relâchement
+  d'un appui. Les assertions existantes contrôlent taille et position à un point
+  près ; elles ont été compilées mais pas exécutées.
 - [ ] À taille standard, confirmer les centres verticaux du calendrier et des
   onglets alignés à deux points près, avec le bouton à droite de la barre, sans
   chevauchement ni sortie d'écran en portrait/paysage et avec le clavier.

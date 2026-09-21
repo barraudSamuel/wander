@@ -69,24 +69,35 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertFalse(events.isSelected)
         XCTAssertEqual(mapViewport.frame, fullMapFrame)
         XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+        assertEventsFrame(buttonFrame)
         assertTabFrames(tabFrames)
         attachScreenshot("Bouton événements à droite de la barre native")
     }
 
     func testEventsButtonReturnsFromPanelsAndOpensAfterFriendSheetCloses() {
-        command("events").tap()
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        for (panel, field) in [("friends", "Code ami"), ("profile", "Pseudo")] {
+        let buttonFrame = command("events").frame
+        for (panel, field) in [("profile", "Pseudo"), ("friends", "Code ami"), ("profile", "Pseudo")] {
             command(panel).tap()
             XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 3))
             XCTAssertFalse(command("events").isSelected)
             XCTAssertFalse(eventList.isHittable)
+            assertEventsFrame(buttonFrame)
             command("events").tap()
             XCTAssertTrue(app.textFields[field].waitForNonExistence(timeout: 3))
             XCTAssertTrue(command("explore").isSelected)
             XCTAssertTrue(command("events").isSelected)
             XCTAssertTrue(eventList.isHittable)
             XCTAssertTrue(eventsHandle.isHittable)
+            assertEventsFrame(buttonFrame)
+
+            command("events").tap()
+            XCTAssertTrue(eventsHandle.waitForNonExistence(timeout: 3))
+            XCTAssertFalse(command("events").isSelected)
+            assertEventsFrame(buttonFrame)
+
+            command("events").tap()
+            XCTAssertTrue(eventsHandle.waitForExistence(timeout: 3))
+            assertEventsFrame(buttonFrame)
         }
 
         app.terminate()
@@ -254,6 +265,14 @@ final class MotionDockUITests: XCTestCase {
     private var eventsHandle: XCUIElement { app.buttons["map-events-resize-handle"] }
 
     private var mapViewport: XCUIElement { app.otherElements["map-visible-viewport"].firstMatch }
+
+    private func assertEventsFrame(_ expected: CGRect, file: StaticString = #filePath, line: UInt = #line) {
+        let actual = command("events").frame
+        XCTAssertEqual(actual.width, expected.width, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(actual.height, expected.height, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(actual.midX, expected.midX, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(actual.midY, expected.midY, accuracy: 1, file: file, line: line)
+    }
 
     private func assertTabFrames(_ expected: [CGRect]) {
         for (name, frame) in zip(["explore", "friends", "profile"], expected) {
