@@ -44,7 +44,7 @@ enum MapEventListPresentation {
 
     static func participants(for outing: MapOutingPlan) -> [MapOutingAttendee] {
         guard outing.rosterState == .available else { return [] }
-        return outing.visiblePeople.filter { $0.userID != outing.organizer.userID }
+        return Array(outing.visiblePeople.dropFirst())
     }
 
     static func accessibilitySummary(for outing: MapOutingPlan, location: CLLocation?, now: Date) -> String {
@@ -89,13 +89,12 @@ enum MapEventListPresentation {
     }
 }
 
-/// Keep the list mounted beneath the detail so returning preserves its scroll position.
-struct MapEventsPanelView<Detail: View>: View {
+/// The list stays mounted while hidden so reopening preserves its scroll position.
+struct MapEventsPanelView: View {
     @ScaledMetric(relativeTo: .caption) private var avatarSize: CGFloat = 18
-    @State private var renderedEventIDs: Set<String> = []
+    @State private var visibleEventIDs: Set<String> = []
 
     let outings: [String: MapOutingPlan]
-    let showsDetail: Bool
     var selectedEventID: String?
     var currentLocation: CLLocation?
     var isLoading = false
@@ -107,22 +106,16 @@ struct MapEventsPanelView<Detail: View>: View {
     var onEdit: (String) -> Void = { _ in }
     var onOpenDirections: (String) -> Void = { _ in }
     let onSelect: (String) -> Void
-    @ViewBuilder let detail: () -> Detail
 
     private var requestedRosterEventIDs: Set<String> {
-        isListActive ? renderedEventIDs.intersection(outings.keys) : []
+        guard isListActive else { return [] }
+        return visibleEventIDs.intersection(outings.keys)
     }
 
     var body: some View {
-        ZStack {
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                eventList(now: context.date)
-            }
-            .opacity(showsDetail ? 0 : 1)
-            .allowsHitTesting(!showsDetail)
-            .accessibilityHidden(showsDetail)
-
-            if showsDetail { detail() }
+        let orderedOutings = MapEventListPresentation.sortedOutings(Array(outings.values))
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            detailedList(orderedOutings, now: context.date)
         }
         .onChange(of: requestedRosterEventIDs, initial: true) { _, ids in
             onVisibleEventIDsChange(ids)
@@ -130,105 +123,123 @@ struct MapEventsPanelView<Detail: View>: View {
         .onDisappear { onVisibleEventIDsChange([]) }
     }
 
-    private func eventList(now: Date) -> some View {
+    private func detailedList(_ outings: [MapOutingPlan], now: Date) -> some View {
         List {
-            if hasLoadError {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Certains événements sont indisponibles", systemImage: "exclamationmark.triangle")
-                    Button("Réessayer", action: onRetry)
-                }
-                .accessibilityIdentifier("events-list-error")
-            }
-            if isLoading {
-                ProgressView("Chargement des événements…")
-                    .accessibilityIdentifier("events-list-loading")
-            }
-            if outings.isEmpty, !isLoading, !hasLoadError {
-                Text("Aucun événement pour le moment")
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("events-list-empty")
-            }
-            ForEach(MapEventListPresentation.sortedOutings(Array(outings.values)), id: \.plan.id) { outing in
-                eventRow(outing, now: now)
+            statusContent
+            ForEach(outings, id: \.plan.id) { outing in
+                eventButton(outing, now: now)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .onAppear { renderedEventIDs.insert(outing.plan.id) }
-                    .onDisappear { renderedEventIDs.remove(outing.plan.id) }
+                    .listRowBackground(selectedEventID == outing.plan.id ? Color.accentColor.opacity(0.12) : .clear)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        eventActions(for: outing)
+                    }
+                    .onAppear { visibleEventIDs.insert(outing.plan.id) }
+                    .onDisappear { visibleEventIDs.remove(outing.plan.id) }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .accessibilityIdentifier("events-list")
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
+        .accessibilityIdentifier("events-expanded-list")
     }
 
-    private func eventRow(_ outing: MapOutingPlan, now: Date) -> some View {
-        let distance = MapEventListPresentation.distance(
-            to: outing.plan.coordinate, from: currentLocation, now: now, compact: true
-        )
-        return Button {
-            onSelect(outing.plan.id)
-        } label: {
+    @ViewBuilder
+    private var statusContent: some View {
+        if hasLoadError {
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("\(outing.plan.category.emoji) \(outing.plan.category.title)")
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Text(outing.plan.plannedAt.formatted(.dateTime.hour().minute().locale(Locale(identifier: "fr_FR"))))
-                        .font(.subheadline.weight(.semibold))
-                        .monospacedDigit()
-                        .fixedSize()
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("📍 \(outing.plan.placeName)")
-                        .lineLimit(1)
-                    if let distance {
-                        Text("· \(distance)")
-                            .font(.caption)
-                            .fixedSize()
-                    }
-                    Spacer(minLength: 2)
-                    Text(outing.plan.plannedAt.formatted(.dateTime.day().month(.abbreviated).locale(Locale(identifier: "fr_FR"))))
-                        .font(.caption)
-                        .fixedSize()
-                }
+                Label("Événements indisponibles", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                Button("Réessayer", action: onRetry)
+                    .font(.subheadline)
+            }
+            .accessibilityIdentifier("events-list-error")
+        }
+        if isLoading {
+            ProgressView("Chargement…")
+                .font(.subheadline)
+                .accessibilityIdentifier("events-list-loading")
+        }
+        if outings.isEmpty, !isLoading, !hasLoadError {
+            Text("Aucun événement pour le moment")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-                HStack(spacing: 5) {
-                    ProfileAvatarView(avatarID: outing.organizer.avatarID, size: avatarSize)
-                    Text(outing.isCurrentUser ? "Vous" : outing.organizer.displayName)
-                        .lineLimit(1)
-                        .layoutPriority(-1)
-                    participantPreview(outing)
-                    Spacer(minLength: 4)
-                    if !outing.isCurrentUser, outing.participationState == .attending, !outing.isAttendanceUpdating {
-                        Image(systemName: "checkmark")
-                            .foregroundStyle(.tint)
-                    }
-                    Text(MapEventListPresentation.compactStatus(for: outing))
-                        .fontWeight(.medium)
-                        .foregroundStyle(!outing.isCurrentUser && outing.participationState == .attending ? Color.accentColor : .secondary)
-                        .fixedSize()
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(MapEventListPresentation.accessibilitySummary(for: outing, location: currentLocation, now: now))
+                .accessibilityIdentifier("events-list-empty")
+        }
+    }
+
+    private func eventButton(_ outing: MapOutingPlan, now: Date) -> some View {
+        Button {
+            onSelect(outing.plan.id)
+        } label: {
+            detailedRow(outing, now: now)
+                .contentShape(Rectangle())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(MapEventListPresentation.accessibilitySummary(for: outing, location: currentLocation, now: now))
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("event-list-row-" + outing.plan.id)
-        .accessibilityHint("Centrer la carte sur cet événement")
+        .accessibilityIdentifier("event-detail-row-" + outing.plan.id)
+        .accessibilityHint("Centrer la carte. Maintenir pour les actions de l’événement.")
         .accessibilityAddTraits(selectedEventID == outing.plan.id ? .isSelected : [])
         .contextMenu {
             eventActions(for: outing)
             Button("Itinéraire", systemImage: "map") { onOpenDirections(outing.plan.id) }
         }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            eventActions(for: outing)
+    }
+
+    private func detailedRow(_ outing: MapOutingPlan, now: Date) -> some View {
+        let distance = MapEventListPresentation.distance(
+            to: outing.plan.coordinate, from: currentLocation, now: now, compact: true
+        )
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label(outing.plan.category.title, systemImage: outing.plan.category.systemImageName)
+                    .font(.body.weight(.semibold))
+                Spacer(minLength: 4)
+                Text(outing.plan.plannedAt.formatted(
+                    .dateTime.day().month(.abbreviated).hour().minute().locale(Locale(identifier: "fr_FR"))
+                ))
+                .font(.caption)
+                .monospacedDigit()
+            }
+            HStack(spacing: 6) {
+                Text(outing.plan.placeName).lineLimit(1)
+                if let distance { Text("· " + distance).fixedSize() }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                ProfileAvatarView(avatarID: outing.organizer.avatarID, size: avatarSize)
+                Text(outing.isCurrentUser ? "Vous" : outing.organizer.displayName).lineLimit(1)
+                participantPreview(outing)
+                Spacer(minLength: 4)
+                Text(MapEventListPresentation.compactStatus(for: outing))
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .foregroundStyle(.primary)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func participantPreview(_ outing: MapOutingPlan) -> some View {
+        switch outing.rosterState {
+        case .available:
+            let participants = MapEventListPresentation.participants(for: outing)
+            if participants.isEmpty {
+                Text("· Aucun inscrit").lineLimit(1)
+            } else {
+                HStack(spacing: -5) {
+                    ForEach(participants.prefix(3)) { person in
+                        ProfileAvatarView(avatarID: person.avatarID, size: avatarSize)
+                    }
+                }
+                if participants.count > 3 { Text("+\(participants.count - 3)").fixedSize() }
+            }
+        case .loading, .notRequested: ProgressView().controlSize(.mini)
+        case .unavailable: Image(systemName: "person.crop.circle.badge.exclamationmark")
         }
     }
 
@@ -242,29 +253,6 @@ struct MapEventsPanelView<Detail: View>: View {
                 .tint(.blue)
             Button("Refuser", systemImage: "xmark") { onSetAttendance(outing.plan.id, false) }
                 .tint(.gray)
-        }
-    }
-
-    @ViewBuilder
-    private func participantPreview(_ outing: MapOutingPlan) -> some View {
-        switch outing.rosterState {
-        case .available:
-            let participants = MapEventListPresentation.participants(for: outing)
-            if participants.isEmpty {
-                Text("· Aucun inscrit").lineLimit(1)
-            } else {
-                Text("·")
-                HStack(spacing: -5) {
-                    ForEach(participants.prefix(3)) { person in
-                        ProfileAvatarView(avatarID: person.avatarID, size: avatarSize)
-                    }
-                }
-                if participants.count > 3 { Text("+\(participants.count - 3)").fixedSize() }
-            }
-        case .loading, .notRequested:
-            ProgressView().controlSize(.mini)
-        case .unavailable:
-            Image(systemName: "person.crop.circle.badge.exclamationmark")
         }
     }
 }

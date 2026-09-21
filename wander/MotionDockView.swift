@@ -25,6 +25,8 @@ enum MotionDockSelection: String, CaseIterable {
 /// Keeps the map mounted while panels open above the system tab bar.
 struct MotionDockView<MapContent: View, Friends: View, Profile: View>: View {
     @Binding var selection: MotionDockSelection
+    let isEventsPresented: Bool
+    let onToggleEvents: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AccessibilityFocusState private var focusedPanel: MotionDockSelection?
@@ -38,7 +40,11 @@ struct MotionDockView<MapContent: View, Friends: View, Profile: View>: View {
     private var isOpen: Bool { selection != .explore }
 
     var body: some View {
-        NativeMapTabView(selection: $selection) {
+        NativeMapTabView(
+            selection: $selection,
+            isEventsPresented: isEventsPresented,
+            onToggleEvents: onToggleEvents
+        ) {
             GeometryReader { geometry in
                 ZStack {
                     map()

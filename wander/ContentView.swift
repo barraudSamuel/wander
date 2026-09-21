@@ -115,6 +115,7 @@ struct ContentView: View {
     @State private var centerOnFriendUserID: String?
     @State private var centerOnOutingPlanEventID: String?
     @State private var selectedMapDetail: MapDetailSelection?
+    @State private var eventsExpanded = false
     @State private var visibleRosterEventIDs: Set<String> = []
     @State private var heatMapEnabled = false
     @State private var cityProgress: CityProgress?
@@ -138,7 +139,11 @@ struct ContentView: View {
         )
 
         return GeometryReader { geometry in
-            MotionDockView(selection: dockSelectionBinding) {
+            MotionDockView(
+                selection: dockSelectionBinding,
+                isEventsPresented: areEventsPresented,
+                onToggleEvents: toggleEvents
+            ) {
                 exploreTab()
             } friends: {
                 FriendsPanelView(
@@ -281,6 +286,18 @@ struct ContentView: View {
         }
     }
 
+    private var areEventsPresented: Bool {
+        eventsExpanded && dockSelection == .explore && selectedMapDetail?.friendUserID == nil
+    }
+
+    private func toggleEvents() {
+        guard !isProfileAccountFlowActive else { return }
+        let shouldPresent = !areEventsPresented
+        dockSelection = .explore
+        if selectedMapDetail?.friendUserID != nil { selectedMapDetail = nil }
+        eventsExpanded = shouldPresent
+    }
+
     private var dockSelectionBinding: Binding<MotionDockSelection> {
         Binding(
             get: { dockSelection },
@@ -402,16 +419,28 @@ struct ContentView: View {
     private func exploreTab() -> some View {
         let outingPlans = mapOutingPlans
 
-        return MapDetailSplitView(isPresented: true) {
+        return MapDetailSplitView(
+            isPresented: selectedMapDetail?.friendUserID != nil,
+            isEventsExpanded: $eventsExpanded
+        ) {
+            if let userID = selectedMapDetail?.friendUserID {
+                FriendProfilePanel(
+                    userID: userID,
+                    service: friendSyncService,
+                    onDismiss: { selectedMapDetail = nil },
+                    onOpenDirections: { presentNavigationOptions(userID) }
+                )
+                .id(userID)
+            }
+        } events: {
             MapEventsPanelView(
                 outings: outingPlans,
-                showsDetail: selectedMapDetail?.friendUserID != nil,
                 selectedEventID: selectedOutingPlanEventID,
                 currentLocation: locationTracker.lastLocation,
                 isLoading: outingPlanService.isLoading,
                 hasLoadError: outingPlanService.hasLoadError,
                 onRetry: { outingPlanService.retryFailedObservations() },
-                isListActive: dockSelection == .explore && scenePhase == .active,
+                isListActive: areEventsPresented && scenePhase == .active,
                 onVisibleEventIDsChange: { visibleRosterEventIDs = $0 },
                 onSetAttendance: { eventID, shouldAttend in
                     setOutingAttendance(shouldAttend, eventID: eventID)
@@ -428,17 +457,7 @@ struct ContentView: View {
                     selectedMapDetail = .outing(eventID)
                     centerOnOutingPlanEventID = eventID
                 }
-            ) {
-                if let userID = selectedMapDetail?.friendUserID {
-                    FriendProfilePanel(
-                        userID: userID,
-                        service: friendSyncService,
-                        onDismiss: { selectedMapDetail = nil },
-                        onOpenDirections: { presentNavigationOptions(userID) }
-                    )
-                    .id(userID)
-                }
-            }
+            )
         } map: {
             ZStack(alignment: .topTrailing) {
                 MapWithFogView(
@@ -516,7 +535,7 @@ struct ContentView: View {
                 .controlSize(.large)
                 .accessibilityLabel("Recentrer la carte sur ma position")
                 .padding(.horizontal)
-                .padding(.bottom, 8)
+                .padding(.bottom, 20)
                 .modifier(MapContentSafeArea(edges: [.bottom, .horizontal]))
             }
         }

@@ -5,6 +5,8 @@ import UIKit
 /// Keeps one map hierarchy beneath the system tab bar while tabs select panels.
 struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
     @Binding var selection: MotionDockSelection
+    let isEventsPresented: Bool
+    let onToggleEvents: () -> Void
     @State private var contentInsets = UIEdgeInsets.zero
     @ViewBuilder let content: () -> Content
 
@@ -15,18 +17,22 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> NativeMapTabController {
         let controller = NativeMapTabController(rootView: rootView(context: context))
         controller.delegate = context.coordinator
+        controller.onToggleEvents = onToggleEvents
         controller.onContentInsetsChange = { [weak coordinator = context.coordinator] insets in
             coordinator?.contentInsets.wrappedValue = insets
         }
         controller.synchronizeSelection(selection)
+        controller.synchronizeEvents(isPresented: isEventsPresented)
         return controller
     }
 
     func updateUIViewController(_ controller: NativeMapTabController, context: Context) {
         context.coordinator.selection = $selection
         context.coordinator.contentInsets = $contentInsets
+        controller.onToggleEvents = onToggleEvents
         controller.updateContent(rootView(context: context))
         controller.synchronizeSelection(selection)
+        controller.synchronizeEvents(isPresented: isEventsPresented)
     }
 
     private func rootView(context: Context) -> AnyView {
@@ -70,8 +76,10 @@ final class NativeMapTabController: UIViewController {
     private let contentController: UIHostingController<AnyView>
     private let tabsController = CompactTabBarController()
     private let navigationContainer = TabBarHitTestingView()
+    private let eventsButton = UIButton(type: .system)
     private var reportedContentInsets = UIEdgeInsets.zero
     var onContentInsetsChange: ((UIEdgeInsets) -> Void)?
+    var onToggleEvents: (() -> Void)?
 
     var delegate: (any UITabBarControllerDelegate)? {
         get { tabsController.delegate }
@@ -130,7 +138,10 @@ final class NativeMapTabController: UIViewController {
         NSLayoutConstraint.activate([
             preferredWidth,
             navigationContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
-            navigationContainer.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+            navigationContainer.widthAnchor.constraint(
+                lessThanOrEqualTo: view.safeAreaLayoutGuide.widthAnchor, constant: -88
+            ),
+            navigationContainer.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor, constant: -31),
             navigationContainer.topAnchor.constraint(equalTo: view.topAnchor),
             navigationContainer.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
         ])
@@ -148,6 +159,12 @@ final class NativeMapTabController: UIViewController {
         navigationContainer.tabBar = tabsController.tabBar
         tabsController.onLayout = { [weak self] in self?.updateNavigationLayout() }
         tabsController.didMove(toParent: self)
+
+        eventsButton.accessibilityLabel = "Événements"
+        eventsButton.accessibilityIdentifier = "motion-dock-events"
+        eventsButton.addAction(UIAction { [weak self] _ in self?.onToggleEvents?() }, for: .touchUpInside)
+        view.addSubview(eventsButton)
+        updateEventsButtonAppearance()
     }
 
     override func viewDidLayoutSubviews() {
@@ -167,6 +184,23 @@ final class NativeMapTabController: UIViewController {
         if navigationContainer.transform != transform {
             navigationContainer.transform = transform
         }
+        // Align to the native bar's control area, excluding its bottom safe area.
+        let tabBar = tabsController.tabBar
+        let controlsRect = CGRect(
+            x: 0, y: 0, width: tabBar.bounds.width,
+            height: max(0, tabBar.bounds.height - tabBar.safeAreaInsets.bottom)
+        )
+        let controlsFrame = tabBar.convert(controlsRect, to: view)
+        if controlsFrame.height > 0 {
+            let side = min(54, max(44, controlsFrame.height))
+            // The floating bar's bounds extend below its visible capsule.
+            // Keep the capped button at the top instead of centering in that gap.
+            eventsButton.frame = CGRect(
+                x: controlsFrame.maxX,
+                y: controlsFrame.minY,
+                width: side, height: side
+            )
+        }
         reportContentInsets()
     }
 
@@ -176,7 +210,11 @@ final class NativeMapTabController: UIViewController {
             tabsController.contentLayoutGuide.layoutFrame, to: view
         )
         guard navigationContentFrame.height > 0 else { return }
-        let bottom = min(safeFrame.maxY, navigationContentFrame.maxY, view.keyboardLayoutGuide.layoutFrame.minY)
+        let buttonTop = eventsButton.bounds.height > 0 ? eventsButton.frame.minY - 8 : safeFrame.maxY
+        let bottom = min(
+            safeFrame.maxY, navigationContentFrame.maxY, buttonTop,
+            view.keyboardLayoutGuide.layoutFrame.minY
+        )
         let insets = UIEdgeInsets(
             top: max(0, safeFrame.minY),
             left: max(0, safeFrame.minX),
@@ -191,6 +229,23 @@ final class NativeMapTabController: UIViewController {
                 self.onContentInsetsChange?(self.reportedContentInsets)
             }
         }
+    }
+
+    func synchronizeEvents(isPresented: Bool) {
+        loadViewIfNeeded()
+        guard eventsButton.isSelected != isPresented else { return }
+        eventsButton.isSelected = isPresented
+        updateEventsButtonAppearance()
+    }
+
+    private func updateEventsButtonAppearance() {
+        var configuration: UIButton.Configuration = eventsButton.isSelected ? .prominentGlass() : .glass()
+        configuration.image = UIImage(systemName: "calendar")
+        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22, weight: .medium)
+        configuration.cornerStyle = .capsule
+        eventsButton.configuration = configuration
+        eventsButton.accessibilityValue = eventsButton.isSelected ? "Liste affichée" : "Liste masquée"
+        eventsButton.accessibilityHint = eventsButton.isSelected ? "Fermer la liste des événements" : "Afficher la liste des événements"
     }
 
     func updateContent(_ content: AnyView) {

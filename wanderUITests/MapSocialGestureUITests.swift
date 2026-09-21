@@ -129,7 +129,7 @@ final class MapSocialGestureUITests: XCTestCase {
             waitForExpectations(timeout: 3)
             // The scenario starts centered on the current user, now an eligible target.
             XCTAssertEqual(anchor(user).x, map.frame.midX, accuracy: 8)
-            XCTAssertEqual(anchor(user).y, map.frame.midY, accuracy: 40)
+            XCTAssertEqual(anchor(user).y, usableMapCenterY, accuracy: 40)
             XCTAssertFalse(app.buttons["Groupe ouvert, 2 sorties prévues"].exists)
 
             let afterZoom = separation()
@@ -138,7 +138,7 @@ final class MapSocialGestureUITests: XCTestCase {
             expectation(for: zoomedOut, evaluatedWith: app)
             waitForExpectations(timeout: 3)
             XCTAssertEqual(anchor(user).x, map.frame.midX, accuracy: 8)
-            XCTAssertEqual(anchor(user).y, map.frame.midY, accuracy: 40)
+            XCTAssertEqual(anchor(user).y, usableMapCenterY, accuracy: 40)
         }
         attachScreenshot(named: "Zoom des deux bords, après relâchement")
     }
@@ -160,7 +160,7 @@ final class MapSocialGestureUITests: XCTestCase {
         let centered = NSPredicate { _, _ in abs(user.frame.midX - self.map.frame.midX) < 8 }
         expectation(for: centered, evaluatedWith: app)
         waitForExpectations(timeout: 3)
-        XCTAssertEqual(user.frame.maxY, map.frame.midY, accuracy: 40)
+        XCTAssertEqual(user.frame.maxY, usableMapCenterY, accuracy: 40)
         XCTAssertEqual(detailPane.exists, paneWasVisible)
     }
 
@@ -178,16 +178,18 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     func testEdgeZoomWithAnOpenDetailPane() {
-        openGroupedEvent(index: 0, eventNumber: 2)
-        let user = app.buttons["Moi, Vous"]
-        XCTAssertTrue(user.waitForExistence(timeout: 3))
-        let before = user.frame
+        launchDetailScenario(["mixed", "open-friend"])
+        let group = app.buttons["Groupe, 3 personnes et 2 sorties prévues"]
+        XCTAssertTrue(group.waitForExistence(timeout: 3))
+        let pan = map.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.7))
+        pan.press(forDuration: 0.05, thenDragTo: pan.withOffset(CGVector(dx: 60, dy: 0)))
+        let before = group.frame
         let origin = map.coordinate(withNormalizedOffset: .zero)
         let lower = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.8))
         let upper = origin.withOffset(CGVector(dx: 12, dy: map.frame.height * 0.25))
         lower.press(forDuration: 0.05, thenDragTo: upper)
         let moved = NSPredicate { _, _ in
-            abs(user.frame.midX - before.midX) + abs(user.frame.midY - before.midY) > 5
+            abs(group.frame.midX - before.midX) + abs(group.frame.midY - before.midY) > 5
         }
         expectation(for: moved, evaluatedWith: app)
         waitForExpectations(timeout: 3)
@@ -195,12 +197,12 @@ final class MapSocialGestureUITests: XCTestCase {
         attachScreenshot(named: "Zoom de bord avec une fiche ouverte")
     }
 
-    func testEventPaneDragResizesMapAndKeepsSelection() {
-        openGroupedEvent(index: 0, eventNumber: 2)
+    func testFriendPaneDragResizesMapAndKeepsSelection() {
+        launchDetailScenario(["mixed", "open-friend"])
         XCTAssertLessThanOrEqual(detailPane.frame.maxY, resizeHandle.frame.minY + 2)
         XCTAssertLessThanOrEqual(resizeHandle.frame.maxY, map.frame.minY + 2)
         XCTAssertEqual(resizeHandle.frame.height, 44, accuracy: 1)
-        attachScreenshot(named: "Fiche événement arrondie, ouverture au tiers")
+        attachScreenshot(named: "Fiche ami arrondie, ouverture au tiers")
         let initialDetailHeight = detailPane.frame.height
         let initialMapHeight = map.frame.height
         let dragDistance: CGFloat = 137
@@ -214,53 +216,53 @@ final class MapSocialGestureUITests: XCTestCase {
         waitForExpectations(timeout: 3)
         XCTAssertEqual(detailPane.frame.height, initialDetailHeight + dragDistance, accuracy: 8)
         XCTAssertEqual(map.frame.height, initialMapHeight - dragDistance, accuracy: 8)
-        XCTAssertTrue(eventRow(2).isSelected)
+        XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
         XCTAssertFalse(app.buttons["Retour aux événements"].exists)
         XCTAssertLessThanOrEqual(resizeHandle.frame.maxY, map.frame.minY + 2)
-        attachScreenshot(named: "Fiche événement à hauteur libre, carte visible")
+        attachScreenshot(named: "Fiche ami à hauteur libre, carte visible")
     }
 
     func testNativeMapRenderSizeStaysStableAcrossPaneChanges() {
         let nativeMap = app.maps.firstMatch
         let initialSize = nativeMap.frame.size
-        openGroupedEvent(index: 0, eventNumber: 2)
-        XCTAssertEqual(nativeMap.frame.width, initialSize.width, accuracy: 1)
-        XCTAssertEqual(nativeMap.frame.height, initialSize.height, accuracy: 1)
-
+        openGroupedEvent(index: 0)
+        openEventList()
+        XCTAssertTrue(revealEvent(2).isSelected)
+        XCTAssertEqual(nativeMap.frame.size, initialSize)
+        eventsButton.tap()
+        XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(nativeMap.frame.size, initialSize)
+        app.segmentedControls.buttons["Mixte"].tap()
+        openMixedFriend(eventCount: 2)
         for _ in 0..<3 {
             resizeHandle.tap()
             XCTAssertEqual(nativeMap.frame.width, initialSize.width, accuracy: 1)
             XCTAssertEqual(nativeMap.frame.height, initialSize.height, accuracy: 1)
+            XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
         }
-        XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        XCTAssertEqual(nativeMap.frame.size.height, initialSize.height, accuracy: 1)
+        app.buttons["Fermer la fiche de l’ami"].tap()
+        XCTAssertTrue(resizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(eventList.isHittable)
+        XCTAssertEqual(nativeMap.frame.height, initialSize.height, accuracy: 1)
     }
 
     func testDockPanelsPreserveResizedMapDetail() {
-        app.terminate()
-        app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
-        app.launch()
-        XCTAssertTrue(map.waitForExistence(timeout: 10))
-        openGroupedEvent(index: 0, eventNumber: 2)
+        launchDetailScenario(["mixed", "open-friend", "fullscreen"])
         let initialHeight = detailPane.frame.height
         let handle = resizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         handle.press(forDuration: 0.05, thenDragTo: handle.withOffset(CGVector(dx: 0, dy: 70)))
         XCTAssertGreaterThan(detailPane.frame.height, initialHeight + 40)
         let detailFrame = detailPane.frame
         let mapFrame = map.frame
-        let user = app.buttons["Moi, Vous"]
-        XCTAssertTrue(user.exists)
-        let userFrame = user.frame
+        let nativeSize = app.maps.firstMatch.frame.size
 
         func assertPreservedDetail() {
             XCTAssertTrue(detailPane.waitForExistence(timeout: 3))
-            XCTAssertTrue(eventRow(2).isSelected)
+            XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
             XCTAssertEqual(detailPane.frame.minY, detailFrame.minY, accuracy: 1)
             XCTAssertEqual(detailPane.frame.height, detailFrame.height, accuracy: 1)
             XCTAssertEqual(map.frame, mapFrame)
-            XCTAssertEqual(user.frame.midX, userFrame.midX, accuracy: 2)
-            XCTAssertEqual(user.frame.midY, userFrame.midY, accuracy: 2)
+            XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
         }
 
         app.buttons["motion-dock-friends"].tap()
@@ -284,42 +286,30 @@ final class MapSocialGestureUITests: XCTestCase {
         assertPreservedDetail()
         attachScreenshot(named: "Fiche et carte conservées après fermeture du panneau")
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        XCTAssertFalse(eventList.isHittable)
     }
 
-    func testPermanentPanelAndMapFillWindowBehindMotionDock() {
-        app.terminate()
-        app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
-        app.launch()
-        XCTAssertTrue(map.waitForExistence(timeout: 10))
+    func testFullMapRestoresAfterEventsAndDockPanels() {
+        launchDetailScenario(["fullscreen"])
         XCTAssertTrue(app.buttons["motion-dock-explore"].isHittable)
-        let window = app.windows.firstMatch.frame
-        assertSharedMap(window: window)
-        attachScreenshot(named: "Liste permanente et carte derrière les barres système")
-        let nativeMap = app.maps.firstMatch
-        let nativeSize = nativeMap.frame.size
-
-        openGroupedEvent(index: 0, eventNumber: 2)
-        XCTAssertEqual(detailPane.frame.minY, window.minY, accuracy: 1)
-        XCTAssertEqual(map.frame.maxY, window.maxY, accuracy: 1)
-        XCTAssertFalse(app.buttons["Retour aux événements"].exists)
-        for _ in 0..<3 {
-            resizeHandle.tap()
-            XCTAssertEqual(nativeMap.frame.width, nativeSize.width, accuracy: 0.01)
-            XCTAssertEqual(nativeMap.frame.height, nativeSize.height, accuracy: 0.01)
-            XCTAssertEqual(map.frame.maxY, window.maxY, accuracy: 1)
-        }
-        attachScreenshot(named: "Fiche ouverte et carte derrière le dock")
-        XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        assertSharedMap(window: window)
-        // Wait for the panel state before tapping a command that moves during expansion.
+        assertFullMap(window: app.windows.firstMatch.frame)
+        let nativeSize = app.maps.firstMatch.frame.size
+        openGroupedEvent(index: 0)
+        assertFullMap(window: app.windows.firstMatch.frame)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
+        openEventList()
+        XCTAssertTrue(revealEvent(2).isSelected)
+        assertEventsBelowMap(nativeSize: nativeSize)
         app.buttons["motion-dock-friends"].tap()
         XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        XCTAssertFalse(eventsButton.isSelected)
         app.buttons["motion-dock-explore"].tap()
         XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
-        XCTAssertTrue(map.waitForExistence(timeout: 3))
-        assertSharedMap(window: window)
+        XCTAssertTrue(revealEvent(2).isSelected)
+        XCTAssertTrue(eventsButton.isSelected)
+        eventsButton.tap()
+        XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+        assertFullMap(window: app.windows.firstMatch.frame)
 
         defer { XCUIDevice.shared.orientation = .portrait }
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -328,27 +318,14 @@ final class MapSocialGestureUITests: XCTestCase {
         }
         expectation(for: landscape, evaluatedWith: app)
         waitForExpectations(timeout: 5)
-        let landscapeWindow = app.windows.firstMatch.frame
-        assertSharedMap(window: landscapeWindow)
-        // The map now occupies the bottom of the window, including in landscape.
-        let edge = map.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.35))
-            .withOffset(CGVector(dx: -1, dy: 0))
-        edge.press(forDuration: 0.05, thenDragTo: edge.withOffset(CGVector(dx: -120, dy: 0)))
-        let emptyRail = app.images["Aucun ami"]
-        XCTAssertTrue(emptyRail.waitForExistence(timeout: 3))
-        let railSettled = NSPredicate { _, _ in
-            emptyRail.isHittable && emptyRail.frame.maxX < landscapeWindow.maxX - 14
-        }
-        expectation(for: railSettled, evaluatedWith: emptyRail)
-        waitForExpectations(timeout: 3)
-        XCTAssertTrue(emptyRail.isHittable)
-        XCTAssertLessThan(emptyRail.frame.maxX, landscapeWindow.maxX - 14)
-        attachScreenshot(named: "Liste permanente et rail accessible en paysage")
+        assertFullMap(window: app.windows.firstMatch.frame)
+        attachScreenshot(named: "Carte plein écran après fermeture de la liste en paysage")
     }
 
-    func testResizeButtonCyclesSizesAndReturnPreservesPanel() {
+    func testFriendResizeButtonCyclesSizesAndCloseRestoresFullMap() {
+        launchDetailScenario(["mixed"])
         let fullMapHeight = map.frame.height
-        openGroupedEvent(index: 1, eventNumber: 1)
+        openMixedFriend(eventCount: 2)
         waitForResizeValue("Un tiers de l’écran")
         let initialHeight = detailPane.frame.height
 
@@ -367,28 +344,38 @@ final class MapSocialGestureUITests: XCTestCase {
         waitForResizeValue("Un tiers de l’écran")
         XCTAssertEqual(detailPane.frame.height, initialHeight, accuracy: 2)
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertTrue(resizeHandle.isHittable)
+        app.buttons["Fermer la fiche de l’ami"].tap()
+        XCTAssertTrue(resizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(eventList.isHittable)
         XCTAssertEqual(map.frame.height, fullMapHeight, accuracy: 2)
     }
 
-    func testListScrollAfterSelectionKeepsActionsHidden() {
-        launchDetailScenario(["guest", "many-events", "open-event", "fullscreen"])
-        let handleFrame = resizeHandle.frame
-        assertResponseActionsHidden()
+    func testVerticalScrollAfterSelectionKeepsActionsHidden() {
+        launchDetailScenario(["guest", "many-events", "fullscreen"])
+        revealEvent(1).tap()
+        let listFrame = eventList.frame
+        let mapFrame = map.frame
+        let response = eventRow(1).label
         eventList.swipeUp()
-        XCTAssertEqual(resizeHandle.frame, handleFrame)
+        XCTAssertFalse(eventRow(1).isHittable)
         assertResponseActionsHidden()
+        XCTAssertTrue(eventsResizeHandle.isHittable)
+        XCTAssertEqual(eventList.frame, listFrame)
+        XCTAssertEqual(map.frame, mapFrame)
+        XCTAssertFalse(resizeHandle.exists)
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(eventList.isHittable)
+        XCTAssertTrue(revealEvent(1).isSelected)
+        XCTAssertEqual(eventRow(1).label, response)
     }
 
-    func testNativePanWorksInMapBelowEventPane() {
-        openGroupedEvent(index: 0, eventNumber: 2)
+    func testNativePanWorksAboveEventList() {
+        openGroupedEvent(index: 0)
+        openEventList()
         let user = app.buttons["Moi, Vous"]
         XCTAssertTrue(user.waitForExistence(timeout: 3))
         let originalX = user.frame.midX
-        let paneHeight = detailPane.frame.height
+        let listFrame = eventList.frame
         let mapHeight = map.frame.height
         let start = map.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.7))
         let end = map.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.7))
@@ -399,7 +386,7 @@ final class MapSocialGestureUITests: XCTestCase {
         expectation(for: mapMoved, evaluatedWith: app)
         waitForExpectations(timeout: 3)
         XCTAssertTrue(eventRow(2).isSelected)
-        XCTAssertEqual(detailPane.frame.height, paneHeight, accuracy: 2)
+        XCTAssertEqual(eventList.frame, listFrame)
         XCTAssertEqual(map.frame.height, mapHeight, accuracy: 2)
     }
 
@@ -421,38 +408,35 @@ final class MapSocialGestureUITests: XCTestCase {
         reveal(app.buttons["Itinéraire"], in: profileScroll)
         XCTAssertTrue(app.buttons["Fermer la fiche de l’ami"].isHittable)
         app.buttons["Fermer la fiche de l’ami"].tap()
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        XCTAssertTrue(resizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(eventList.isHittable)
     }
 
-    func testGuestSwipeActionsRespondAtEverySize() {
+    func testGuestContextActionsRespondWithoutResizingMap() {
         launchDetailScenario(["guest", "stress", "fullscreen"])
-        eventRow(1).tap()
-        XCTAssertFalse(app.staticTexts["outing-detail-narrative"].exists)
+        revealEvent(1).tap()
+        let mapFrame = map.frame
         for shouldAttend in [true, false, true] {
             assertResponseActionsHidden()
-            let row = eventRow(1)
-            let responseBeforeSwipe = row.label
-            let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
-            let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
-            start.press(forDuration: 0.05, thenDragTo: end)
-            assertGuestActionsOnOneLine(in: row)
-            XCTAssertEqual(row.label, responseBeforeSwipe, "Un swipe complet ne doit pas répondre à l’événement")
-            XCTAssertTrue(row.isSelected)
-            if shouldAttend { attachScreenshot(named: "Actions natives révélées par balayage gauche") }
+            let row = revealEvent(1)
+            let responseBeforeMenu = row.label
+            row.press(forDuration: 1)
+            assertGuestContextActions()
+            XCTAssertEqual(row.label, responseBeforeMenu)
             app.buttons[shouldAttend ? "Participer" : "Refuser"].tap()
             XCTAssertTrue(row.label.contains(shouldAttend ? "Vous participez" : "Vous ne participez pas"))
             assertResponseActionsHidden()
             XCTAssertTrue(row.isSelected)
-            resizeHandle.tap()
+            XCTAssertEqual(map.frame, mapFrame)
         }
-        XCTAssertTrue(eventList.isHittable)
+        XCTAssertFalse(resizeHandle.exists)
     }
 
     func testUnavailableAndUpdatingParticipationKeepsDirectionsAccessible() {
         for state in ["loading", "unavailable", "updating"] {
             launchDetailScenario(["guest", "open-event", state])
             assertResponseActionsHidden()
-            eventRow(1).press(forDuration: 1)
+            revealEvent(1).press(forDuration: 1)
             XCTAssertTrue(app.buttons["Itinéraire"].waitForExistence(timeout: 3))
             XCTAssertFalse(app.buttons["Participer"].exists)
             XCTAssertFalse(app.buttons["Refuser"].exists)
@@ -495,32 +479,32 @@ final class MapSocialGestureUITests: XCTestCase {
         }
         expectation(for: landscape, evaluatedWith: app)
         waitForExpectations(timeout: 5)
-        eventRow(1).swipeLeft()
-        assertGuestActionsOnOneLine(in: eventRow(1))
+        revealEvent(1).press(forDuration: 1)
+        assertGuestContextActions()
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        attachScreenshot(named: "Actions natives de ligne en paysage")
+        attachScreenshot(named: "Menu natif de la liste en paysage")
     }
 
     private func launchDetailScenario(_ options: [String]) {
         app.terminate()
         app.launchArguments = ["-debug-social-map"] + options.map { "-debug-social-map-" + $0 }
         app.launch()
-        XCTAssertTrue(detailPane.waitForExistence(timeout: 10))
+        XCTAssertTrue(map.waitForExistence(timeout: 10))
+        XCTAssertTrue(eventsButton.waitForExistence(timeout: 3))
+        if options.contains("open-friend") {
+            XCTAssertTrue(detailPane.waitForExistence(timeout: 3))
+        } else {
+            XCTAssertFalse(eventList.isHittable)
+            XCTAssertFalse(eventsResizeHandle.exists)
+            XCTAssertFalse(resizeHandle.exists)
+        }
     }
 
-    private func assertGuestActionsOnOneLine(in row: XCUIElement) {
-        let buttons = ["Participer", "Refuser"].map { app.buttons[$0] }
-        for button in buttons {
-            XCTAssertTrue(button.waitForExistence(timeout: 3), button.label)
-            XCTAssertTrue(button.isHittable, button.label)
-            XCTAssertGreaterThanOrEqual(button.frame.width + 0.01, 44, button.label)
-            XCTAssertGreaterThanOrEqual(button.frame.height + 0.01, 44, button.label)
-            XCTAssertEqual(button.frame.midY, buttons[0].frame.midY, accuracy: 2)
-            XCTAssertGreaterThanOrEqual(button.frame.minY, row.frame.minY - 1)
-            XCTAssertLessThanOrEqual(button.frame.maxY, row.frame.maxY + 1)
-            XCTAssertLessThanOrEqual(button.frame.maxY, resizeHandle.frame.minY)
+    private func assertGuestContextActions() {
+        for title in ["Participer", "Refuser", "Itinéraire"] {
+            XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.buttons[title].isHittable)
         }
-        XCTAssertFalse(buttons[0].frame.intersects(buttons[1].frame))
     }
 
     private func assertResponseActionsHidden() {
@@ -532,7 +516,7 @@ final class MapSocialGestureUITests: XCTestCase {
 
     func testEventListSelectionRecentersAfterMapPan() {
         launchDetailScenario(["guest", "fullscreen"])
-        eventRow(1).tap()
+        revealEvent(1).tap()
         let user = app.buttons["Moi, Vous"]
         XCTAssertTrue(user.waitForExistence(timeout: 3))
         RunLoop.main.run(until: Date().addingTimeInterval(1))
@@ -541,7 +525,7 @@ final class MapSocialGestureUITests: XCTestCase {
         let start = map.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.7))
         start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 80, dy: 0)))
         XCTAssertGreaterThan(abs(user.frame.midX - centeredFrame.midX), 30)
-        eventRow(1).tap()
+        revealEvent(1).tap()
         let recentered = NSPredicate { _, _ in
             abs(user.frame.midX - centeredFrame.midX) < 5
                 && abs(user.frame.midY - centeredFrame.midY) < 5
@@ -555,55 +539,68 @@ final class MapSocialGestureUITests: XCTestCase {
         attachScreenshot(named: "Recentrage sans fiche après déplacement de la carte")
     }
 
-    func testEventListIsDefaultAndSorted() {
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
-        let meal = eventRow(1)
-        let coffee = eventRow(2)
-        XCTAssertTrue(meal.isHittable)
-        XCTAssertTrue(coffee.exists)
-        XCTAssertLessThan(meal.frame.minY, coffee.frame.minY)
+    func testEventListOpensOnDemandAndIsSortedVertically() {
+        XCTAssertFalse(eventList.isHittable)
+        XCTAssertFalse(detailPane.exists)
+        XCTAssertFalse(resizeHandle.exists)
+        XCTAssertFalse(eventsResizeHandle.exists)
+        let fullMapHeight = map.frame.height
+        openEventList()
+        XCTAssertLessThan(map.frame.height, fullMapHeight)
+        let meal = revealEvent(1)
+        XCTAssertTrue(eventRow(2).waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(eventRow(2).frame.minY, meal.frame.minY)
+        XCTAssertEqual(eventRow(2).frame.minX, meal.frame.minX, accuracy: 2)
         meal.tap()
-        XCTAssertFalse(app.buttons["Retour aux événements"].exists)
-        XCTAssertTrue(eventRow(1).isSelected)
-        // Selecting an event keeps the collection visible and interactive.
+        XCTAssertTrue(meal.isSelected)
         XCTAssertTrue(eventList.isHittable)
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        attachScreenshot(named: "Liste des événements visible par défaut")
+        attachScreenshot(named: "Liste chronologique ouverte par le bouton événements")
     }
 
-    func testEventListResizeScrollAndReturnPreservePosition() {
-        launchDetailScenario(["many-events", "fullscreen"])
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        let firstMapHeight = map.frame.height
-        let visibleBefore = visibleEventRows.count
-        let initialRowHeight = eventRow(1).frame.height
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
-        XCTAssertGreaterThan(visibleEventRows.count, visibleBefore)
-        XCTAssertEqual(eventRow(1).frame.height, initialRowHeight, accuracy: 2)
-        XCTAssertLessThan(map.frame.height, firstMapHeight)
-        let paneFrame = detailPane.frame
-        eventList.swipeUp()
-        let row = visibleEventRows.first {
-            $0.frame.minY > eventList.frame.minY + 10
-                && $0.frame.maxY < eventList.frame.maxY - 10
-        }
-        guard let row else { XCTFail("Aucune ligne entièrement visible après défilement"); return }
-        let rowFrame = row.frame
-        XCTAssertFalse(eventRow(1).exists && eventRow(1).isHittable)
+    func testEventListScrollSurvivesFriendAndDockPanels() {
+        launchDetailScenario(["mixed", "many-events", "fullscreen", "roster-probe"])
+        let probe = app.staticTexts["debug-list-rosters"]
+        XCTAssertTrue(probe.waitForExistence(timeout: 3))
+        func requestedIDs() -> String { (probe.value as? String ?? "").components(separatedBy: ";")[0] }
+        XCTAssertTrue(requestedIDs().isEmpty)
+        let row = revealEvent(12)
         row.tap()
-        XCTAssertFalse(app.buttons["Retour aux événements"].exists)
-        XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
+        let rowFrame = row.frame
+        let listFrame = eventList.frame
+        let nativeSize = app.maps.firstMatch.frame.size
+        XCTAssertFalse(eventRow(1).isHittable)
+        app.buttons["motion-dock-friends"].tap()
+        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        XCTAssertFalse(eventsButton.isSelected)
+        app.buttons["motion-dock-profile"].tap()
+        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
+        XCTAssertFalse(eventsButton.isSelected)
+        app.buttons["motion-dock-explore"].tap()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        XCTAssertEqual(detailPane.frame.minX, paneFrame.minX, accuracy: 0.5)
-        XCTAssertEqual(detailPane.frame.minY, paneFrame.minY, accuracy: 0.5)
-        XCTAssertEqual(detailPane.frame.width, paneFrame.width, accuracy: 0.5)
-        XCTAssertEqual(detailPane.frame.height, paneFrame.height, accuracy: 0.5)
         XCTAssertEqual(row.frame.minY, rowFrame.minY, accuracy: 2)
-        attachScreenshot(named: "Liste agrandie et défilement conservé après consultation")
+        XCTAssertTrue(row.isSelected)
+        XCTAssertTrue(eventsButton.isSelected)
+        XCTAssertTrue((probe.value as? String ?? "").contains("suspended=true"))
+        XCTAssertFalse(requestedIDs().isEmpty)
+        openMixedFriend(eventCount: 18)
+        XCTAssertFalse(eventList.isHittable)
+        XCTAssertFalse(eventsButton.isSelected)
+        let rostersSuspended = NSPredicate { _, _ in requestedIDs().isEmpty }
+        expectation(for: rostersSuspended, evaluatedWith: probe)
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
+        app.buttons["Fermer la fiche de l’ami"].tap()
+        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        let rostersResumed = NSPredicate { _, _ in !requestedIDs().isEmpty }
+        expectation(for: rostersResumed, evaluatedWith: probe)
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(eventList.frame, listFrame)
+        XCTAssertEqual(row.frame.minY, rowFrame.minY, accuracy: 2)
+        XCTAssertTrue(row.isHittable)
+        XCTAssertTrue(eventsButton.isSelected)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
+        attachScreenshot(named: "Défilement conservé après la fiche ami et les panneaux")
     }
 
     func testEventListEmptyLoadingAndErrorStates() {
@@ -614,72 +611,78 @@ final class MapSocialGestureUITests: XCTestCase {
             ("partial-list-error", "events-list-error")
         ] {
             launchDetailScenario([option, "fullscreen"])
+            openEventList()
             XCTAssertTrue(app.descendants(matching: .any)[identifier].firstMatch.waitForExistence(timeout: 3))
             if option != "empty-list" {
                 XCTAssertFalse(app.staticTexts["events-list-empty"].exists)
             }
             if option == "partial-list-error" {
-                XCTAssertTrue(eventRow(1).exists)
+                XCTAssertTrue(revealEvent(1).isHittable)
             }
+            eventsButton.tap()
+            XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+            XCTAssertFalse(eventList.isHittable)
+            openEventList()
+            XCTAssertTrue(app.descendants(matching: .any)[identifier].firstMatch.waitForExistence(timeout: 3))
         }
     }
 
     func testEventListCanRespondAndCancelWithoutMapTap() {
         launchDetailScenario(["guest", "fullscreen"])
-        eventRow(2).tap()
-        XCTAssertTrue(eventRow(2).isSelected)
+        revealEvent(2).tap()
+        XCTAssertTrue(revealEvent(2).isSelected)
         assertResponseActionsHidden()
         let userFrame = app.buttons["Moi, Vous"].frame
-        eventRow(1).swipeLeft()
+        revealEvent(1).press(forDuration: 1)
         app.buttons["Participer"].tap()
-        XCTAssertTrue(eventRow(1).label.contains("Vous participez"))
-        XCTAssertTrue(eventRow(2).label.contains("Vous n’avez pas encore répondu"))
-        XCTAssertTrue(eventRow(2).isSelected)
+        XCTAssertTrue(revealEvent(1).label.contains("Vous participez"))
+        XCTAssertTrue(revealEvent(2).label.contains("Vous n’avez pas encore répondu"))
+        XCTAssertTrue(revealEvent(2).isSelected)
         XCTAssertEqual(app.buttons["Moi, Vous"].frame.midX, userFrame.midX, accuracy: 2)
         XCTAssertEqual(app.buttons["Moi, Vous"].frame.midY, userFrame.midY, accuracy: 2)
         assertResponseActionsHidden()
-        eventRow(2).swipeLeft()
+        revealEvent(2).press(forDuration: 1)
         app.buttons["Refuser"].tap()
-        XCTAssertTrue(eventRow(2).label.contains("Vous ne participez pas"))
-        XCTAssertTrue(eventRow(1).label.contains("Vous participez"))
+        XCTAssertTrue(revealEvent(2).label.contains("Vous ne participez pas"))
+        XCTAssertTrue(revealEvent(1).label.contains("Vous participez"))
         assertResponseActionsHidden()
         XCTAssertFalse(app.staticTexts["outing-detail-narrative"].exists)
         XCTAssertTrue(eventList.isHittable)
 
         launchDetailScenario(["fullscreen"])
-        eventRow(1).tap()
+        revealEvent(1).tap()
         assertResponseActionsHidden()
         cancelPresentedEvent(eventNumber: 1)
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertFalse(eventRow(1).exists)
-        XCTAssertTrue(eventRow(2).isHittable)
+        XCTAssertTrue(revealEvent(2).isHittable)
     }
 
     func testEventContextMenuRespondsWithoutChangingMapSelection() {
         launchDetailScenario(["guest", "fullscreen"])
-        eventRow(2).tap()
+        revealEvent(2).tap()
         let userFrame = app.buttons["Moi, Vous"].frame
-        eventRow(1).press(forDuration: 1)
+        revealEvent(1).press(forDuration: 1)
         XCTAssertTrue(app.buttons["Participer"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Refuser"].exists)
         XCTAssertTrue(app.buttons["Itinéraire"].exists)
         app.buttons["Participer"].tap()
-        XCTAssertTrue(eventRow(1).label.contains("Vous participez"))
-        XCTAssertTrue(eventRow(2).isSelected)
+        XCTAssertTrue(revealEvent(1).label.contains("Vous participez"))
+        XCTAssertTrue(revealEvent(2).isSelected)
         XCTAssertEqual(app.buttons["Moi, Vous"].frame.midX, userFrame.midX, accuracy: 2)
         XCTAssertEqual(app.buttons["Moi, Vous"].frame.midY, userFrame.midY, accuracy: 2)
         assertResponseActionsHidden()
-        eventRow(1).press(forDuration: 1)
+        revealEvent(1).press(forDuration: 1)
         app.buttons["Refuser"].tap()
-        XCTAssertTrue(eventRow(1).label.contains("Vous ne participez pas"))
-        XCTAssertTrue(eventRow(2).label.contains("Vous n’avez pas encore répondu"))
+        XCTAssertTrue(revealEvent(1).label.contains("Vous ne participez pas"))
+        XCTAssertTrue(revealEvent(2).label.contains("Vous n’avez pas encore répondu"))
         assertResponseActionsHidden()
-        eventRow(1).press(forDuration: 1)
+        revealEvent(1).press(forDuration: 1)
         app.buttons["Itinéraire"].tap()
         XCTAssertTrue(app.alerts["Itinéraire de test"].waitForExistence(timeout: 3))
 
         launchDetailScenario(["fullscreen"])
-        eventRow(1).press(forDuration: 1)
+        revealEvent(1).press(forDuration: 1)
         XCTAssertTrue(app.buttons["Modifier"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["Participer"].exists)
         XCTAssertFalse(app.buttons["Refuser"].exists)
@@ -687,40 +690,38 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Annuler cet événement"].waitForExistence(timeout: 3))
     }
 
-    func testEventListNarrativeWithoutHeadersAndResponseAfterReturn() {
+    func testEventSummariesAndResponseAfterVerticalScroll() {
         launchDetailScenario(["social-list", "fullscreen"])
-        XCTAssertFalse(detailPane.staticTexts["Événements"].exists)
+        openEventList()
+        XCTAssertFalse(eventList.staticTexts["Événements"].exists)
         XCTAssertFalse(app.buttons["events-list-filter"].exists)
-        XCTAssertFalse(detailPane.staticTexts["Aujourd’hui"].exists)
-        XCTAssertFalse(detailPane.staticTexts["Demain"].exists)
+        XCTAssertFalse(eventList.staticTexts["Aujourd’hui"].exists)
+        XCTAssertFalse(eventList.staticTexts["Demain"].exists)
         XCTAssertTrue(eventRow(1).label.contains("Théo organise un repas"))
         XCTAssertTrue(eventRow(1).label.contains("Lieu : Bistrot du parc"))
         XCTAssertTrue(eventRow(1).label.contains("Vous n’avez pas encore répondu"))
         XCTAssertTrue(eventRow(1).label.contains("à vol d’oiseau"))
-        attachScreenshot(named: "Liste en phrases sans en-tête")
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
-        attachScreenshot(named: "Phrases et avatars dans la liste agrandie")
-        eventRow(2).tap()
-        eventRow(2).swipeLeft()
+        attachScreenshot(named: "Événements avec date et réponse")
+        revealEvent(2).tap()
+        revealEvent(2).press(forDuration: 1)
         app.buttons["Refuser"].tap()
-        XCTAssertTrue(eventRow(2).label.contains("Vous ne participez pas"))
+        XCTAssertTrue(revealEvent(2).label.contains("Vous ne participez pas"))
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
         XCTAssertTrue(eventRow(2).isHittable)
-        XCTAssertTrue(eventRow(2).label.contains("Vous ne participez pas"))
-        XCTAssertTrue(eventRow(3).label.contains("Vous organisez"))
-        attachScreenshot(named: "Réponse intégrée à la phrase après consultation")
+        XCTAssertTrue(revealEvent(2).label.contains("Vous ne participez pas"))
+        XCTAssertTrue(revealEvent(3).label.contains("Vous organisez"))
+        XCTAssertTrue(revealEvent(2).label.contains("Vous ne participez pas"))
+        attachScreenshot(named: "Réponse conservée après défilement")
     }
 
-    func testEventListNarrativeWithLongPlaceAndMissingOrStaleLocation() {
+    func testEventSummariesWithLongPlaceAndMissingOrStaleLocation() {
         for option in ["list-no-location", "list-stale-location"] {
             launchDetailScenario(["guest", "stress", "fullscreen", option])
+            openEventList()
             XCTAssertFalse(eventRow(1).label.contains("à vol d’oiseau"))
             XCTAssertTrue(eventRow(1).label.contains("Café du parc et des promenades au bord de la rivière"))
-            resizeHandle.tap()
-            waitForResizeValue("Fiche agrandie")
-            attachScreenshot(named: "Phrase longue avec lieu complet")
-            eventRow(1).tap()
+            attachScreenshot(named: "Libellé conservant le lieu complet")
+            revealEvent(1).tap()
             XCTAssertFalse(app.buttons["Retour aux événements"].exists)
             XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
             XCTAssertTrue(eventRow(1).isHittable)
@@ -729,26 +730,26 @@ final class MapSocialGestureUITests: XCTestCase {
 
     func testEventListParticipantGroupsAndUnknownStates() {
         launchDetailScenario(["participants-list", "guest", "fullscreen", "list-no-location"])
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
+        openEventList()
         XCTAssertTrue(eventRow(1).label.contains("Aucun autre participant"))
-        XCTAssertTrue(eventRow(2).label.contains("avec Invité 1. Lieu"))
-        XCTAssertTrue(eventRow(3).label.contains("Invité 3"))
+        XCTAssertTrue(revealEvent(2).label.contains("avec Invité 1. Lieu"))
+        XCTAssertTrue(revealEvent(3).label.contains("Invité 3"))
         attachScreenshot(named: "Participants zéro, un et trois avec le lieu")
         eventList.swipeUp()
-        XCTAssertTrue(eventRow(4).isHittable)
-        XCTAssertTrue(eventRow(4).label.contains("Invité 5"))
+        XCTAssertTrue(revealEvent(4).isHittable)
+        XCTAssertTrue(revealEvent(4).label.contains("Invité 5"))
         // Let native overscroll spring back before recording its composited frame.
         RunLoop.main.run(until: Date().addingTimeInterval(1))
-        attachScreenshot(named: "Trois avatars et deux participants supplémentaires")
-        eventRow(4).tap()
+        attachScreenshot(named: "Résumé des cinq participants dans la liste")
+        revealEvent(4).tap()
         XCTAssertFalse(app.buttons["Retour aux événements"].exists)
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-        XCTAssertTrue(eventRow(4).isHittable)
+        XCTAssertTrue(revealEvent(4).isHittable)
         RunLoop.main.run(until: Date().addingTimeInterval(1))
-        attachScreenshot(named: "Groupe de cinq conservé au retour")
+        attachScreenshot(named: "Résumé des cinq participants conservé après sélection")
         for (option, message) in [("loading", "Chargement des participants"), ("unavailable", "Participants indisponibles")] {
             launchDetailScenario(["guest", "fullscreen", option])
+            openEventList()
             XCTAssertTrue(eventRow(1).label.contains(message))
             XCTAssertFalse(eventRow(1).label.contains("Aucun autre participant"))
             attachScreenshot(named: message)
@@ -760,55 +761,58 @@ final class MapSocialGestureUITests: XCTestCase {
         let probe = app.staticTexts["debug-list-rosters"]
         XCTAssertTrue(probe.waitForExistence(timeout: 3))
         func requestedIDs() -> String { (probe.value as? String ?? "").components(separatedBy: ";")[0] }
+        XCTAssertTrue(requestedIDs().isEmpty)
+        openEventList()
+        let requested = NSPredicate { _, _ in !requestedIDs().isEmpty }
+        expectation(for: requested, evaluatedWith: probe)
+        waitForExpectations(timeout: 3)
         let firstIDs = requestedIDs()
-        XCTAssertFalse(firstIDs.isEmpty)
         XCTAssertLessThan(firstIDs.components(separatedBy: ",").count, 18)
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
-        eventList.swipeUp()
+        revealEvent(12).tap()
         XCTAssertNotEqual(requestedIDs(), firstIDs)
         XCTAssertLessThan(requestedIDs().components(separatedBy: ",").count, 18)
         app.buttons["motion-dock-friends"].tap()
         XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        XCTAssertFalse(eventsButton.isSelected)
         app.buttons["motion-dock-explore"].tap()
         XCTAssertTrue(probe.waitForExistence(timeout: 3))
         XCTAssertTrue((probe.value as? String ?? "").contains("suspended=true"))
         XCTAssertFalse(requestedIDs().isEmpty)
+        XCTAssertTrue(eventsButton.isSelected)
     }
 
-    func testCompactListDensityAndDirectSwipeActions() {
+    func testDetailedEventRowsAndContextActions() {
         launchDetailScenario(["social-list", "fullscreen"])
-        XCTAssertGreaterThanOrEqual(eventRow(1).frame.height, 70)
-        XCTAssertLessThanOrEqual(eventRow(1).frame.height, 94)
-        let initialHandle = resizeHandle.frame
-        eventRow(1).swipeLeft()
+        openEventList()
+        XCTAssertGreaterThan(eventRow(1).frame.width, eventList.frame.width * 0.8)
+        XCTAssertGreaterThan(eventRow(2).frame.minY, eventRow(1).frame.minY)
+        let initialListFrame = eventList.frame
+        revealEvent(1).press(forDuration: 1)
         XCTAssertTrue(app.buttons["Participer"].waitForExistence(timeout: 3))
         app.buttons["Participer"].tap()
         XCTAssertTrue(eventRow(1).label.contains("Vous participez"))
-        XCTAssertTrue(eventRow(2).label.contains("Vous participez"))
+        XCTAssertTrue(revealEvent(2).label.contains("Vous participez"))
         XCTAssertFalse(app.buttons["Retour aux événements"].exists)
-        eventRow(1).swipeLeft()
+        revealEvent(1).press(forDuration: 1)
         app.buttons["Refuser"].tap()
         XCTAssertTrue(eventRow(1).label.contains("Vous ne participez pas"))
-        XCTAssertTrue(eventRow(2).label.contains("Vous participez"))
-        XCTAssertEqual(resizeHandle.frame.minY, initialHandle.minY, accuracy: 1)
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
+        XCTAssertTrue(revealEvent(2).label.contains("Vous participez"))
+        XCTAssertEqual(eventList.frame, initialListFrame)
         RunLoop.main.run(until: Date().addingTimeInterval(1))
-        attachScreenshot(named: "Agenda social compact et réponses directes")
-        eventRow(3).swipeLeft()
+        attachScreenshot(named: "Liste détaillée et menu de réponse")
+        revealEvent(3).press(forDuration: 1)
         XCTAssertTrue(app.buttons["Modifier"].waitForExistence(timeout: 3))
         app.buttons["Modifier"].tap()
         XCTAssertTrue(app.buttons["Annuler cet événement"].waitForExistence(timeout: 3))
     }
 
-    func testCompactListUnknownOrUpdatingResponseCannotBeSwiped() {
+    func testEventListUnknownOrUpdatingResponseHasNoResponseActions() {
         for option in ["loading", "unavailable", "updating"] {
             launchDetailScenario(["guest", "fullscreen", option])
-            eventRow(1).swipeLeft()
+            revealEvent(1).press(forDuration: 1)
+            XCTAssertTrue(app.buttons["Itinéraire"].waitForExistence(timeout: 3))
             XCTAssertFalse(app.buttons["Participer"].exists)
             XCTAssertFalse(app.buttons["Refuser"].exists)
-            XCTAssertTrue(eventRow(1).exists)
         }
     }
 
@@ -816,11 +820,10 @@ final class MapSocialGestureUITests: XCTestCase {
         app.terminate()
         app.launchArguments = ["-debug-social-map", "-debug-social-map-many-events", "-debug-social-map-fullscreen"]
         app.launch()
-        XCTAssertTrue(eventList.waitForExistence(timeout: 10))
-        resizeHandle.tap()
-        waitForResizeValue("Fiche agrandie")
+        XCTAssertTrue(eventsButton.waitForExistence(timeout: 10))
+        openEventList()
         XCTAssertTrue(eventRow(1).isHittable)
-        eventRow(1).tap()
+        revealEvent(1).tap()
         XCTAssertFalse(app.buttons["Retour aux événements"].exists)
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
@@ -833,37 +836,279 @@ final class MapSocialGestureUITests: XCTestCase {
         }
         expectation(for: landscape, evaluatedWith: app)
         waitForExpectations(timeout: 5)
-        XCTAssertTrue(resizeHandle.isHittable)
+        XCTAssertFalse(resizeHandle.exists)
         XCTAssertGreaterThan(map.frame.height, 40)
-        let handleY = resizeHandle.frame.minY
+        let listY = eventList.frame.minY
         eventList.swipeUp()
-        XCTAssertEqual(resizeHandle.frame.minY, handleY, accuracy: 2)
+        XCTAssertEqual(eventList.frame.minY, listY, accuracy: 2)
         XCTAssertTrue(eventList.isHittable)
         attachScreenshot(named: "Liste en paysage")
     }
 
-    private func assertSharedMap(window: CGRect) {
-        XCTAssertEqual(detailPane.frame.minY, window.minY, accuracy: 1)
+    func testEventsButtonOpensListBelowMapWithoutChangingNativeSize() {
+        launchDetailScenario(["guest", "many-events", "fullscreen"])
+        let nativeSize = app.maps.firstMatch.frame.size
+        let fullMapHeight = map.frame.height
+        openEventList()
+        XCTAssertTrue(eventsButton.isSelected)
+        XCTAssertLessThan(map.frame.height, fullMapHeight)
+        assertEventsBelowMap(nativeSize: nativeSize)
+        let row = revealEvent(1)
+        row.tap()
+        XCTAssertTrue(row.isSelected)
+        XCTAssertTrue(row.label.contains("Lieu : Sortie 1"))
+        XCTAssertTrue(row.label.contains("Théo organise"))
+        revealEvent(2).tap()
+        XCTAssertTrue(eventRow(2).isSelected)
+        XCTAssertFalse(detailPane.exists)
+        assertEventsBelowMap(nativeSize: nativeSize)
+        attachScreenshot(named: "Liste détaillée sous la carte ouverte par le bouton")
+    }
+
+    func testEventListHandleResizesThenFoldsBackToFullMap() {
+        launchDetailScenario(["many-events", "fullscreen"])
+        let nativeSize = app.maps.firstMatch.frame.size
+        let fullMapFrame = map.frame
+        openEventList()
+        let initialListHeight = eventList.frame.height
+        let initialMapHeight = map.frame.height
+        let handle = eventsResizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        handle.press(forDuration: 0.05, thenDragTo: handle.withOffset(CGVector(dx: 0, dy: -90)))
+        let resized = NSPredicate { _, _ in
+            abs(self.eventList.frame.height - initialListHeight - 90) < 8
+        }
+        expectation(for: resized, evaluatedWith: app)
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(map.frame.height, initialMapHeight - 90, accuracy: 8)
+        assertEventsBelowMap(nativeSize: nativeSize)
+
+        foldEventListByDragging()
+        XCTAssertEqual(map.frame, fullMapFrame)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
+        assertFullMap(window: app.windows.firstMatch.frame)
+
+        openEventList()
+        let thirdHeight = eventList.frame.height
+        eventsResizeHandle.tap()
+        XCTAssertGreaterThan(eventList.frame.height, thirdHeight + 50)
+        assertEventsBelowMap(nativeSize: nativeSize)
+        eventsResizeHandle.tap()
+        XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(eventsButton.isSelected)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
+        assertFullMap(window: app.windows.firstMatch.frame)
+    }
+
+    func testEventListScrollDoesNotResizeOrFoldPane() {
+        launchDetailScenario(["many-events", "fullscreen"])
+        openEventList()
+        let listFrame = eventList.frame
+        let handleFrame = eventsResizeHandle.frame
+        let mapFrame = map.frame
+        eventList.swipeUp()
+        XCTAssertFalse(eventRow(1).isHittable)
+        XCTAssertEqual(eventList.frame, listFrame)
+        XCTAssertEqual(eventsResizeHandle.frame, handleFrame)
+        XCTAssertEqual(map.frame, mapFrame)
+        eventList.swipeDown()
+        XCTAssertTrue(eventList.isHittable)
+        XCTAssertEqual(eventsResizeHandle.frame, handleFrame)
+        XCTAssertEqual(map.frame, mapFrame)
+        XCTAssertTrue(eventsButton.isSelected)
+    }
+
+    func testEventListKeepsScrollAndSelectionWhileClosedAndSuspendsRosters() {
+        launchDetailScenario(["many-events", "guest", "fullscreen", "roster-probe"])
+        let probe = app.staticTexts["debug-list-rosters"]
+        XCTAssertTrue(probe.waitForExistence(timeout: 3))
+        func requestedIDs() -> Set<String> {
+            let ids = (probe.value as? String ?? "").components(separatedBy: ";")[0]
+            return Set(ids.split(separator: ",").map(String.init))
+        }
+        XCTAssertTrue(requestedIDs().isEmpty)
+        let row = revealEvent(12)
+        row.tap()
+        let rowFrame = row.frame
+        let activeIDs = requestedIDs()
+        XCTAssertFalse(activeIDs.isEmpty)
+        XCTAssertLessThan(activeIDs.count, 18)
+        let nativeSize = app.maps.firstMatch.frame.size
+
+        for closeWithHandle in [false, true] {
+            if closeWithHandle {
+                foldEventListByDragging()
+            } else {
+                eventsButton.tap()
+                XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+            }
+            XCTAssertFalse(eventsButton.isSelected)
+            XCTAssertFalse(eventList.isHittable)
+            let suspended = NSPredicate { _, _ in requestedIDs().isEmpty }
+            expectation(for: suspended, evaluatedWith: probe)
+            waitForExpectations(timeout: 3)
+            assertFullMap(window: app.windows.firstMatch.frame)
+            openEventList()
+            let restored = NSPredicate { _, _ in requestedIDs() == activeIDs }
+            expectation(for: restored, evaluatedWith: probe)
+            waitForExpectations(timeout: 3)
+            XCTAssertEqual(row.frame.minY, rowFrame.minY, accuracy: 2)
+            XCTAssertTrue(row.isHittable)
+            XCTAssertTrue(row.isSelected)
+            assertEventsBelowMap(nativeSize: nativeSize)
+        }
+    }
+
+    func testDetailedListReturnsAtSameScrollAfterFriendProfile() {
+        launchDetailScenario(["mixed", "many-events", "fullscreen", "roster-probe"])
+        openEventList()
+        let row = revealEvent(12)
+        row.tap()
+        let listFrame = eventList.frame
+        let rowFrame = row.frame
+        let nativeSize = app.maps.firstMatch.frame.size
+        let probe = app.staticTexts["debug-list-rosters"]
+        openMixedFriend(eventCount: 18)
+        XCTAssertFalse(eventList.isHittable)
+        XCTAssertFalse(eventsResizeHandle.exists)
+        XCTAssertFalse(eventsButton.isSelected)
+        let suspended = NSPredicate { _, _ in
+            (probe.value as? String ?? "").hasPrefix(";")
+        }
+        expectation(for: suspended, evaluatedWith: probe)
+        waitForExpectations(timeout: 3)
+        app.buttons["Fermer la fiche de l’ami"].tap()
+        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        XCTAssertEqual(eventList.frame, listFrame)
+        XCTAssertEqual(row.frame.minY, rowFrame.minY, accuracy: 2)
+        XCTAssertTrue(row.isHittable)
+        assertEventsBelowMap(nativeSize: nativeSize)
+    }
+
+    func testDetailedListResponseActionsPreserveSelectionAndMap() {
+        launchDetailScenario(["guest", "fullscreen"])
+        revealEvent(2).tap()
+        openEventList()
+        let mapFrame = map.frame
+        let userFrame = app.buttons["Moi, Vous"].frame
+        let row = eventRow(1)
+        row.swipeLeft()
+        XCTAssertTrue(app.buttons["Participer"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Refuser"].exists)
+        XCTAssertTrue(row.label.contains("Vous n’avez pas encore répondu"))
+        app.buttons["Participer"].tap()
+        XCTAssertTrue(row.label.contains("Vous participez"))
+        XCTAssertTrue(eventRow(2).isSelected)
+        XCTAssertEqual(map.frame, mapFrame)
+        XCTAssertEqual(app.buttons["Moi, Vous"].frame.midX, userFrame.midX, accuracy: 2)
+        XCTAssertEqual(app.buttons["Moi, Vous"].frame.midY, userFrame.midY, accuracy: 2)
+        row.press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Itinéraire"].waitForExistence(timeout: 3))
+        app.buttons["Itinéraire"].tap()
+        XCTAssertTrue(app.alerts["Itinéraire de test"].waitForExistence(timeout: 3))
+    }
+
+    private func openEventList() {
+        if !eventsResizeHandle.exists {
+            XCTAssertTrue(eventsButton.waitForExistence(timeout: 3))
+            eventsButton.tap()
+        }
+        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        XCTAssertTrue(eventsResizeHandle.waitForExistence(timeout: 3))
+        XCTAssertTrue(eventList.isHittable)
+        XCTAssertTrue(eventsResizeHandle.isHittable)
+    }
+
+    private func foldEventListByDragging() {
+        let start = eventsResizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let distance = max(80, eventList.frame.height - 60)
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)))
+        XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(eventList.isHittable)
+        XCTAssertFalse(eventsButton.isSelected)
+    }
+
+    private func assertEventsBelowMap(nativeSize: CGSize) {
+        XCTAssertEqual(map.frame.maxY, eventsResizeHandle.frame.minY, accuracy: 2)
+        XCTAssertEqual(eventsResizeHandle.frame.height, 44, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(eventsPane.frame.minY, eventsResizeHandle.frame.maxY - 2)
+        XCTAssertGreaterThanOrEqual(eventList.frame.minY, eventsResizeHandle.frame.maxY - 2)
+        XCTAssertLessThanOrEqual(eventList.frame.maxY, app.buttons["motion-dock-explore"].frame.minY)
+        XCTAssertLessThanOrEqual(eventList.frame.maxY, eventsButton.frame.minY)
+        XCTAssertTrue(eventsButton.isSelected)
+        XCTAssertEqual(app.maps.firstMatch.frame.width, nativeSize.width, accuracy: 1)
+        XCTAssertEqual(app.maps.firstMatch.frame.height, nativeSize.height, accuracy: 1)
+    }
+
+    private var eventsResizeHandle: XCUIElement {
+        app.buttons["map-events-resize-handle"].firstMatch
+    }
+
+    private var eventsPane: XCUIElement {
+        app.descendants(matching: .any)["map-events-pane"].firstMatch
+    }
+
+    @discardableResult
+    private func revealEvent(_ number: Int) -> XCUIElement {
+        openEventList()
+        let row = eventRow(number)
+        for _ in 0..<20 {
+            let bounds = eventList.frame
+            if row.exists && row.isHittable,
+               row.frame.minY >= bounds.minY, row.frame.maxY <= bounds.maxY {
+                return row
+            }
+            let visibleNumbers = app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "event-detail-row-"
+            )).allElementsBoundByIndex.filter { $0.isHittable }
+                .compactMap { Int($0.identifier.suffix(12)) }
+            let scrollDown = (row.exists && row.frame.minY < bounds.minY)
+                || visibleNumbers.min().map({ number < $0 }) == true
+            let start = eventList.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let distance = min(100, bounds.height * 0.4) * (scrollDown ? 1 : -1)
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)))
+        }
+        XCTFail("Événement détaillé \(number) non visible après défilement")
+        return row
+    }
+
+    private func assertFullMap(window: CGRect) {
+        XCTAssertFalse(detailPane.exists)
+        XCTAssertFalse(resizeHandle.exists)
+        XCTAssertFalse(eventsResizeHandle.exists)
+        XCTAssertFalse(eventList.isHittable)
+        XCTAssertFalse(eventsButton.isSelected)
+        XCTAssertEqual(map.frame.minY, window.minY, accuracy: 1)
         XCTAssertEqual(map.frame.maxY, window.maxY, accuracy: 1)
-        XCTAssertLessThanOrEqual(detailPane.frame.maxY, resizeHandle.frame.minY + 2)
-        XCTAssertEqual(resizeHandle.frame.maxY, map.frame.minY, accuracy: 1)
         XCTAssertEqual(map.frame.width, window.width, accuracy: 1)
     }
 
     private var eventList: XCUIElement {
-        // With no header, SwiftUI exposes the collection itself as the detail pane.
-        app.collectionViews.matching(NSPredicate(
-            format: "identifier IN %@", ["events-list", "map-detail-pane"]
-        )).firstMatch
+        app.descendants(matching: .any)["events-expanded-list"].firstMatch
     }
 
-    private var visibleEventRows: [XCUIElement] {
-        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "event-list-row-"))
-            .allElementsBoundByIndex.filter { $0.isHittable }
+    private var eventsButton: XCUIElement { app.buttons["motion-dock-events"] }
+
+    // The map camera excludes the bottom controls. The assertion tolerance
+    // also accounts for the top safe area, absent from XCUIElement's frame.
+    private var usableMapCenterY: CGFloat {
+        let controlsTop = app.segmentedControls.firstMatch.exists
+            ? app.segmentedControls.firstMatch.frame.minY : eventsButton.frame.minY
+        return (map.frame.minY + controlsTop) / 2
+    }
+
+    private func openMixedFriend(eventCount: Int) {
+        let summary = "3 personnes et \(eventCount) sorties prévues"
+        let group = app.buttons["Groupe, " + summary]
+        XCTAssertTrue(group.waitForExistence(timeout: 3))
+        group.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let expanded = app.buttons["Groupe ouvert, " + summary]
+        XCTAssertTrue(expanded.waitForExistence(timeout: 3))
+        tapExpandedRow(expanded, index: 1, rowCount: eventCount + 3)
+        XCTAssertTrue(detailPane.staticTexts["Amina"].waitForExistence(timeout: 3))
     }
 
     private func eventRow(_ number: Int) -> XCUIElement {
-        app.buttons[String(format: "event-list-row-00000000-0000-4000-8000-%012d", number)]
+        app.buttons[String(format: "event-detail-row-00000000-0000-4000-8000-%012d", number)]
     }
 
     // MARK: - Scenario interactions
@@ -884,15 +1129,16 @@ final class MapSocialGestureUITests: XCTestCase {
         waitForExpectations(timeout: 3)
     }
 
-    private func openGroupedEvent(index: Int, eventNumber: Int) {
+    private func openGroupedEvent(index: Int) {
         let group = app.buttons["Groupe, 2 sorties prévues"]
         XCTAssertTrue(group.waitForExistence(timeout: 10))
         group.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let expanded = app.buttons["Groupe ouvert, 2 sorties prévues"]
         XCTAssertTrue(expanded.waitForExistence(timeout: 2))
         tapExpandedRow(expanded, index: index, rowCount: 2)
-        XCTAssertTrue(detailPane.waitForExistence(timeout: 3))
-        XCTAssertTrue(eventRow(eventNumber).isSelected)
+        XCTAssertTrue(expanded.waitForNonExistence(timeout: 3))
+        XCTAssertFalse(detailPane.exists)
+        XCTAssertFalse(resizeHandle.exists)
     }
 
     private func tapExpandedRow(_ group: XCUIElement, index: Int, rowCount: Int) {
@@ -919,7 +1165,8 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     private func cancelGroupRow(index: Int, eventNumber: Int, expectedTitle: String, remainingTitle: String) {
-        openGroupedEvent(index: index, eventNumber: eventNumber)
+        openGroupedEvent(index: index)
+        XCTAssertTrue(revealEvent(eventNumber).isSelected)
         cancelPresentedEvent(eventNumber: eventNumber)
         XCTAssertTrue(eventPin(remainingTitle).waitForExistence(timeout: 3))
         XCTAssertFalse(eventPin(expectedTitle).exists)
@@ -933,13 +1180,8 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     private func cancelPresentedEvent(eventNumber: Int) {
-        let row = eventRow(eventNumber)
-        if !row.isHittable {
-            resizeHandle.tap()
-            waitForResizeValue("Fiche agrandie")
-        }
-        XCTAssertTrue(row.isHittable)
-        row.swipeLeft()
+        let row = revealEvent(eventNumber)
+        row.press(forDuration: 1)
         let edit = app.buttons["Modifier"]
         XCTAssertTrue(edit.waitForExistence(timeout: 3))
         edit.tap()
@@ -964,11 +1206,11 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 }
 
-/// Opt-in by selecting this class on a connected device. It only opens and
-/// resizes an existing event; it never creates or edits account data.
+/// Opt-in on a connected device. Selecting and scrolling existing events never
+/// creates or edits account data.
 @MainActor
 final class MapDeviceSmokeUITests: XCTestCase {
-    func testRealEventResizingWithMetalValidation() throws {
+    func testRealEventListWithMetalValidation() throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Ce contrôle nécessite l’iPhone connecté et ses événements existants.")
         #else
@@ -981,52 +1223,61 @@ final class MapDeviceSmokeUITests: XCTestCase {
         let nativeMap = app.maps.firstMatch
         XCTAssertTrue(nativeMap.waitForExistence(timeout: 15))
         let viewport = app.otherElements["map-visible-viewport"].firstMatch
+        let eventsButton = app.buttons["motion-dock-events"]
+        let list = app.descendants(matching: .any)["events-expanded-list"].firstMatch
+        let handle = app.buttons["map-events-resize-handle"]
         XCTAssertTrue(viewport.waitForExistence(timeout: 3))
+        XCTAssertTrue(eventsButton.waitForExistence(timeout: 3))
         let window = app.windows.firstMatch.frame
+        XCTAssertEqual(viewport.frame.minY, window.minY, accuracy: 1)
         XCTAssertEqual(viewport.frame.maxY, window.maxY, accuracy: 1)
-        XCTAssertGreaterThan(viewport.frame.minY, window.minY)
+        XCTAssertFalse(eventsButton.isSelected)
+        XCTAssertFalse(list.isHittable)
         XCTAssertTrue(app.buttons["Filtres de la carte"].isHittable)
         XCTAssertTrue(app.buttons["Recentrer la carte sur ma position"].isHittable)
-        let fullScreenCapture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        fullScreenCapture.name = "Carte plein écran sur iPhone"
-        fullScreenCapture.lifetime = .keepAlways
-        add(fullScreenCapture)
         let nativeSize = nativeMap.frame.size
+        eventsButton.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 3))
+        XCTAssertTrue(handle.waitForExistence(timeout: 3))
+        XCTAssertTrue(eventsButton.isSelected)
+        XCTAssertEqual(viewport.frame.maxY, handle.frame.minY, accuracy: 2)
+        XCTAssertLessThanOrEqual(list.frame.maxY, eventsButton.frame.minY)
         let events = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
-            "Votre sortie prévue,", "Sortie prévue,"
+            format: "identifier BEGINSWITH %@", "event-detail-row-"
         ))
         guard events.firstMatch.waitForExistence(timeout: 15) else {
-            throw XCTSkip("Aucune sortie existante directement accessible pour ce contrôle.")
+            throw XCTSkip("Aucune sortie existante accessible pour ce contrôle.")
         }
-
         for cycle in 0..<4 {
-            let event = try XCTUnwrap(events.allElementsBoundByIndex.first(where: \.isHittable))
+            let event = try XCTUnwrap(events.allElementsBoundByIndex.first {
+                $0.isHittable && $0.frame.minY >= list.frame.minY
+                    && $0.frame.maxY <= list.frame.maxY
+            })
             event.tap()
-            let handle = app.buttons["map-detail-resize-handle"]
-            XCTAssertTrue(handle.waitForExistence(timeout: 5))
-            for _ in 0..<3 {
-                handle.tap()
-                XCTAssertEqual(nativeMap.frame.width, nativeSize.width, accuracy: 1)
-                XCTAssertEqual(nativeMap.frame.height, nativeSize.height, accuracy: 1)
-                XCTAssertFalse(app.buttons["Retour aux événements"].exists)
-                XCTAssertEqual(viewport.frame.maxY, window.maxY, accuracy: 1)
-                XCTAssertEqual(app.state, .runningForeground)
-            }
-            let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
+            XCTAssertTrue(event.isSelected)
+            XCTAssertFalse(app.buttons["map-detail-resize-handle"].exists)
+            XCTAssertEqual(nativeMap.frame.width, nativeSize.width, accuracy: 1)
             XCTAssertEqual(nativeMap.frame.height, nativeSize.height, accuracy: 1)
+            XCTAssertEqual(viewport.frame.maxY, handle.frame.minY, accuracy: 2)
+            XCTAssertEqual(app.state, .runningForeground)
+            XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
             if cycle == 0 {
                 let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-                screenshot.name = "Fiche arrondie sur iPhone avec Metal actif"
+                screenshot.name = "Liste événements sur iPhone avec Metal actif"
                 screenshot.lifetime = .keepAlways
                 add(screenshot)
             }
-            XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
-            XCTAssertTrue(handle.isHittable)
-            XCTAssertEqual(nativeMap.frame.height, nativeSize.height, accuracy: 1)
+            if cycle.isMultiple(of: 2) { list.swipeUp() } else { list.swipeDown() }
+            eventsButton.tap()
+            XCTAssertTrue(handle.waitForNonExistence(timeout: 3))
+            XCTAssertFalse(eventsButton.isSelected)
+            XCTAssertFalse(list.isHittable)
             XCTAssertEqual(viewport.frame.maxY, window.maxY, accuracy: 1)
-            XCTAssertGreaterThan(viewport.frame.minY, window.minY)
+            XCTAssertEqual(nativeMap.frame.size, nativeSize)
+            eventsButton.tap()
+            XCTAssertTrue(handle.waitForExistence(timeout: 3))
+            XCTAssertTrue(eventsButton.isSelected)
+            XCTAssertEqual(nativeMap.frame.size, nativeSize)
         }
         #endif
     }

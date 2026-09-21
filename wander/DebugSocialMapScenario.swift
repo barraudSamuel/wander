@@ -23,10 +23,16 @@ struct DebugSocialMapScenarioView: View {
     @State private var friendCode = ""
     @State private var profileName = "Explorateur"
     @State private var profileConfirmation = false
+    @State private var eventsExpanded = false
+    @State private var selectedDetail = DebugSocialMapScene.initialSelection
 
     var body: some View {
         if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
-            MotionDockView(selection: $dockSelection) {
+            MotionDockView(
+                selection: $dockSelection,
+                isEventsPresented: areEventsPresented,
+                onToggleEvents: toggleEvents
+            ) {
                 mapScene
             } friends: {
                 NavigationStack {
@@ -74,6 +80,10 @@ struct DebugSocialMapScenarioView: View {
                             Text("Scénario carte sociale")
                                 .font(.caption)
                             Spacer()
+                            Button("Événements", systemImage: "calendar", action: toggleEvents)
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.glass)
+                                .accessibilityIdentifier("motion-dock-events")
                             Button("Réinitialiser") { revision += 1 }
                         }
                     }
@@ -83,9 +93,32 @@ struct DebugSocialMapScenarioView: View {
         }
     }
 
+    private var areEventsPresented: Bool {
+        eventsExpanded && dockSelection == .explore && selectedDetail?.friendUserID == nil
+    }
+
+    private func toggleEvents() {
+        let shouldPresent = !areEventsPresented
+        dockSelection = .explore
+        if selectedDetail?.friendUserID != nil { selectedDetail = nil }
+        eventsExpanded = shouldPresent
+    }
+
+    private func resetPresentation() {
+        eventsExpanded = false
+        selectedDetail = nil
+    }
+
     private var mapScene: some View {
-        DebugSocialMapScene(kind: scene, isListActive: dockSelection == .explore)
-            .id("\(scene.rawValue)-\(revision)")
+        DebugSocialMapScene(
+            kind: scene,
+            isListActive: dockSelection == .explore,
+            eventsExpanded: $eventsExpanded,
+            selectedDetail: $selectedDetail
+        )
+        .id("\(scene.rawValue)-\(revision)")
+        .onChange(of: scene) { _, _ in resetPresentation() }
+        .onChange(of: revision) { _, _ in resetPresentation() }
     }
 }
 
@@ -100,7 +133,8 @@ private struct DebugSocialMapScene: View {
     @State private var didSuspendRosters = false
     @StateObject private var locationTracker: LocationTracker
     @State private var plans: [String: OutingPlan]
-    @State private var selectedDetail: MapDetailSelection?
+    @Binding private var selectedDetail: MapDetailSelection?
+    @Binding private var eventsExpanded: Bool
     @State private var editingEvent: OutingPlan?
     @State private var centerOnUser = false
     @State private var resetOrientation = false
@@ -113,8 +147,15 @@ private struct DebugSocialMapScene: View {
         arguments.contains("-debug-social-map-" + argument)
     }
 
-    init(kind: DebugSocialMapScenarioView.SceneKind, isListActive: Bool) {
+    init(
+        kind: DebugSocialMapScenarioView.SceneKind,
+        isListActive: Bool,
+        eventsExpanded: Binding<Bool>,
+        selectedDetail: Binding<MapDetailSelection?>
+    ) {
         self.isListActive = isListActive
+        self._eventsExpanded = eventsExpanded
+        self._selectedDetail = selectedDetail
         self.friends = Self.makeFriends(kind: kind)
         let coordinate = Self.coordinate
         _locationTracker = StateObject(wrappedValue: LocationTracker(
@@ -123,16 +164,24 @@ private struct DebugSocialMapScene: View {
                 longitude: coordinate.longitude
             )
         ))
-        let events: [OutingPlan] = kind == .people || Self.hasArgument("empty-list") ? [] :
-            (1...(Self.hasArgument("many-events") ? 18 : Self.hasArgument("social-list") || Self.hasArgument("participants-list") ? 4 : 2)).map {
-                Self.plan(number: $0, category: $0 % 2 == 0 ? .coffee : .meal)
-            }
-        _plans = State(initialValue: Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0) }))
-        if Self.hasArgument("open-event"), let event = events.last {
-            _selectedDetail = State(initialValue: .outing(event.id))
-        } else if Self.hasArgument("open-friend") {
-            _selectedDetail = State(initialValue: .friend("scenario-amina"))
+        _plans = State(initialValue: Dictionary(uniqueKeysWithValues: Self.makePlans(kind: kind).map { ($0.id, $0) }))
+    }
+
+    private static func makePlans(kind: DebugSocialMapScenarioView.SceneKind) -> [OutingPlan] {
+        guard kind != .people, !hasArgument("empty-list") else { return [] }
+        let count = hasArgument("many-events") ? 18
+            : hasArgument("social-list") || hasArgument("participants-list") ? 4 : 2
+        return (1...count).map { number in
+            plan(number: number, category: number.isMultiple(of: 2) ? .coffee : .meal)
         }
+    }
+
+    static var initialSelection: MapDetailSelection? {
+        if hasArgument("open-event"), let event = makePlans(kind: .events).last {
+            return .outing(event.id)
+        }
+        if hasArgument("open-friend") { return .friend("scenario-amina") }
+        return nil
     }
 
     private static func makeFriends(kind: DebugSocialMapScenarioView.SceneKind) -> [String: FriendLocation] {
@@ -188,15 +237,31 @@ private struct DebugSocialMapScene: View {
 
     var body: some View {
         let presentations = presentations
-        MapDetailSplitView(isPresented: true) {
+        MapDetailSplitView(
+            isPresented: selectedDetail?.friendUserID != nil,
+            isEventsExpanded: $eventsExpanded
+        ) {
+            if let id = selectedDetail?.friendUserID, let friend = friends[id] {
+                FriendProfileContentView(
+                    displayName: friend.displayName,
+                    avatarID: friend.avatarID,
+                    profileColorHex: friend.profileColorHex,
+                    isGhostModeEnabled: Self.hasArgument("ghost"),
+                    location: Self.hasArgument("missing-location") ? nil : friend,
+                    isLocationFresh: !Self.hasArgument("stale"),
+                    onDismiss: { selectedDetail = nil },
+                    onOpenDirections: { showsDirections = true }
+                )
+                .id(id)
+            }
+        } events: {
             MapEventsPanelView(
                 outings: Self.hasArgument("list-loading") || Self.hasArgument("list-error") ? [:] : presentations,
-                showsDetail: selectedDetail?.friendUserID != nil,
                 selectedEventID: selectedDetail?.outingEventID,
                 currentLocation: listLocation,
                 isLoading: Self.hasArgument("list-loading"),
                 hasLoadError: Self.hasArgument("list-error") || Self.hasArgument("partial-list-error"),
-                isListActive: isListActive,
+                isListActive: isListActive && eventsExpanded && selectedDetail?.friendUserID == nil,
                 onVisibleEventIDsChange: { ids in
                     if !isListActive && ids.isEmpty { didSuspendRosters = true }
                     requestedRosterIDs = ids
@@ -210,21 +275,7 @@ private struct DebugSocialMapScene: View {
                     selectedDetail = .outing(id)
                     centerOnEvent = id
                 }
-            ) {
-                if let id = selectedDetail?.friendUserID, let friend = friends[id] {
-                    FriendProfileContentView(
-                        displayName: friend.displayName,
-                        avatarID: friend.avatarID,
-                        profileColorHex: friend.profileColorHex,
-                        isGhostModeEnabled: Self.hasArgument("ghost"),
-                        location: Self.hasArgument("missing-location") ? nil : friend,
-                        isLocationFresh: !Self.hasArgument("stale"),
-                        onDismiss: { selectedDetail = nil },
-                        onOpenDirections: { showsDirections = true }
-                    )
-                    .id(id)
-                }
-            }
+            )
         } map: {
             mapView(presentations: presentations)
         }
