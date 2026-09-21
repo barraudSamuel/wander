@@ -280,7 +280,7 @@ private struct DebugSocialMapScene: View {
                     isGhostModeEnabled: Self.hasArgument("ghost"),
                     location: Self.hasArgument("missing-location") ? nil : friend,
                     isLocationFresh: !Self.hasArgument("stale"),
-                    onDismiss: { selectedDetail = nil },
+                    onClose: { closeFriendProfile(userID: id) },
                     onOpenDirections: {
                         opensDirectionsAfterDismiss = true
                         selectedDetail = nil
@@ -333,17 +333,28 @@ private struct DebugSocialMapScene: View {
         }
     }
 
+    private func closeFriendProfile(userID: String) {
+        guard selectedDetail?.friendUserID == userID else { return }
+        selectedDetail = nil
+        presentedFriendProfileUserID = nil
+        recenterAfterFriendProfile(userID: userID)
+    }
+
+    private func recenterAfterFriendProfile(userID: String) {
+        guard selectedDetail == nil,
+              isListActive,
+              editingEvent == nil,
+              !Self.hasArgument("ghost"),
+              !Self.hasArgument("missing-location") else { return }
+        friendCameraRequest = MapFriendCameraRequest(userID: userID)
+    }
+
     private func friendProfileDidDismiss() {
         guard selectedDetail?.friendUserID == nil else { return }
         let dismissedUserID = presentedFriendProfileUserID
         presentedFriendProfileUserID = nil
-        if let dismissedUserID,
-           selectedDetail == nil,
-           isListActive,
-           editingEvent == nil,
-           !Self.hasArgument("ghost"),
-           !Self.hasArgument("missing-location") {
-            friendCameraRequest = MapFriendCameraRequest(userID: dismissedUserID)
+        if let dismissedUserID {
+            recenterAfterFriendProfile(userID: dismissedUserID)
         }
         guard opensDirectionsAfterDismiss else { return }
         opensDirectionsAfterDismiss = false

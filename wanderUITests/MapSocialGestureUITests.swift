@@ -243,6 +243,24 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertFalse(detailPane.exists)
     }
 
+    func testFriendCloseButtonAcceptsSingleTapsAtCenterAndBothSides() {
+        launchDetailScenario(["mixed", "fullscreen"])
+        for horizontalPosition in [CGFloat(0.5), 0.1, 0.9] {
+            openMixedFriend(eventCount: 2)
+            let close = app.buttons["Fermer la fiche de l’ami"]
+            XCTAssertTrue(close.waitForExistence(timeout: 3))
+            XCTAssertTrue(close.isHittable)
+
+            // Keep side taps near the native control's edges at any size.
+            // Each opening gets one coordinate tap, without a retry.
+            close.coordinate(withNormalizedOffset: CGVector(dx: horizontalPosition, dy: 0.5)).tap()
+            XCTAssertTrue(
+                detailPane.waitForNonExistence(timeout: 3),
+                "La fiche doit fermer après un clic à la position horizontale \(horizontalPosition)."
+            )
+        }
+    }
+
     func testPreparedFriendOpeningLeavesTheWholePinAboveTheSheet() {
         launchDetailScenario(["mixed", "fullscreen"])
         openMixedFriend(eventCount: 2)

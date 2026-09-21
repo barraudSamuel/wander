@@ -1,6 +1,6 @@
 import MapKit
 
-/// A prepared opening target, or a recenter after complete dismissal.
+/// A prepared opening target, or a recenter when closing the profile.
 struct MapFriendCameraRequest: Equatable {
     let id: UUID
     let userID: String

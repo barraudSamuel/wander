@@ -1467,7 +1467,7 @@ struct MapWithFogView: UIViewRepresentable {
     /// Friend whose profile is visible above the map.
     var selectedFriendProfileUserID: String?
 
-    /// One-shot framing from prepared sheet geometry, or after complete dismissal.
+    /// One-shot framing from prepared sheet geometry, or when closing the profile.
     var friendCameraRequest: MapFriendCameraRequest?
 
     var showsSystemUserLocation = true

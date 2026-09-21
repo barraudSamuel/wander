@@ -36,17 +36,20 @@ struct FriendProfileSheet: View {
     @ObservedObject private var service: FriendSyncService
 
     private let userID: String
+    private let onClose: () -> Void
     private let onOpenDirections: () -> Void
     private let onPreparePresentation: (CGFloat) -> Void
 
     init(
         userID: String,
         service: FriendSyncService,
+        onClose: @escaping () -> Void,
         onOpenDirections: @escaping () -> Void,
         onPreparePresentation: @escaping (CGFloat) -> Void
     ) {
         self.userID = userID
         self.service = service
+        self.onClose = onClose
         self.onOpenDirections = onOpenDirections
         self.onPreparePresentation = onPreparePresentation
     }
@@ -60,7 +63,7 @@ struct FriendProfileSheet: View {
             isGhostModeEnabled: profile.isGhostModeEnabled,
             location: profile.location,
             isLocationFresh: profile.isLocationFresh,
-            onDismiss: { dismiss() },
+            onClose: onClose,
             onOpenDirections: {
                 guard FriendProfileData(userID: userID, service: service).canOpenDirections else {
                     return
@@ -86,7 +89,7 @@ struct FriendProfileContentView: View {
     let isGhostModeEnabled: Bool
     let location: FriendLocation?
     let isLocationFresh: Bool
-    let onDismiss: () -> Void
+    let onClose: () -> Void
     let onOpenDirections: () -> Void
     let onPreparePresentation: (CGFloat) -> Void
 
@@ -96,7 +99,7 @@ struct FriendProfileContentView: View {
                 displayName: displayName, avatarID: avatarID,
                 profileColorHex: profileColorHex, isGhostModeEnabled: isGhostModeEnabled,
                 location: location, isLocationFresh: isLocationFresh,
-                onDismiss: onDismiss, onOpenDirections: onOpenDirections
+                onClose: onClose, onOpenDirections: onOpenDirections
             ),
             onPreparePresentation: onPreparePresentation
         )
@@ -111,7 +114,7 @@ struct FriendProfileBody: View {
     let isGhostModeEnabled: Bool
     let location: FriendLocation?
     let isLocationFresh: Bool
-    let onDismiss: () -> Void
+    let onClose: () -> Void
     let onOpenDirections: () -> Void
 
     var body: some View {
@@ -254,11 +257,13 @@ private struct FriendProfileNativeContent: UIViewControllerRepresentable {
             .scrollBounceBehavior(.basedOnSize)
             .accessibilityIdentifier("friend-profile-scroll")
             .overlay(alignment: .topTrailing) {
-                Button("Fermer la fiche de l’ami", systemImage: "xmark", action: content.onDismiss)
+                Button(role: .close, action: content.onClose)
                     .labelStyle(.iconOnly)
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .controlSize(.regular)
+                    .contentShape(.interaction, Circle())
+                    .accessibilityLabel("Fermer la fiche de l’ami")
                     .padding(16)
             }
             .environment(\.locale, environment.locale)

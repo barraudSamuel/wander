@@ -402,6 +402,7 @@ struct ContentView: View {
             FriendProfileSheet(
                 userID: selection.userID,
                 service: friendSyncService,
+                onClose: { closeFriendProfile(userID: selection.userID) },
                 onOpenDirections: {
                     pendingFriendDirectionsUserID = selection.userID
                     selectedMapDetail = nil
@@ -711,18 +712,30 @@ struct ContentView: View {
         )
     }
 
+    private func closeFriendProfile(userID: String) {
+        guard selectedMapDetail?.friendUserID == userID else { return }
+        selectedMapDetail = nil
+        // Consume the closing profile now so onDismiss cannot recenter again.
+        presentedFriendProfileUserID = nil
+        recenterAfterFriendProfile(userID: userID)
+    }
+
+    private func recenterAfterFriendProfile(userID: String) {
+        guard selectedMapDetail == nil,
+              dockSelection == .explore,
+              !outingComposerVisible,
+              !filterSheetVisible,
+              currentNavigationDestination(for: userID) != nil else { return }
+        friendCameraRequest = MapFriendCameraRequest(userID: userID)
+    }
+
     private func friendProfileDidDismiss() {
         // Switching sheet items must not recenter over the newly opened friend.
         guard selectedMapDetail?.friendUserID == nil else { return }
         let dismissedUserID = presentedFriendProfileUserID
         presentedFriendProfileUserID = nil
-        if let dismissedUserID,
-           selectedMapDetail == nil,
-           dockSelection == .explore,
-           !outingComposerVisible,
-           !filterSheetVisible,
-           currentNavigationDestination(for: dismissedUserID) != nil {
-            friendCameraRequest = MapFriendCameraRequest(userID: dismissedUserID)
+        if let dismissedUserID {
+            recenterAfterFriendProfile(userID: dismissedUserID)
         }
         guard let userID = pendingFriendDirectionsUserID else { return }
         pendingFriendDirectionsUserID = nil
