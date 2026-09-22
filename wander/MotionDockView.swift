@@ -3,13 +3,11 @@ import SwiftUI
 enum MotionDockSelection: String, CaseIterable {
     case explore
     case friends
-    case profile
 
     var title: String {
         switch self {
         case .explore: "Explorer"
         case .friends: "Amis"
-        case .profile: "Profil"
         }
     }
 
@@ -17,13 +15,12 @@ enum MotionDockSelection: String, CaseIterable {
         switch self {
         case .explore: "TabIconExplore"
         case .friends: "TabIconFriends"
-        case .profile: "TabIconProfile"
         }
     }
 }
 
 /// Keeps the map mounted while panels open above the system tab bar.
-struct MotionDockView<MapContent: View, Friends: View, Profile: View>: View {
+struct MotionDockView<MapContent: View, Friends: View>: View {
     @Binding var selection: MotionDockSelection
     let isEventsPresented: Bool
     let onToggleEvents: () -> Void
@@ -31,11 +28,9 @@ struct MotionDockView<MapContent: View, Friends: View, Profile: View>: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AccessibilityFocusState private var focusedPanel: MotionDockSelection?
     @ScaledMetric(relativeTo: .body) private var preferredFriendsHeight = 430
-    @ScaledMetric(relativeTo: .body) private var preferredProfileHeight = 510
 
     @ViewBuilder let map: () -> MapContent
     @ViewBuilder let friends: () -> Friends
-    @ViewBuilder let profile: () -> Profile
 
     private var isOpen: Bool { selection != .explore }
 
@@ -68,8 +63,6 @@ struct MotionDockView<MapContent: View, Friends: View, Profile: View>: View {
         GeometryReader { geometry in
             let width = min(max(0, geometry.size.width - 32), 440)
             let availableHeight = max(0, geometry.size.height - 24)
-            let preferredHeight = selection == .friends
-                ? preferredFriendsHeight : preferredProfileHeight
 
             ZStack(alignment: .bottom) {
                 if isOpen {
@@ -82,7 +75,7 @@ struct MotionDockView<MapContent: View, Friends: View, Profile: View>: View {
                     .ignoresSafeArea(.container)
 
                     panel
-                        .frame(width: width, height: min(preferredHeight, availableHeight))
+                        .frame(width: width, height: min(preferredFriendsHeight, availableHeight))
                         .modifier(DockPanelSurface(reduceTransparency: reduceTransparency))
                         .padding(.bottom, 12)
                         .accessibilityIdentifier("motion-dock-panel")
@@ -109,7 +102,6 @@ struct MotionDockView<MapContent: View, Friends: View, Profile: View>: View {
             Group {
                 switch selection {
                 case .friends: friends()
-                case .profile: profile()
                 case .explore: EmptyView()
                 }
             }

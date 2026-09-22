@@ -195,6 +195,39 @@ struct MapUserCoordinate: Equatable {
     }
 }
 
+/// Shared normalization and bounded cache for the map's address presentations.
+@MainActor
+enum MapProfileAddress {
+    static let cache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 200
+        return cache
+    }()
+    static func formattedAddress(
+        from mapItems: [MKMapItem]?
+    ) -> String? {
+        for mapItem in mapItems ?? [] {
+            let rawAddress = mapItem.addressRepresentations?.fullAddress(
+                includingRegion: true,
+                singleLine: true
+            ) ?? mapItem.address?.fullAddress
+
+            let address = rawAddress?
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: ", ")
+
+            if let address, !address.isEmpty {
+                return address
+            }
+        }
+
+        return nil
+    }
+
+}
+
 struct MapOutingPlan: Equatable {
     let plan: OutingPlan
     let organizer: MapOutingAttendee
@@ -534,11 +567,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
         return button
     }()
 
-    private static let addressCache: NSCache<NSString, NSString> = {
-        let cache = NSCache<NSString, NSString>()
-        cache.countLimit = 200
-        return cache
-    }()
     private static let addressRefreshDistance: CLLocationDistance = 20
 
     private enum AddressResolutionState {
@@ -831,7 +859,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
             return
         }
 
-        if let cachedAddress = Self.addressCache.object(
+        if let cachedAddress = MapProfileAddress.cache.object(
             forKey: coordinate.cacheKey
         ) {
             addressCoordinate = coordinate
@@ -861,8 +889,8 @@ final class UserLocationAnnotationView: MKAnnotationView {
             }
 
             self.addressRequest = nil
-            if let address = Self.formattedAddress(from: mapItems) {
-                Self.addressCache.setObject(
+            if let address = MapProfileAddress.formattedAddress(from: mapItems) {
+                MapProfileAddress.cache.setObject(
                     address as NSString,
                     forKey: coordinate.cacheKey
                 )
@@ -896,29 +924,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
         copyConfirmationResetWorkItem = nil
         resetCopyAddressButtonAppearance()
         rightCalloutAccessoryView = nil
-    }
-
-    private static func formattedAddress(
-        from mapItems: [MKMapItem]?
-    ) -> String? {
-        for mapItem in mapItems ?? [] {
-            let rawAddress = mapItem.addressRepresentations?.fullAddress(
-                includingRegion: true,
-                singleLine: true
-            ) ?? mapItem.address?.fullAddress
-
-            let address = rawAddress?
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: ", ")
-
-            if let address, !address.isEmpty {
-                return address
-            }
-        }
-
-        return nil
     }
 
     private func configureView() {
@@ -1464,8 +1469,8 @@ struct MapWithFogView: UIViewRepresentable {
     /// Event whose information is visible above the map.
     var selectedOutingPlanEventID: String?
 
-    /// Friend whose profile is visible above the map.
-    var selectedFriendProfileUserID: String?
+    /// Personal or friend profile visible above the map.
+    var selectedMapProfile: MapProfileSelection?
 
     /// One-shot framing from prepared sheet geometry, or when closing the profile.
     var friendCameraRequest: MapFriendCameraRequest?
@@ -1478,6 +1483,9 @@ struct MapWithFogView: UIViewRepresentable {
 
     /// Presents external navigation choices for the selected friend.
     var onJoinFriend: (String) -> Void = { _ in }
+
+    /// Opens the personal map profile.
+    var onSelectOwnProfile: () -> Void = {}
 
     /// Opens the profile and requests a location update when a friend is selected.
     var onSelectFriend: (String) -> Void = { _ in }
@@ -1559,6 +1567,7 @@ struct MapWithFogView: UIViewRepresentable {
         viewport.contentInsets = viewportContentInsets
         let uiView = viewport.mapView
         context.coordinator.onJoinFriend = onJoinFriend
+        context.coordinator.onSelectOwnProfile = onSelectOwnProfile
         context.coordinator.onSelectFriend = onSelectFriend
         context.coordinator.onViewFriendProfile = onViewFriendProfile
         context.coordinator.refreshingFriendUserIDs =
@@ -1661,12 +1670,19 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         if let request = friendCameraRequest {
+            let coordinate: CLLocationCoordinate2D?
+            switch request.target {
+            case .currentUser:
+                coordinate = locationTracker.lastLocation?.coordinate
+            case .friend(let userID):
+                coordinate = friendLocations[userID]?.coordinate
+            }
             let matchesSelection = request.sheetTopInWindow != nil
-                ? selectedFriendProfileUserID == request.userID
-                : selectedFriendProfileUserID == nil && selectedOutingPlanEventID == nil
+                ? selectedMapProfile == request.target
+                : selectedMapProfile == nil && selectedOutingPlanEventID == nil
             context.coordinator.applyFriendCameraRequest(
                 request,
-                coordinate: friendLocations[request.userID]?.coordinate,
+                coordinate: coordinate,
                 viewport: viewport,
                 isAllowed: matchesSelection && isEventCreationEnabled
                     && !centerOnUser && !resetMapOrientation
@@ -2060,10 +2076,12 @@ struct MapWithFogView: UIViewRepresentable {
         let requested: MapSocialClusterMemberID?
         if let eventID = selectedOutingPlanEventID {
             requested = .outing(eventID)
-        } else if let userID = selectedFriendProfileUserID {
-            requested = .friend(userID)
         } else {
-            requested = nil
+            switch selectedMapProfile {
+            case .currentUser: requested = .currentUser
+            case .friend(let userID): requested = .friend(userID)
+            case nil: requested = nil
+            }
         }
 
         let coordinator = context.coordinator
@@ -2241,6 +2259,7 @@ struct MapWithFogView: UIViewRepresentable {
         fileprivate var lastRequestedDetailSelection: MapSocialClusterMemberID?
         let friendCamera = MapFriendCameraController()
         var onJoinFriend: (String) -> Void
+        var onSelectOwnProfile: () -> Void = {}
         var onSelectFriend: (String) -> Void
         var onViewFriendProfile: (String) -> Void
         var onSelectOutingPlan: (String) -> Void
@@ -2277,6 +2296,11 @@ struct MapWithFogView: UIViewRepresentable {
                 if case .outing(let eventID) = memberID {
                     self?.onDeselectOutingPlan(eventID)
                 }
+            },
+            onRequestOwnProfile: { [weak self] in
+                self?.friendCamera.cancel()
+                self?.userCamera.stopFollowing()
+                self?.onSelectOwnProfile()
             },
             onRequestFriendProfile: { [weak self] userID in
                 self?.friendCamera.cancel()
@@ -3179,6 +3203,7 @@ struct MapWithFogView: UIViewRepresentable {
                         reuseIdentifier: UserLocationAnnotationView.reuseIdentifier
                     )
                 annotationView.annotation = annotation
+                annotationView.canShowCallout = false
                 annotationView.configure(
                     avatarID: userAvatarID,
                     profileColorHex: userProfileColorHex,
@@ -3195,6 +3220,7 @@ struct MapWithFogView: UIViewRepresentable {
                         keepsSpotDurationVisible: false
                     )
                 )
+                annotationView.accessibilityHint = "Ouvrir mon profil"
                 annotationView.setSocialClusterFocus(
                     socialProximityController.isFocused(annotation)
                 )
@@ -3348,7 +3374,7 @@ struct MapWithFogView: UIViewRepresentable {
             ) else { return }
             switch memberID {
             case .currentUser:
-                break
+                onSelectOwnProfile()
             case .friend(let userID):
                 onSelectFriend(userID)
             case .outing(let eventID):
@@ -3405,6 +3431,7 @@ struct MapWithFogView: UIViewRepresentable {
                 profileColorHex: normalizedProfileColorHex,
                 calloutInfo: calloutInfo
             )
+            annotationView.accessibilityHint = "Ouvrir mon profil"
         }
 
         func configureFriendAnnotationView(

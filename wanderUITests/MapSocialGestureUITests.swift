@@ -24,6 +24,72 @@ final class MapSocialGestureUITests: XCTestCase {
         #endif
     }
 
+    func testOwnAvatarOpensSheetWithoutCalloutAndReopensAfterDismissal() {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
+        app.launch()
+        XCTAssertTrue(map.waitForExistence(timeout: 10))
+        let user = app.buttons["Moi, Vous"]
+        XCTAssertTrue(user.waitForExistence(timeout: 5))
+        let fullMapFrame = map.frame
+        let ownSheet = app.descendants(matching: .any)["own-profile-scroll"].firstMatch
+        for expands in [false, true] {
+            user.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            XCTAssertTrue(ownSheet.waitForExistence(timeout: 5))
+            XCTAssertTrue(ownSheet.staticTexts["Moi"].exists)
+            XCTAssertTrue(ownSheet.staticTexts["Exploration"].exists)
+            XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Copier l’adresse")).count,
+                           ownSheet.buttons.matching(NSPredicate(format: "label == %@", "Copier l’adresse")).count)
+            XCTAssertFalse(app.buttons["Itinéraire"].exists)
+            XCTAssertEqual(map.frame, fullMapFrame)
+            let framed = NSPredicate { _, _ in
+                user.exists && user.frame.maxY + 8 < ownSheet.frame.minY
+                    && user.frame.minY >= self.app.statusBars.firstMatch.frame.maxY
+            }
+            expectation(for: framed, evaluatedWith: user)
+            waitForExpectations(timeout: 5)
+            attachScreenshot(named: "Profil personnel compact sans tooltip")
+            if expands {
+                let compactTop = ownSheet.frame.minY
+                ownSheet.swipeUp()
+                let expanded = NSPredicate { _, _ in ownSheet.frame.minY < compactTop - 50 }
+                expectation(for: expanded, evaluatedWith: ownSheet)
+                waitForExpectations(timeout: 3)
+                attachScreenshot(named: "Profil personnel agrandi")
+            }
+            let start = ownSheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+            let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+            start.press(forDuration: 0.05, thenDragTo: bottom)
+            XCTAssertTrue(ownSheet.waitForNonExistence(timeout: 3))
+            XCTAssertEqual(map.frame, fullMapFrame)
+        }
+    }
+
+    func testOwnProfileFromGroupThenFriendProfile() {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map", "-debug-social-map-mixed", "-debug-social-map-fullscreen"]
+        app.launch()
+        let group = app.buttons["Groupe, 3 personnes et 2 sorties prévues"]
+        XCTAssertTrue(group.waitForExistence(timeout: 10))
+        group.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let expanded = app.buttons["Groupe ouvert, 3 personnes et 2 sorties prévues"]
+        XCTAssertTrue(expanded.waitForExistence(timeout: 3))
+        tapExpandedRow(expanded, index: 0, rowCount: 5)
+        let ownSheet = app.descendants(matching: .any)["own-profile-scroll"].firstMatch
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 5))
+        XCTAssertTrue(ownSheet.staticTexts["Moi"].exists)
+        XCTAssertFalse(detailPane.exists)
+        let start = ownSheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
+        XCTAssertTrue(ownSheet.waitForNonExistence(timeout: 3))
+        openMixedFriend(eventCount: 2)
+        XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
+        XCTAssertTrue(app.buttons["Itinéraire"].isHittable)
+        XCTAssertFalse(ownSheet.exists)
+        closeFriendSheet()
+    }
+
     func testOpeningGroupAndClosingOnBackground() {
         let group = app.buttons["Groupe, 2 sorties prévues"]
         XCTAssertTrue(group.waitForExistence(timeout: 10))
@@ -301,7 +367,7 @@ final class MapSocialGestureUITests: XCTestCase {
         let mapFrame = map.frame
         let nativeSize = app.maps.firstMatch.frame.size
         closeFriendSheet()
-        for (panel, field) in [("friends", "Code ami"), ("profile", "Pseudo")] {
+        for (panel, field) in [("friends", "Code ami")] {
             app.buttons["motion-dock-" + panel].tap()
             XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 3))
             app.buttons["motion-dock-explore"].tap()
@@ -588,13 +654,19 @@ final class MapSocialGestureUITests: XCTestCase {
         app.buttons["motion-dock-friends"].tap()
         XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
         XCTAssertFalse(eventsButton.isSelected)
-        app.buttons["motion-dock-profile"].tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
-        XCTAssertFalse(eventsButton.isSelected)
         app.buttons["motion-dock-explore"].tap()
+        XCTAssertTrue(row.isSelected)
+        app.buttons["map-own-profile"].tap()
+        let ownSheet = app.descendants(matching: .any)["own-profile-scroll"].firstMatch
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        XCTAssertFalse(eventsButton.isSelected)
+        let start = ownSheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
+        XCTAssertTrue(ownSheet.waitForNonExistence(timeout: 3))
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertEqual(row.frame.minY, rowFrame.minY, accuracy: 2)
-        XCTAssertTrue(row.isSelected)
+        XCTAssertFalse(row.isSelected, "Le profil remplace la sélection active, sans réinitialiser la liste.")
         XCTAssertTrue(eventsButton.isSelected)
         XCTAssertTrue((probe.value as? String ?? "").contains("suspended=true"))
         XCTAssertFalse(requestedIDs().isEmpty)
@@ -1249,7 +1321,7 @@ final class MapDeviceSmokeUITests: XCTestCase {
         XCTAssertEqual(viewport.frame.maxY, window.maxY, accuracy: 1)
         XCTAssertFalse(eventsButton.isSelected)
         XCTAssertFalse(list.isHittable)
-        XCTAssertTrue(app.buttons["Filtres de la carte"].isHittable)
+        XCTAssertTrue(app.buttons["map-own-profile"].isHittable)
         XCTAssertTrue(app.buttons["Recentrer la carte sur ma position"].isHittable)
         let nativeSize = nativeMap.frame.size
         eventsButton.tap()

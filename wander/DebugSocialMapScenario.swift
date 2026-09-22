@@ -21,8 +21,6 @@ struct DebugSocialMapScenarioView: View {
     @State private var dockSelection: MotionDockSelection = ProcessInfo.processInfo.arguments
         .contains("-debug-dock-friends") ? .friends : .explore
     @State private var friendCode = ""
-    @State private var profileName = "Explorateur"
-    @State private var profileConfirmation = false
     @State private var eventsExpanded = false
     @State private var selectedDetail = DebugSocialMapScene.initialSelection
 
@@ -50,21 +48,6 @@ struct DebugSocialMapScenarioView: View {
                     .scrollDismissesKeyboard(.interactively)
                     .toolbar(.hidden, for: .navigationBar)
                 }
-            } profile: {
-                NavigationStack {
-                    Form {
-                        TextField("Pseudo", text: $profileName)
-                        Button("Confirmation de test") { profileConfirmation = true }
-                        ForEach(1...30, id: \.self) { number in
-                            Text("Réglage \(number)")
-                        }
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .toolbar(.hidden, for: .navigationBar)
-                    .alert("Action de test", isPresented: $profileConfirmation) {
-                        Button("Annuler", role: .cancel) {}
-                    }
-                }
             }
         } else {
             mapScene
@@ -80,10 +63,11 @@ struct DebugSocialMapScenarioView: View {
                             Text("Scénario carte sociale")
                                 .font(.caption)
                             Spacer()
-                            Button("Événements", systemImage: "calendar", action: toggleEvents)
-                                .labelStyle(.iconOnly)
-                                .buttonStyle(.glass)
-                                .accessibilityIdentifier("motion-dock-events")
+                            MapImageButton(
+                                assetName: "TabIconEvents", label: "Événements",
+                                isSelected: areEventsPresented, action: toggleEvents
+                            )
+                            .accessibilityIdentifier("motion-dock-events")
                             Button("Réinitialiser") { revision += 1 }
                         }
                     }
@@ -94,13 +78,13 @@ struct DebugSocialMapScenarioView: View {
     }
 
     private var areEventsPresented: Bool {
-        eventsExpanded && dockSelection == .explore && selectedDetail?.friendUserID == nil
+        eventsExpanded && dockSelection == .explore && selectedDetail?.profile == nil
     }
 
     private func toggleEvents() {
         let shouldPresent = !areEventsPresented
         dockSelection = .explore
-        if selectedDetail?.friendUserID != nil { selectedDetail = nil }
+        if selectedDetail?.profile != nil { selectedDetail = nil }
         eventsExpanded = shouldPresent
     }
 
@@ -143,8 +127,14 @@ private struct DebugSocialMapScene: View {
     @State private var responses: [String: OutingAttendanceParticipationState] = [:]
     @State private var showsDirections = false
     @State private var opensDirectionsAfterDismiss = false
-    @State private var presentedFriendProfileUserID: String?
+    @State private var presentedProfile: MapProfileSelection?
+    @State private var shouldFocusOwnProfile = true
     @State private var friendCameraRequest: MapFriendCameraRequest?
+    @State private var profileName = "Moi"
+    @State private var avatarID = ProfileAvatar.cyclopsHorns.rawValue
+    @State private var heatMapEnabled = false
+    @State private var ghostModeEnabled = false
+    @State private var profileConfirmation = false
 
     private static func hasArgument(_ argument: String) -> Bool {
         arguments.contains("-debug-social-map-" + argument)
@@ -243,7 +233,7 @@ private struct DebugSocialMapScene: View {
         MapDetailSplitView(
             isPresented: false,
             isEventsExpanded: $eventsExpanded,
-            areEventsObscured: selectedDetail?.friendUserID != nil
+            areEventsObscured: selectedDetail?.profile != nil
         ) {
             EmptyView()
         } events: {
@@ -253,7 +243,7 @@ private struct DebugSocialMapScene: View {
                 currentLocation: listLocation,
                 isLoading: Self.hasArgument("list-loading"),
                 hasLoadError: Self.hasArgument("list-error") || Self.hasArgument("partial-list-error"),
-                isListActive: isListActive && eventsExpanded && selectedDetail?.friendUserID == nil,
+                isListActive: isListActive && eventsExpanded && selectedDetail?.profile == nil,
                 onVisibleEventIDsChange: { ids in
                     if !isListActive && ids.isEmpty { didSuspendRosters = true }
                     requestedRosterIDs = ids
@@ -271,31 +261,81 @@ private struct DebugSocialMapScene: View {
         } map: {
             mapView(presentations: presentations)
         }
-        .sheet(isPresented: friendProfileIsPresented, onDismiss: friendProfileDidDismiss) {
-            if let id = selectedDetail?.friendUserID, let friend = friends[id] {
-                FriendProfileContentView(
-                    displayName: friend.displayName,
-                    avatarID: friend.avatarID,
-                    profileColorHex: friend.profileColorHex,
-                    isGhostModeEnabled: Self.hasArgument("ghost"),
-                    location: Self.hasArgument("missing-location") ? nil : friend,
-                    isLocationFresh: !Self.hasArgument("stale"),
-                    onOpenDirections: {
-                        opensDirectionsAfterDismiss = true
-                        selectedDetail = nil
-                    },
-                    onPreparePresentation: { sheetTop in
-                        guard selectedDetail?.friendUserID == id,
-                              !Self.hasArgument("ghost"),
-                              !Self.hasArgument("missing-location") else { return }
-                        friendCameraRequest = MapFriendCameraRequest(
-                            userID: id, sheetTopInWindow: sheetTop
+        .sheet(item: mapProfileSelection, onDismiss: mapProfileDidDismiss) { selection in
+            Group {
+                switch selection {
+                case .currentUser:
+                    OwnProfileSheet(
+                        displayName: profileName, avatarID: avatarID,
+                        profileColorHex: "#3478F6", locationTracker: locationTracker,
+                        cityProgress: nil, isGhostModeEnabled: ghostModeEnabled,
+                        onPreparePresentation: { sheetTop in
+                            guard selectedDetail?.profile == selection,
+                                  shouldFocusOwnProfile else { return }
+                            friendCameraRequest = MapFriendCameraRequest(
+                                target: selection, sheetTopInWindow: sheetTop
+                            )
+                        }
+                    ) { summary in
+                        Form {
+                            Section {
+                                summary
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowBackground(Color.clear)
+                            }
+                            Section("Affichage de la carte") {
+                                Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
+                                    .accessibilityIdentifier("profile-heat-map")
+                            }
+                            Section("Avatar") {
+                                ProfileAvatarPicker(selection: $avatarID)
+                            }
+                            Section("Identité") {
+                                TextField("Pseudo", text: $profileName)
+                                    .submitLabel(.done)
+                            }
+                            Section("Visibilité auprès de mes amis") {
+                                Toggle("Mode fantôme", isOn: $ghostModeEnabled)
+                            }
+                            Section("Compte") {
+                                Button("Confirmation de test") { profileConfirmation = true }
+                            }
+                        }
+                        .contentMargins(.top, 0, for: .scrollContent)
+                        .scrollDismissesKeyboard(.interactively)
+                        .accessibilityIdentifier("own-profile-scroll")
+                        .alert("Action de test", isPresented: $profileConfirmation) {
+                            Button("Annuler", role: .cancel) {}
+                        }
+                    }
+                case .friend(let id):
+                    if let friend = friends[id] {
+                        FriendProfileContentView(
+                            displayName: friend.displayName,
+                            avatarID: friend.avatarID,
+                            profileColorHex: friend.profileColorHex,
+                            isGhostModeEnabled: Self.hasArgument("ghost"),
+                            location: Self.hasArgument("missing-location") ? nil : friend,
+                            isLocationFresh: !Self.hasArgument("stale"),
+                            onOpenDirections: {
+                                opensDirectionsAfterDismiss = true
+                                selectedDetail = nil
+                            },
+                            onPreparePresentation: { sheetTop in
+                                guard selectedDetail?.profile == selection,
+                                      !Self.hasArgument("ghost"),
+                                      !Self.hasArgument("missing-location") else { return }
+                                friendCameraRequest = MapFriendCameraRequest(
+                                    target: selection, sheetTopInWindow: sheetTop
+                                )
+                            }
                         )
                     }
-                )
-                .onAppear { presentedFriendProfileUserID = id }
-                .id(id)
+                }
             }
+            .interactiveDismissDisabled(profileConfirmation)
+            .onAppear { presentedProfile = selection }
+            .id(selection.id)
         }
         .alert("Itinéraire de test", isPresented: $showsDirections) {
             Button("Fermer", role: .cancel) {}
@@ -332,32 +372,38 @@ private struct DebugSocialMapScene: View {
         }
     }
 
-    private func recenterAfterFriendProfile(userID: String) {
-        guard selectedDetail == nil,
-              isListActive,
-              editingEvent == nil,
-              !Self.hasArgument("ghost"),
-              !Self.hasArgument("missing-location") else { return }
-        friendCameraRequest = MapFriendCameraRequest(userID: userID)
+    private func presentOwnProfile(focusOnMap: Bool) {
+        // MapKit can echo a programmatic pin selection after the sheet opens.
+        guard selectedDetail != .ownProfile else { return }
+        shouldFocusOwnProfile = focusOnMap
+        if !focusOnMap { friendCameraRequest = nil }
+        selectedDetail = .ownProfile
     }
 
-    private func friendProfileDidDismiss() {
-        guard selectedDetail?.friendUserID == nil else { return }
-        let dismissedUserID = presentedFriendProfileUserID
-        presentedFriendProfileUserID = nil
-        if let dismissedUserID {
-            recenterAfterFriendProfile(userID: dismissedUserID)
+    private func mapProfileDidDismiss() {
+        guard selectedDetail?.profile == nil else { return }
+        let dismissedProfile = presentedProfile
+        presentedProfile = nil
+        if let dismissedProfile, selectedDetail == nil, isListActive, editingEvent == nil {
+            let canRecenter: Bool
+            switch dismissedProfile {
+            case .currentUser: canRecenter = shouldFocusOwnProfile && locationTracker.lastLocation != nil
+            case .friend: canRecenter = !Self.hasArgument("ghost") && !Self.hasArgument("missing-location")
+            }
+            if canRecenter { friendCameraRequest = MapFriendCameraRequest(target: dismissedProfile) }
         }
         guard opensDirectionsAfterDismiss else { return }
         opensDirectionsAfterDismiss = false
         showsDirections = true
     }
 
-    private var friendProfileIsPresented: Binding<Bool> {
+    private var mapProfileSelection: Binding<MapProfileSelection?> {
         Binding(
-            get: { selectedDetail?.friendUserID != nil },
-            set: { isPresented in
-                if !isPresented, selectedDetail?.friendUserID != nil {
+            get: { selectedDetail?.profile },
+            set: { profile in
+                if let profile {
+                    selectedDetail = profile.detailSelection
+                } else if selectedDetail?.profile != nil {
                     selectedDetail = nil
                 }
             }
@@ -370,18 +416,29 @@ private struct DebugSocialMapScene: View {
             discoveredCellIDs: [], cityBoundaryCoordinates: [],
             friendLocations: friends, freshFriendLocationUserIDs: Set(friends.keys),
             outingPlans: presentations,
-            userDisplayName: "Moi", userAvatarID: ProfileAvatar.cyclopsHorns.rawValue,
+            userDisplayName: profileName, userAvatarID: avatarID,
             userProfileColorHex: "#3478F6",
             centerOnUser: $centerOnUser, resetMapOrientation: $resetOrientation,
             centerOnFriendUserID: $centerOnFriend, centerOnOutingPlanEventID: $centerOnEvent,
             isEventCreationEnabled: editingEvent == nil,
             selectedOutingPlanEventID: selectedDetail?.outingEventID,
-            selectedFriendProfileUserID: selectedDetail?.friendUserID,
+            selectedMapProfile: selectedDetail?.profile,
             friendCameraRequest: friendCameraRequest,
             showsSystemUserLocation: false,
+            showsHeatMap: heatMapEnabled,
+            onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
             onSelectFriend: { selectedDetail = .friend($0) },
             onSelectOutingPlan: { selectedDetail = .outing($0) }
         )
+        .overlay(alignment: .topTrailing) {
+            MapImageButton(assetName: "TabIconProfile", label: "Mon profil") {
+                presentOwnProfile(focusOnMap: false)
+            }
+            .accessibilityIdentifier("map-own-profile")
+            .padding(.top, 8)
+            .padding(.trailing, 16)
+            .modifier(MapContentSafeArea(edges: [.top, .trailing]))
+        }
         .overlay(alignment: .topLeading) {
             if Self.hasArgument("roster-probe") {
                 Text("Groupes : \(requestedRosterIDs.count)")

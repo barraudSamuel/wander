@@ -75,6 +75,45 @@ final class FriendProfilePresentationTests: XCTestCase {
         XCTAssertEqual(wide.width, 420, accuracy: 1)
     }
 
+    func testLongFormOpensAtSummaryHeight() async throws {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = try XCTUnwrap(scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.effectiveGeometry.coordinateSpace.bounds
+        let root = UIViewController()
+        window.rootViewController = root
+        window.isHidden = false
+        defer {
+            root.dismiss(animated: false)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        var preparedTops: [CGFloat] = []
+        let profile = MapProfileNativeContent(
+            content: Form {
+                ForEach(0..<100, id: \.self) { Text("Réglage \($0)") }
+            },
+            scrollIdentifier: "test-profile-form",
+            compactContent: AnyView(Text("Résumé").frame(height: 220)),
+            wrapsInScrollView: false,
+            onPreparePresentation: { preparedTops.append($0) }
+        )
+        let host = UIHostingController(rootView: profile)
+        host.modalPresentationStyle = .pageSheet
+        await withCheckedContinuation { continuation in
+            root.present(host, animated: true) { continuation.resume() }
+        }
+
+        let sheet = try XCTUnwrap(host.sheetPresentationController)
+        XCTAssertEqual(preparedTops.count, 1)
+        XCTAssertEqual(sheet.selectedDetentIdentifier, FriendProfilePresentationController.compactDetent)
+        XCTAssertLessThan(sheet.frameOfPresentedViewInContainerView.height, 350,
+                          "Les réglages ne doivent pas agrandir la hauteur compacte du résumé.")
+        sheet.animateChanges { sheet.selectedDetentIdentifier = .large }
+        XCTAssertEqual(preparedTops.count, 1, "Agrandir le formulaire ne doit pas recadrer la carte.")
+    }
+
     private var profileBody: FriendProfileBody {
         FriendProfileBody(
             displayName: "Un nom assez long pour se répartir sur plusieurs lignes",

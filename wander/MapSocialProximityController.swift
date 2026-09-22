@@ -14,6 +14,7 @@ final class MapSocialProximityController {
     private let setFocusAppearance: (Bool, MKAnnotationView) -> Void
     private let onDeselectMember: (MapSocialClusterMemberID) -> Void
     private let visibleBounds: @MainActor (MKMapView) -> CGRect
+    private let onRequestOwnProfile: (() -> Void)?
     private let onRequestFriendProfile: ((String) -> Void)?
     private var state = MapSocialProximityState()
     private var sources: [MapSocialClusterMemberID: any MKAnnotation] = [:]
@@ -32,6 +33,7 @@ final class MapSocialProximityController {
         presentation: @escaping (MapSocialProximityGroupAnnotation) -> MapSocialClusterPresentation,
         setFocusAppearance: @escaping (Bool, MKAnnotationView) -> Void,
         onDeselectMember: @escaping (MapSocialClusterMemberID) -> Void = { _ in },
+        onRequestOwnProfile: (() -> Void)? = nil,
         onRequestFriendProfile: ((String) -> Void)? = nil,
         visibleBounds: @escaping @MainActor (MKMapView) -> CGRect = {
             $0.bounds.inset(by: $0.safeAreaInsets)
@@ -41,6 +43,7 @@ final class MapSocialProximityController {
         self.setFocusAppearance = setFocusAppearance
         self.onDeselectMember = onDeselectMember
         self.visibleBounds = visibleBounds
+        self.onRequestOwnProfile = onRequestOwnProfile
         self.onRequestFriendProfile = onRequestFriendProfile
     }
 
@@ -230,10 +233,10 @@ final class MapSocialProximityController {
             mapView.setUserTrackingMode(.none, animated: false)
         }
         let usesProfileCamera: Bool
-        if case .friend = memberID {
-            usesProfileCamera = onRequestFriendProfile != nil
-        } else {
-            usesProfileCamera = false
+        switch memberID {
+        case .friend: usesProfileCamera = onRequestFriendProfile != nil
+        case .currentUser: usesProfileCamera = onRequestOwnProfile != nil
+        case .outing: usesProfileCamera = false
         }
         if shouldRecenter && !usesProfileCamera {
             mapView.setCenter(annotation.coordinate, animated: !UIAccessibility.isReduceMotionEnabled)
@@ -279,6 +282,10 @@ final class MapSocialProximityController {
               CLLocationCoordinate2DIsValid(annotation.coordinate) else { return }
         mapView.setUserTrackingMode(.none, animated: false)
         select(memberID, on: mapView)
+        if case .currentUser = memberID, let onRequestOwnProfile {
+            onRequestOwnProfile()
+            return
+        }
         if case .friend(let userID) = memberID, let onRequestFriendProfile {
             // Open even when the annotation is offscreen; its camera request will
             // make it visible. Waiting for didSelect would create a dependency loop.

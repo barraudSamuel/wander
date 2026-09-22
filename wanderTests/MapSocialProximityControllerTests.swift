@@ -42,6 +42,30 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertEqual(fixture.mapView.regionRequestCount, regions + 1, "Events keep native centering")
     }
 
+    func testOwnProfileCameraOwnsOpeningFromPinAndGroup() async throws {
+        var requests = 0
+        let fixture = try await makeFixture(onRequestOwnProfile: { requests += 1 })
+        defer { fixture.close() }
+        let user = fixture.annotation("Vous", meters: 0)
+        fixture.update([.currentUser: user])
+        try await eventually("The personal pin is rendered") { fixture.mapView.view(for: user) != nil }
+        let view = try XCTUnwrap(fixture.mapView.view(for: user))
+        let centers = fixture.mapView.centerRequestCount
+        let regions = fixture.mapView.regionRequestCount
+        XCTAssertEqual(fixture.controller.activate(user, view: view, on: fixture.mapView), .currentUser)
+        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
+        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+
+        fixture.controller.collapse(on: fixture.mapView)
+        fixture.update(fixture.mixedSources())
+        let group = try XCTUnwrap(fixture.groups.first)
+        try await eventually("The group is rendered") { fixture.groupView(for: group) != nil }
+        fixture.groupView(for: group)?.onSelectMember?(.currentUser)
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
+        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+    }
+
     func testExpandedGroupFitsChangingViewportWithoutLosingSelectionOrRepeatedCentering() async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
@@ -724,10 +748,10 @@ final class MapSocialProximityControllerTests: XCTestCase {
         }
     }
 
-    private func makeFixture(onRequestFriendProfile: ((String) -> Void)? = nil) async throws -> MapFixture {
+    private func makeFixture(onRequestOwnProfile: (() -> Void)? = nil, onRequestFriendProfile: ((String) -> Void)? = nil) async throws -> MapFixture {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = try XCTUnwrap(scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)
-        let fixture = MapFixture(windowScene: scene, onRequestFriendProfile: onRequestFriendProfile)
+        let fixture = MapFixture(windowScene: scene, onRequestOwnProfile: onRequestOwnProfile, onRequestFriendProfile: onRequestFriendProfile)
         do {
             try await eventually("The test map finishes its initial region change") {
                 fixture.hasSettledInitialRegion
@@ -776,6 +800,7 @@ private final class ObserverTestTouch: UITouch {
 
 @MainActor
 private final class MapFixture: NSObject, MKMapViewDelegate {
+    private let onRequestOwnProfile: (() -> Void)?
     private let onRequestFriendProfile: ((String) -> Void)?
     private let window: UIWindow
     private weak var previousKeyWindow: UIWindow?
@@ -795,13 +820,15 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         onDeselectMember: { [weak self] memberID in
             self?.deselectedMembers.append(memberID)
         },
+        onRequestOwnProfile: onRequestOwnProfile,
         onRequestFriendProfile: onRequestFriendProfile,
         visibleBounds: { [weak self] mapView in
             self?.visibleBounds ?? mapView.bounds.inset(by: mapView.safeAreaInsets)
         }
     )
 
-    init(windowScene: UIWindowScene, onRequestFriendProfile: ((String) -> Void)? = nil) {
+    init(windowScene: UIWindowScene, onRequestOwnProfile: (() -> Void)? = nil, onRequestFriendProfile: ((String) -> Void)? = nil) {
+        self.onRequestOwnProfile = onRequestOwnProfile
         self.onRequestFriendProfile = onRequestFriendProfile
         previousKeyWindow = windowScene.windows.first(where: \.isKeyWindow)
         window = UIWindow(windowScene: windowScene)

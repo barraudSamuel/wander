@@ -96,7 +96,7 @@ final class MapFriendCameraControllerTests: XCTestCase {
         let viewport = MapViewportView(mapView: map, renderSize: nil)
         viewport.frame = map.frame
         viewport.layoutIfNeeded()
-        let request = MapFriendCameraRequest(userID: "friend-a")
+        let request = MapFriendCameraRequest(target: .friend("friend-a"))
         let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
         controller.apply(request, coordinate: coordinate, viewport: viewport)
         XCTAssertEqual(controller.lastRequestID, request.id)
@@ -112,7 +112,7 @@ final class MapFriendCameraControllerTests: XCTestCase {
         controller.apply(request, coordinate: coordinate, viewport: viewport)
         XCTAssertEqual(controller.lastRequestID, request.id)
         XCTAssertFalse(controller.isAnimating)
-        let dismissal = MapFriendCameraRequest(userID: request.userID)
+        let dismissal = MapFriendCameraRequest(target: request.target)
         XCTAssertNotEqual(dismissal.id, request.id)
         controller.cancel(consuming: dismissal)
         controller.apply(dismissal, coordinate: coordinate, viewport: viewport)

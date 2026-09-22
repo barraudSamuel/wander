@@ -73,17 +73,12 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
 }
 
 final class NativeMapTabController: UIViewController {
-    private static let eventsButtonSide: CGFloat = 54
-    // Match the 40-point tab artwork after the navigation container's 0.9 scale.
-    private static let eventsIconSide: CGFloat = 36
-    private static let eventsIcon = UIImage(named: "TabIconEvents")?
-        .preparingThumbnail(of: CGSize(width: eventsIconSide, height: eventsIconSide))?
-        .withRenderingMode(.alwaysOriginal)
-
     private let contentController: UIHostingController<AnyView>
     private let tabsController = CompactTabBarController()
     private let navigationContainer = TabBarHitTestingView()
-    private let eventsButton = UIButton(type: .system)
+    private let eventsController = UIHostingController(rootView: AnyView(EmptyView()))
+    private var isEventsPresented = false
+    private var eventsButton: UIView { eventsController.view }
     private var reportedContentInsets = UIEdgeInsets.zero
     var onContentInsetsChange: ((UIEdgeInsets) -> Void)?
     var onToggleEvents: (() -> Void)?
@@ -139,12 +134,12 @@ final class NativeMapTabController: UIViewController {
         navigationContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(navigationContainer)
         let preferredWidth = navigationContainer.widthAnchor.constraint(
-            equalTo: view.safeAreaLayoutGuide.widthAnchor, multiplier: 0.75
+            equalTo: view.safeAreaLayoutGuide.widthAnchor, multiplier: 0.5
         )
         preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             preferredWidth,
-            navigationContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+            navigationContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
             navigationContainer.widthAnchor.constraint(
                 lessThanOrEqualTo: view.safeAreaLayoutGuide.widthAnchor, constant: -88
             ),
@@ -167,10 +162,11 @@ final class NativeMapTabController: UIViewController {
         tabsController.onLayout = { [weak self] in self?.updateNavigationLayout() }
         tabsController.didMove(toParent: self)
 
-        eventsButton.accessibilityLabel = "Événements"
-        eventsButton.accessibilityIdentifier = "motion-dock-events"
-        eventsButton.addAction(UIAction { [weak self] _ in self?.onToggleEvents?() }, for: .touchUpInside)
+        addChild(eventsController)
+        eventsController.safeAreaRegions = []
+        eventsButton.backgroundColor = .clear
         view.addSubview(eventsButton)
+        eventsController.didMove(toParent: self)
         updateEventsButtonAppearance()
     }
 
@@ -199,15 +195,14 @@ final class NativeMapTabController: UIViewController {
         )
         let controlsFrame = tabBar.convert(controlsRect, to: view)
         if controlsFrame.height > 0 {
-            let side = Self.eventsButtonSide
-            // The floating bar's bounds extend below its visible capsule.
-            // Keep a stable diameter at its top, independent of safe-area changes.
-            // Glass can transform the button during interaction; setting frame
-            // then would resize its bounds to compensate for that transform.
+            let side = MapImageButton.side
+            // Preserve the center of the previous 54 pt control while reducing
+            // the image and hit area to 44 pt, aligned with the native tabs.
+            let centerOffset: CGFloat = 27
             eventsButton.bounds = CGRect(x: 0, y: 0, width: side, height: side)
             eventsButton.center = CGPoint(
-                x: controlsFrame.maxX + side / 2,
-                y: controlsFrame.minY + side / 2
+                x: controlsFrame.maxX + centerOffset,
+                y: controlsFrame.minY + centerOffset
             )
         }
         reportContentInsets()
@@ -245,22 +240,23 @@ final class NativeMapTabController: UIViewController {
 
     func synchronizeEvents(isPresented: Bool) {
         loadViewIfNeeded()
-        guard eventsButton.isSelected != isPresented else { return }
-        eventsButton.isSelected = isPresented
+        guard isEventsPresented != isPresented else { return }
+        isEventsPresented = isPresented
         updateEventsButtonAppearance()
     }
 
     private func updateEventsButtonAppearance() {
-        var configuration: UIButton.Configuration = eventsButton.isSelected ? .prominentGlass() : .glass()
-        configuration.image = Self.eventsIcon
-        let inset = (Self.eventsButtonSide - Self.eventsIconSide) / 2
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset)
-        configuration.cornerStyle = .capsule
-        eventsButton.configuration = configuration
-        eventsButton.imageView?.layer.cornerRadius = Self.eventsIconSide / 2
-        eventsButton.imageView?.clipsToBounds = true
-        eventsButton.accessibilityValue = eventsButton.isSelected ? "Liste affichée" : "Liste masquée"
-        eventsButton.accessibilityHint = eventsButton.isSelected ? "Fermer la liste des événements" : "Afficher la liste des événements"
+        eventsController.rootView = AnyView(
+            MapImageButton(
+                assetName: "TabIconEvents", label: "Événements",
+                isSelected: isEventsPresented
+            ) { [weak self] in
+                self?.onToggleEvents?()
+            }
+            .accessibilityIdentifier("motion-dock-events")
+            .accessibilityValue(isEventsPresented ? "Liste affichée" : "Liste masquée")
+            .accessibilityHint(isEventsPresented ? "Fermer la liste des événements" : "Afficher la liste des événements")
+        )
     }
 
     func updateContent(_ content: AnyView) {

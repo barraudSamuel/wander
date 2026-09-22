@@ -1,14 +1,29 @@
 import MapKit
 
-/// A prepared opening target, or a recenter when closing the profile.
+/// Identifies a map profile independently of the account settings panel.
+enum MapProfileSelection: Hashable, Identifiable {
+    case currentUser
+    case friend(String)
+
+    var id: Self { self }
+
+    var detailSelection: MapDetailSelection {
+        switch self {
+        case .currentUser: .ownProfile
+        case .friend(let userID): .friend(userID)
+        }
+    }
+}
+
+/// A prepared opening target, or a recenter when closing a map profile.
 struct MapFriendCameraRequest: Equatable {
     let id: UUID
-    let userID: String
+    let target: MapProfileSelection
     let sheetTopInWindow: CGFloat?
 
-    init(id: UUID = UUID(), userID: String, sheetTopInWindow: CGFloat? = nil) {
+    init(id: UUID = UUID(), target: MapProfileSelection, sheetTopInWindow: CGFloat? = nil) {
         self.id = id
-        self.userID = userID
+        self.target = target
         self.sheetTopInWindow = sheetTopInWindow
     }
 }

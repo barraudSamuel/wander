@@ -12,8 +12,17 @@ import SwiftUI
 import UIKit
 
 enum MapDetailSelection: Equatable {
+    case ownProfile
     case friend(String)
     case outing(String)
+
+    var profile: MapProfileSelection? {
+        switch self {
+        case .ownProfile: .currentUser
+        case .friend(let userID): .friend(userID)
+        case .outing: nil
+        }
+    }
 
     var friendUserID: String? {
         guard case .friend(let userID) = self else { return nil }
@@ -105,7 +114,6 @@ struct ContentView: View {
     @State private var dockSelection: MotionDockSelection = .explore
     @State private var friendCodeInput = ""
     @State private var isProfileAccountFlowActive = false
-    @State private var filterSheetVisible = false
     @State private var outingComposerVisible = false
     @State private var outingComposerDetent =
         OutingComposerPresentation.creationDetent
@@ -122,7 +130,8 @@ struct ContentView: View {
     @State private var friendNavigationSelection: FriendSelection?
     @State private var selectedOutingNavigationEventID: String?
     @State private var pendingFriendDirectionsUserID: String?
-    @State private var presentedFriendProfileUserID: String?
+    @State private var presentedProfile: MapProfileSelection?
+    @State private var shouldFocusOwnProfile = true
     @State private var friendCameraRequest: MapFriendCameraRequest?
     @State private var outingAttendanceErrorMessage: String?
 
@@ -154,22 +163,6 @@ struct ContentView: View {
                     onShowOnMap: showFriendOnMap,
                     onViewProfile: presentMapFriendProfile,
                     friendCodeInput: $friendCodeInput
-                )
-            } profile: {
-                ProfilePanelView(
-                    displayName: $displayName,
-                    avatarID: $avatarID,
-                    profileColorHex: $profileColorHex,
-                    locationTracker: locationTracker,
-                    cityProgress: cityProgress,
-                    cityProgressUnavailableText: cityProgressUnavailableText,
-                    onProfileColorSelected: { selectedColorHex in
-                        friendSyncService.updateProfileColor(
-                            selectedColorHex,
-                            userInitiated: true
-                        )
-                    },
-                    onAccountFlowStateChanged: { isProfileAccountFlowActive = $0 }
                 )
             }
             #if DEBUG
@@ -289,14 +282,14 @@ struct ContentView: View {
     }
 
     private var areEventsPresented: Bool {
-        eventsExpanded && dockSelection == .explore && selectedMapDetail?.friendUserID == nil
+        eventsExpanded && dockSelection == .explore && selectedMapDetail?.profile == nil
     }
 
     private func toggleEvents() {
         guard !isProfileAccountFlowActive else { return }
         let shouldPresent = !areEventsPresented
         dockSelection = .explore
-        if selectedMapDetail?.friendUserID != nil { selectedMapDetail = nil }
+        if selectedMapDetail?.profile != nil { selectedMapDetail = nil }
         eventsExpanded = shouldPresent
     }
 
@@ -398,25 +391,58 @@ struct ContentView: View {
             outingPlanService.stopObserving()
             outingAttendanceService.stopObserving()
         }
-        .sheet(item: friendProfileSelection, onDismiss: friendProfileDidDismiss) { selection in
-            FriendProfileSheet(
-                userID: selection.userID,
-                service: friendSyncService,
-                onOpenDirections: {
-                    pendingFriendDirectionsUserID = selection.userID
-                    selectedMapDetail = nil
-                },
-                onPreparePresentation: { sheetTop in
-                    guard selectedMapDetail?.friendUserID == selection.userID,
-                          currentNavigationDestination(for: selection.userID) != nil else { return }
-                    friendCameraRequest = MapFriendCameraRequest(
-                        userID: selection.userID, sheetTopInWindow: sheetTop
+        .sheet(item: mapProfileSelection, onDismiss: mapProfileDidDismiss) { selection in
+            Group {
+                switch selection {
+                case .currentUser:
+                    OwnProfileSheet(
+                        displayName: displayName, avatarID: avatarID,
+                        profileColorHex: profileColorHex,
+                        locationTracker: locationTracker, cityProgress: cityProgress,
+                        isGhostModeEnabled: friendSyncService.isGhostModeEnabled,
+                        onPreparePresentation: { sheetTop in
+                            guard selectedMapDetail?.profile == selection,
+                                  shouldFocusOwnProfile else { return }
+                            friendCameraRequest = MapFriendCameraRequest(
+                                target: selection, sheetTopInWindow: sheetTop
+                            )
+                        }
+                    ) { summary in
+                        ProfilePanelView(
+                            displayName: $displayName,
+                            avatarID: $avatarID,
+                            profileColorHex: $profileColorHex,
+                            locationTracker: locationTracker,
+                            summary: summary,
+                            heatMapEnabled: $heatMapEnabled,
+                            onProfileColorSelected: { selectedColorHex in
+                                friendSyncService.updateProfileColor(
+                                    selectedColorHex, userInitiated: true
+                                )
+                            },
+                            onAccountFlowStateChanged: { isProfileAccountFlowActive = $0 }
+                        )
+                    }
+                case .friend(let userID):
+                    FriendProfileSheet(
+                        userID: userID,
+                        service: friendSyncService,
+                        onOpenDirections: {
+                            pendingFriendDirectionsUserID = userID
+                            selectedMapDetail = nil
+                        },
+                        onPreparePresentation: { sheetTop in
+                            guard selectedMapDetail?.profile == selection,
+                                  currentNavigationDestination(for: userID) != nil else { return }
+                            friendCameraRequest = MapFriendCameraRequest(
+                                target: selection, sheetTopInWindow: sheetTop
+                            )
+                        }
                     )
                 }
-            )
-            .onAppear {
-                presentedFriendProfileUserID = selection.userID
             }
+            .interactiveDismissDisabled(isProfileAccountFlowActive)
+            .onAppear { presentedProfile = selection }
             .id(selection.id)
         }
     }
@@ -433,7 +459,7 @@ struct ContentView: View {
         return MapDetailSplitView(
             isPresented: false,
             isEventsExpanded: $eventsExpanded,
-            areEventsObscured: selectedMapDetail?.friendUserID != nil
+            areEventsObscured: selectedMapDetail?.profile != nil
         ) {
             EmptyView()
         } events: {
@@ -483,21 +509,24 @@ struct ContentView: View {
                     centerOnFriendUserID: $centerOnFriendUserID,
                     centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
                     pendingOutingCoordinate: pendingOutingCoordinate,
-                    isEventCreationEnabled: !outingComposerVisible,
+                    isEventCreationEnabled: !outingComposerVisible && !isProfileAccountFlowActive,
                     selectedOutingPlanEventID: selectedOutingPlanEventID,
-                    selectedFriendProfileUserID: selectedMapDetail?.friendUserID,
+                    selectedMapProfile: selectedMapDetail?.profile,
                     friendCameraRequest: friendCameraRequest,
                     showsHeatMap: heatMapEnabled,
                     heatMapCellData: locationTracker.heatMapCellData,
                     heatMapRevision: locationTracker.heatMapRevision,
                     onJoinFriend: presentNavigationOptions,
+                    onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
                     onSelectFriend: presentMapFriendProfile,
                     onViewFriendProfile: presentMapFriendProfile,
                     onSelectOutingPlan: { eventID in
+                        guard !isProfileAccountFlowActive else { return }
                         selectedMapDetail = .outing(eventID)
                     },
                     onCreateEvent: { coordinate in
-                        guard CLLocationCoordinate2DIsValid(coordinate),
+                        guard !isProfileAccountFlowActive,
+                              CLLocationCoordinate2DIsValid(coordinate),
                               !outingComposerVisible else {
                             return
                         }
@@ -513,21 +542,14 @@ struct ContentView: View {
                 ownExplorationStatusOverlay
                     .modifier(MapContentSafeArea())
 
-                if selectedMapDetail?.friendUserID == nil {
-                    Button {
-                        filterSheetVisible = true
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease")
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.large)
-                    .accessibilityLabel("Filtres de la carte")
-                    .accessibilityHint("Choisir les informations visibles sur la carte")
-                    .padding(.top, 8)
-                    .padding(.trailing, 16)
-                    .modifier(MapContentSafeArea(edges: [.top, .trailing]))
+                MapImageButton(assetName: "TabIconProfile", label: "Mon profil") {
+                    presentOwnProfile(focusOnMap: false)
                 }
+                .accessibilityHint("Ouvrir mon profil et les réglages de la carte")
+                .accessibilityIdentifier("map-own-profile")
+                .padding(.top, 8)
+                .padding(.trailing, 16)
+                .modifier(MapContentSafeArea(edges: [.top, .trailing]))
             }
             .overlay(alignment: .bottomTrailing) {
                 Button {
@@ -543,13 +565,6 @@ struct ContentView: View {
                 .padding(.bottom, 20)
                 .modifier(MapContentSafeArea(edges: [.bottom, .horizontal]))
             }
-        }
-        .sheet(isPresented: $filterSheetVisible) {
-            MapFiltersSheet(
-                heatMapEnabled: $heatMapEnabled
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
         .sheet(
             isPresented: $outingComposerVisible,
@@ -685,7 +700,18 @@ struct ContentView: View {
         selectedOutingNavigationEventID = eventID
     }
 
+    private func presentOwnProfile(focusOnMap: Bool) {
+        guard !isProfileAccountFlowActive else { return }
+        // MapKit can echo a programmatic pin selection after the sheet opens.
+        guard selectedMapDetail != .ownProfile else { return }
+        shouldFocusOwnProfile = focusOnMap
+        if !focusOnMap { friendCameraRequest = nil }
+        dockSelection = .explore
+        selectedMapDetail = .ownProfile
+    }
+
     private func presentMapFriendProfile(_ userID: String) {
+        guard !isProfileAccountFlowActive else { return }
         guard acceptedFriendUserIDs.contains(userID) else { return }
         guard selectedMapDetail?.friendUserID != userID else { return }
         dockSelection = .explore
@@ -697,40 +723,43 @@ struct ContentView: View {
         locationPushService.requestRefresh(for: userID, currentLocation: location)
     }
 
-    private var friendProfileSelection: Binding<FriendSelection?> {
+    private var mapProfileSelection: Binding<MapProfileSelection?> {
         Binding(
-            get: { selectedMapDetail?.friendUserID.map { FriendSelection(userID: $0) } },
+            get: { selectedMapDetail?.profile },
             set: { selection in
                 if let selection {
-                    selectedMapDetail = .friend(selection.userID)
-                } else if selectedMapDetail?.friendUserID != nil {
-                    // A map event may already have replaced the friend selection.
+                    selectedMapDetail = selection.detailSelection
+                } else if selectedMapDetail?.profile != nil {
+                    // An event may already have replaced the profile selection.
                     selectedMapDetail = nil
                 }
             }
         )
     }
 
-    private func recenterAfterFriendProfile(userID: String) {
+    private func recenterAfterProfile(_ profile: MapProfileSelection) {
         guard selectedMapDetail == nil,
               dockSelection == .explore,
-              !outingComposerVisible,
-              !filterSheetVisible,
-              currentNavigationDestination(for: userID) != nil else { return }
-        friendCameraRequest = MapFriendCameraRequest(userID: userID)
+              !outingComposerVisible else { return }
+        switch profile {
+        case .currentUser:
+            guard shouldFocusOwnProfile, locationTracker.lastLocation != nil else { return }
+        case .friend(let userID):
+            guard currentNavigationDestination(for: userID) != nil else { return }
+        }
+        friendCameraRequest = MapFriendCameraRequest(target: profile)
     }
 
-    private func friendProfileDidDismiss() {
-        // Switching sheet items must not recenter over the newly opened friend.
-        guard selectedMapDetail?.friendUserID == nil else { return }
-        let dismissedUserID = presentedFriendProfileUserID
-        presentedFriendProfileUserID = nil
-        if let dismissedUserID {
-            recenterAfterFriendProfile(userID: dismissedUserID)
+    private func mapProfileDidDismiss() {
+        // Switching sheet items must not recenter over the newly opened profile.
+        guard selectedMapDetail?.profile == nil else { return }
+        let dismissedProfile = presentedProfile
+        presentedProfile = nil
+        if let dismissedProfile {
+            recenterAfterProfile(dismissedProfile)
         }
         guard let userID = pendingFriendDirectionsUserID else { return }
         pendingFriendDirectionsUserID = nil
-        // Revalidate live data only after the sheet has finished dismissing.
         presentNavigationOptions(userID)
     }
 
@@ -1309,6 +1338,7 @@ struct ContentView: View {
             return
         }
 
+        if selectedMapDetail?.profile != nil { selectedMapDetail = nil }
         dockSelection = .friends
         notificationService.consume(route)
     }
@@ -1352,19 +1382,6 @@ struct ContentView: View {
             cityProgress = refreshedProgress
         }
     }
-
-    private var cityProgressUnavailableText: String {
-        guard locationTracker.lastLocation != nil else {
-            return "Active l’exploration pour révéler la carte."
-        }
-
-        guard !cityBoundary.cityCellIDs.isEmpty else {
-            return "Préparation de la ville…"
-        }
-
-        return "Cette ville n’est pas encore disponible."
-    }
-
     #if DEBUG
     private func toggleDebugDrawerVisibility() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -1424,36 +1441,6 @@ struct GhostModeStatusView: View {
                 service.retryGhostModeChange()
             }
             .disabled(!service.canChangeGhostMode)
-        }
-    }
-}
-
-// MARK: - Map filters
-
-private struct MapFiltersSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var heatMapEnabled: Bool
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
-                } header: {
-                    Text("Exploration")
-                } footer: {
-                    Text("Affiche les zones où tu as passé le plus de temps.")
-                }
-            }
-            .navigationTitle("Affichage")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Terminé") {
-                        dismiss()
-                    }
-                }
-            }
         }
     }
 }

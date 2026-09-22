@@ -1,6 +1,5 @@
 import AuthenticationServices
 import CoreLocation
-import SwiftData
 import SwiftUI
 import UIKit
 
@@ -17,8 +16,8 @@ struct ProfilePanelView: View {
     @ObservedObject private var locationPushService = LocationPushService.shared
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
-    let cityProgress: CityProgress?
-    let cityProgressUnavailableText: String
+    let summary: AnyView
+    @Binding var heatMapEnabled: Bool
     let onProfileColorSelected: (String) -> Void
     var onAccountFlowStateChanged: (Bool) -> Void = { _ in }
 
@@ -32,29 +31,18 @@ struct ProfilePanelView: View {
         NavigationStack {
             Form {
                 Section {
-                    HStack(spacing: 16) {
-                        ProfileAvatarView(avatarID: avatarID, size: 72)
-                            .overlay {
-                                Circle()
-                                    .stroke(
-                                        ProfileColor.color(hex: profileColorHex),
-                                        lineWidth: 4
-                                    )
-                            }
+                    summary
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(displayName.isEmpty ? "Explorer" : displayName)
-                                .font(.title2.bold())
-
-                            Label(
-                                locationTracker.isTracking ? "Exploration active" : "Exploration en pause",
-                                systemImage: locationTracker.isTracking ? "location.fill" : "pause.circle"
-                            )
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 8)
+                Section {
+                    Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
+                        .accessibilityIdentifier("profile-heat-map")
+                } header: {
+                    Text("Affichage de la carte")
+                } footer: {
+                    Text("Affiche les zones où tu as passé le plus de temps.")
                 }
 
                 Section("Avatar") {
@@ -169,25 +157,10 @@ struct ProfilePanelView: View {
                     )
                 }
 
-                Section("Progression") {
-                    LabeledContent(
-                        "Ville",
-                        value: cityProgress?.cityName ?? cityProgressUnavailableText
-                    )
-
-                    LabeledContent(
-                        "Progression",
-                        value: cityProgress?.percentageText ?? "—"
-                    )
-
-                    LabeledContent("Zones explorées") {
-                        Text(exploredCellsText)
-                            .monospacedDigit()
-                    }
-                }
-
                 accountSection
             }
+            .contentMargins(.top, 0, for: .scrollContent)
+            .accessibilityIdentifier("own-profile-scroll")
             .toolbar(.hidden, for: .navigationBar)
             .scrollDismissesKeyboard(.interactively)
         }
@@ -418,11 +391,6 @@ struct ProfilePanelView: View {
         notificationService.authorizationAllowsNotifications
             ? "bell.badge"
             : "bell.slash"
-    }
-
-    private var exploredCellsText: String {
-        guard let cityProgress else { return "—" }
-        return "\(cityProgress.exploredCells) / \(cityProgress.totalCells)"
     }
 
     private func handleAccountDeletionAuthorization(

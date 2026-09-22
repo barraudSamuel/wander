@@ -17,16 +17,17 @@ final class MotionDockUITests: XCTestCase {
     func testUsesNativeTabBarAndSupportsPressThenSlide() {
         let tabBar = app.tabBars["native-map-tab-bar"]
         XCTAssertTrue(tabBar.waitForExistence(timeout: 3), "La navigation doit utiliser la barre système.")
-        let tabFrames = ["explore", "friends", "profile"].map { command($0).frame }
+        let tabFrames = ["explore", "friends"].map { command($0).frame }
         command("friends").doubleTap()
         XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
         XCTAssertTrue(command("explore").isSelected)
         assertTabFrames(tabFrames)
-        let start = command("friends").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        let end = command("profile").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let start = command("explore").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = command("friends").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         start.press(forDuration: 0.6, thenDragTo: end)
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
-        XCTAssertTrue(command("profile").isSelected)
+        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        XCTAssertTrue(command("friends").isSelected)
+        XCTAssertFalse(command("profile").exists)
         assertPanelAboveTabBar()
         attachScreenshot("Barre native après appui maintenu et glissement")
     }
@@ -35,20 +36,20 @@ final class MotionDockUITests: XCTestCase {
         let tabBar = app.tabBars["native-map-tab-bar"]
         let events = command("events")
         XCTAssertTrue(events.waitForExistence(timeout: 3))
-        XCTAssertEqual(tabBar.buttons.count, 3)
+        XCTAssertEqual(tabBar.buttons.count, 2)
         XCTAssertFalse(tabBar.buttons["motion-dock-events"].exists)
         XCTAssertGreaterThanOrEqual(events.frame.minX, tabBar.frame.maxX)
         XCTAssertGreaterThanOrEqual(events.frame.width, 44)
         XCTAssertGreaterThanOrEqual(events.frame.height, 44)
         XCTAssertLessThanOrEqual(events.frame.maxX, app.windows.firstMatch.frame.maxX)
-        XCTAssertEqual(events.frame.midY, command("profile").frame.midY, accuracy: 2,
+        XCTAssertEqual(events.frame.midY, command("friends").frame.midY, accuracy: 2,
                        "Le calendrier doit être centré verticalement sur les onglets.")
         XCTAssertTrue(events.isHittable)
         XCTAssertFalse(events.isSelected)
         XCTAssertFalse(eventList.isHittable)
         let nativeMapSize = app.maps.firstMatch.frame.size
         let fullMapFrame = mapViewport.frame
-        let tabFrames = ["explore", "friends", "profile"].map { command($0).frame }
+        let tabFrames = ["explore", "friends"].map { command($0).frame }
         let buttonFrame = events.frame
 
         events.tap()
@@ -76,7 +77,7 @@ final class MotionDockUITests: XCTestCase {
 
     func testEventsButtonReturnsFromPanelsAndOpensAfterFriendSheetCloses() {
         let buttonFrame = command("events").frame
-        for (panel, field) in [("profile", "Pseudo"), ("friends", "Code ami"), ("profile", "Pseudo")] {
+        for (panel, field) in [("friends", "Code ami")] {
             command(panel).tap()
             XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 3))
             XCTAssertFalse(command("events").isSelected)
@@ -121,27 +122,66 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
     }
 
-    func testSwitchPanelsAndCloseFromActiveCommand() {
+    func testImageButtonEdgesOpenTheirSheets() {
+        let events = command("events")
+        XCTAssertEqual(events.frame.width, 44, accuracy: 1)
+        XCTAssertEqual(events.frame.height, 44, accuracy: 1)
+        XCTAssertEqual(profileButton.frame.width, 44, accuracy: 1)
+        XCTAssertEqual(profileButton.frame.height, 44, accuracy: 1)
+
+        // Touch near either edge of each image, which fills its 44 pt control.
+        for edge in [0.08, 0.92] {
+            events.coordinate(withNormalizedOffset: CGVector(dx: edge, dy: 0.5)).tap()
+            XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+            XCTAssertTrue(events.isSelected)
+            events.coordinate(withNormalizedOffset: CGVector(dx: edge, dy: 0.5)).tap()
+            XCTAssertTrue(eventList.waitForNonExistence(timeout: 3))
+            XCTAssertFalse(events.isSelected)
+
+            profileButton.coordinate(withNormalizedOffset: CGVector(dx: edge, dy: 0.5)).tap()
+            XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+            closeOwnSheet()
+        }
+    }
+
+    func testFriendsPanelClosesFromActiveCommandAndProfileUsesSheet() {
         let originalMap = app.maps.firstMatch.frame
-        let tabFrames = ["explore", "friends", "profile"].map { command($0).frame }
+        let tabFrames = ["explore", "friends"].map { command($0).frame }
         command("friends").tap()
         XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.staticTexts["motion-dock-heading"].label, "Amis")
-        XCTAssertFalse(app.navigationBars.firstMatch.isHittable)
         assertTabFrames(tabFrames)
         assertPanelAboveTabBar()
-        attachScreenshot("Panneau Amis")
-        command("profile").tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
-        XCTAssertEqual(app.staticTexts["motion-dock-heading"].label, "Profil")
-        XCTAssertFalse(app.navigationBars.firstMatch.isHittable)
-        assertTabFrames(tabFrames)
-        assertPanelAboveTabBar()
-        attachScreenshot("Panneau Profil")
-        XCTAssertFalse(app.textFields["Code ami"].exists)
-        command("profile").tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForNonExistence(timeout: 3))
+        command("friends").tap()
+        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(command("explore").isSelected)
+        XCTAssertFalse(command("profile").exists)
+        XCTAssertFalse(app.buttons["Filtres de la carte"].exists)
+        let group = app.buttons["Groupe, 2 sorties prévues"]
+        XCTAssertTrue(group.waitForExistence(timeout: 5))
+        let panStart = app.maps.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.6))
+        panStart.press(
+            forDuration: 0.05,
+            thenDragTo: panStart.withOffset(CGVector(dx: 70, dy: 0)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.3
+        )
+        let groupFrame = group.frame
+        let profileFrame = profileButton.frame
+        profileButton.tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        XCTAssertTrue(profileButton.exists)
+        XCTAssertTrue(profileButton.isHittable)
+        XCTAssertEqual(profileButton.frame, profileFrame)
+        XCTAssertTrue(ownSheet.staticTexts["Moi"].exists)
+        XCTAssertFalse(app.otherElements["motion-dock-panel"].exists)
+        assertMapMarkerRemains(group, at: groupFrame)
+        closeOwnSheet()
+        assertMapMarkerRemains(group, at: groupFrame)
+        XCTAssertTrue(profileButton.isHittable)
+        XCTAssertEqual(profileButton.frame, profileFrame)
         XCTAssertEqual(app.maps.firstMatch.frame, originalMap)
+        assertTabFrames(tabFrames)
     }
 
     func testOutsideTapOnlyClosesPanelAndPreservesCamera() {
@@ -194,10 +234,12 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
         XCTAssertTrue(command("events").isHittable)
         XCTAssertLessThanOrEqual(command("events").frame.maxY, app.keyboards.firstMatch.frame.minY)
-        XCTAssertEqual(command("events").frame.midY, command("profile").frame.midY, accuracy: 2)
-        XCTAssertTrue(command("profile").isHittable)
-        command("profile").tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
+        XCTAssertEqual(command("events").frame.midY, command("friends").frame.midY, accuracy: 2)
+        command("explore").tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        profileButton.tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        closeOwnSheet()
         command("friends").tap()
         XCTAssertTrue(code.waitForExistence(timeout: 3))
         XCTAssertEqual(code.value as? String, "WANDER")
@@ -215,49 +257,109 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(eventList.isHittable)
     }
 
-    func testLongContentScrollsAndConfirmationKeepsProfile() {
-        command("profile").tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
-        app.buttons["Confirmation de test"].tap()
+    func testProfileSettingsPersistBetweenButtonAndAvatarAndConfirmationStaysInSheet() {
+        profileButton.tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        let compactTop = ownSheet.frame.minY
+        ownSheet.swipeUp()
+        let expanded = NSPredicate { _, _ in self.ownSheet.frame.minY < compactTop - 50 }
+        expectation(for: expanded, evaluatedWith: ownSheet)
+        waitForExpectations(timeout: 3)
+        let heatMap = ownSheet.switches["profile-heat-map"]
+        revealInOwnSheet(heatMap)
+        XCTAssertEqual(heatMap.value as? String, "0")
+        heatMap.tap()
+        XCTAssertEqual(heatMap.value as? String, "1")
+        let name = ownSheet.textFields["Pseudo"]
+        revealInOwnSheet(name)
+        name.tap()
+        name.typeText(" test")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        name.typeText("\n")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        let confirmation = ownSheet.buttons["Confirmation de test"]
+        revealInOwnSheet(confirmation)
+        confirmation.tap()
         XCTAssertTrue(app.alerts["Action de test"].waitForExistence(timeout: 3))
         app.alerts.buttons["Annuler"].tap()
-        XCTAssertTrue(command("profile").isSelected)
-        for _ in 0..<6 {
-            if app.staticTexts["Réglage 30"].isHittable { break }
-            app.collectionViews.firstMatch.swipeUp()
-        }
-        XCTAssertTrue(app.staticTexts["Réglage 30"].isHittable)
-        XCTAssertTrue(command("friends").isHittable)
-        attachScreenshot("Profil défilant")
+        XCTAssertTrue(ownSheet.exists)
+        attachScreenshot("Réglages du profil dans la feuille unique")
+        closeOwnSheet()
+
+        let user = app.buttons["Moi test, Vous"]
+        XCTAssertTrue(user.waitForExistence(timeout: 3))
+        user.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        XCTAssertTrue(ownSheet.staticTexts["Moi test"].exists)
+        revealInOwnSheet(heatMap)
+        XCTAssertEqual(heatMap.value as? String, "1")
+        revealInOwnSheet(name)
+        XCTAssertEqual(name.value as? String, "Moi test")
     }
 
     func testLandscapeKeepsCommandsReachable() {
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(command("friends").waitForExistence(timeout: 10))
-        command("friends").tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
-        attachScreenshot("Amis")
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
         let landscapeReady = NSPredicate { _, _ in
             let window = self.app.windows.firstMatch.frame
-            let button = self.command("profile")
+            let button = self.command("friends")
             return window.width > window.height && button.isHittable
                 && button.frame.maxY <= window.maxY
         }
         expectation(for: landscapeReady, evaluatedWith: app)
         waitForExpectations(timeout: 5)
-        XCTAssertTrue(command("profile").isHittable)
-        command("profile").tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForExistence(timeout: 3))
-        XCTAssertTrue(command("explore").isHittable)
+        command("friends").tap()
+        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
         XCTAssertTrue(command("events").isHittable)
         XCTAssertLessThanOrEqual(command("events").frame.maxX, app.windows.firstMatch.frame.maxX)
-        XCTAssertEqual(command("events").frame.midY, command("profile").frame.midY, accuracy: 2)
-        attachScreenshot("Profil paysage")
+        XCTAssertEqual(command("events").frame.midY, command("friends").frame.midY, accuracy: 2)
         command("explore").tap()
-        XCTAssertTrue(app.textFields["Pseudo"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
+        XCTAssertTrue(profileButton.isHittable)
+        profileButton.tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        let name = ownSheet.textFields["Pseudo"]
+        revealInOwnSheet(name)
+        XCTAssertTrue(name.isHittable)
+        attachScreenshot("Profil en feuille paysage")
+    }
+
+    private func assertMapMarkerRemains(_ marker: XCUIElement, at frame: CGRect) {
+        let moved = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                !marker.exists || abs(marker.frame.midX - frame.midX) > 2
+                    || abs(marker.frame.midY - frame.midY) > 2
+            },
+            object: nil
+        )
+        moved.isInverted = true
+        // Observe long enough to catch the deferred sheet camera animation.
+        wait(for: [moved], timeout: 1)
+    }
+
+    private var profileButton: XCUIElement { app.buttons["map-own-profile"] }
+
+    private var ownSheet: XCUIElement {
+        app.descendants(matching: .any)["own-profile-scroll"].firstMatch
+    }
+
+    private func revealInOwnSheet(_ element: XCUIElement) {
+        for _ in 0..<10 {
+            if element.isHittable { return }
+            ownSheet.swipeUp()
+        }
+        XCTAssertTrue(element.isHittable)
+    }
+
+    private func closeOwnSheet() {
+        for _ in 0..<8 {
+            if ownSheet.staticTexts["Exploration"].isHittable { break }
+            ownSheet.swipeDown()
+        }
+        let start = ownSheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
+        XCTAssertTrue(ownSheet.waitForNonExistence(timeout: 3))
     }
 
     private var eventList: XCUIElement {
@@ -277,7 +379,7 @@ final class MotionDockUITests: XCTestCase {
     }
 
     private func assertTabFrames(_ expected: [CGRect]) {
-        for (name, frame) in zip(["explore", "friends", "profile"], expected) {
+        for (name, frame) in zip(["explore", "friends"], expected) {
             XCTAssertEqual(command(name).frame.midX, frame.midX, accuracy: 1)
             XCTAssertEqual(command(name).frame.midY, frame.midY, accuracy: 1)
         }

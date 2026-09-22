@@ -89,13 +89,14 @@ struct FriendProfileContentView: View {
     let onPreparePresentation: (CGFloat) -> Void
 
     var body: some View {
-        FriendProfileNativeContent(
+        MapProfileNativeContent(
             content: FriendProfileBody(
                 displayName: displayName, avatarID: avatarID,
                 profileColorHex: profileColorHex, isGhostModeEnabled: isGhostModeEnabled,
                 location: location, isLocationFresh: isLocationFresh,
                 onOpenDirections: onOpenDirections
             ),
+            scrollIdentifier: "friend-profile-scroll",
             onPreparePresentation: onPreparePresentation
         )
     }
@@ -103,8 +104,6 @@ struct FriendProfileContentView: View {
 
 /// The same content is used for preflight sizing and the visible scroll view.
 struct FriendProfileBody: View {
-    @ScaledMetric(relativeTo: .title3) private var nameFontSize: CGFloat = 17
-
     let displayName: String
     let avatarID: String
     let profileColorHex: String
@@ -148,46 +147,9 @@ struct FriendProfileBody: View {
 
     private var identity: some View {
         VStack(spacing: 12) {
-            VStack(spacing: 0) {
-                FriendAvatarBadge(
-                    avatarID: avatarID,
-                    profileColorHex: profileColorHex,
-                    size: 128
-                )
-                .accessibilityHidden(true)
-                .frame(maxWidth: .infinity)
-                .frame(height: 176)
-
-                Text(displayName)
-                    .font(.system(size: nameFontSize, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 36)
-                    .padding(.vertical, 10)
-                    .anchorPreference(key: ProfileNameBoundsKey.self, value: .bounds) { $0 }
-                    .padding(.horizontal, 16)
-                    .accessibilityAddTraits(.isHeader)
-            }
-            .backgroundPreferenceValue(ProfileNameBoundsKey.self) { nameBounds in
-                GeometryReader { geometry in
-                    Image("ProfileCardBackground")
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .blur(radius: 3)
-                        .mask {
-                            if let nameBounds {
-                                ProfileCardBackgroundShape(nameBounds: geometry[nameBounds])
-                                    .fill(.white)
-                            } else {
-                                Rectangle().fill(.white)
-                            }
-                        }
-                        .accessibilityHidden(true)
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            MapProfileIdentityView(
+                displayName: displayName, avatarID: avatarID, profileColorHex: profileColorHex
+            )
 
             Label(statusTitle, systemImage: statusSymbol)
                 .font(.subheadline)
@@ -258,6 +220,57 @@ struct FriendProfileBody: View {
     }
 }
 
+/// The existing avatar presentation shared by personal and friend map profiles.
+struct MapProfileIdentityView: View {
+    @ScaledMetric(relativeTo: .title3) private var nameFontSize = 17
+    let displayName: String
+    let avatarID: String
+    let profileColorHex: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            FriendAvatarBadge(
+                avatarID: avatarID,
+                profileColorHex: profileColorHex,
+                size: 128
+            )
+            .accessibilityHidden(true)
+            .frame(maxWidth: .infinity)
+            .frame(height: 176)
+
+            Text(displayName)
+                .font(.system(size: nameFontSize, weight: .bold))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 36)
+                .padding(.vertical, 10)
+                .anchorPreference(key: ProfileNameBoundsKey.self, value: .bounds) { $0 }
+                .padding(.horizontal, 16)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .backgroundPreferenceValue(ProfileNameBoundsKey.self) { nameBounds in
+            GeometryReader { geometry in
+                Image("ProfileCardBackground")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .blur(radius: 3)
+                    .mask {
+                        if let nameBounds {
+                            ProfileCardBackgroundShape(nameBounds: geometry[nameBounds])
+                                .fill(.white)
+                        } else {
+                            Rectangle().fill(.white)
+                        }
+                    }
+                    .accessibilityHidden(true)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
 private struct ProfileNameBoundsKey: PreferenceKey {
     static var defaultValue: Anchor<CGRect>? { nil }
 
@@ -305,8 +318,11 @@ private struct ProfileCardBackgroundShape: Shape {
     }
 }
 
-private struct FriendProfileNativeContent: UIViewControllerRepresentable {
-    let content: FriendProfileBody
+struct MapProfileNativeContent<Content: View>: UIViewControllerRepresentable {
+    let content: Content
+    let scrollIdentifier: String
+    var compactContent: AnyView? = nil
+    var wrapsInScrollView = true
     let onPreparePresentation: (CGFloat) -> Void
 
     func makeUIViewController(context: Context) -> FriendProfilePresentationController {
@@ -317,14 +333,17 @@ private struct FriendProfileNativeContent: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: FriendProfilePresentationController, context: Context) {
         let environment = context.environment
-        let body = AnyView(content
+        let body = AnyView((compactContent ?? AnyView(content))
             .environment(\.locale, environment.locale)
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
             .environment(\.layoutDirection, environment.layoutDirection)
             .environment(\.colorScheme, environment.colorScheme))
-        let scroll = AnyView(ScrollView { content }
-            .scrollBounceBehavior(.basedOnSize)
-            .accessibilityIdentifier("friend-profile-scroll")
+        let visibleContent = wrapsInScrollView
+            ? AnyView(ScrollView { content }
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier(scrollIdentifier))
+            : AnyView(content)
+        let scroll = AnyView(visibleContent
             .environment(\.locale, environment.locale)
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
             .environment(\.layoutDirection, environment.layoutDirection)
