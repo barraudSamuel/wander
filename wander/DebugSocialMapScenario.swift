@@ -100,7 +100,6 @@ struct DebugSocialMapScenarioView: View {
 }
 
 private struct DebugSocialMapScene: View {
-    @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     private static let coordinate = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
     private static let ownerID = "scenario-owner"
     private static let arguments = Set(ProcessInfo.processInfo.arguments)
@@ -450,9 +449,6 @@ private struct DebugSocialMapScene: View {
                 LabeledContent("Alex", value: "Demande envoyée")
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
         .accessibilityIdentifier("friends-expanded-list")
         .alert("Retirer cet ami ?", isPresented: Binding(
             get: { friendPendingRemoval != nil && bottomList == .friends && selectedDetail?.profile == nil },

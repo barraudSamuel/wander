@@ -224,6 +224,9 @@ final class MotionDockUITests: XCTestCase {
         friendsList.buttons["Accepter"].tap()
         XCTAssertFalse(friendsList.buttons["Accepter"].exists)
         XCTAssertTrue(friendsList.staticTexts["Camille"].exists)
+        XCTAssertEqual(friendsList.staticTexts.matching(identifier: "Mes amis").count, 1)
+        XCTAssertFalse(app.staticTexts["friends-panel-title"].exists)
+        attachScreenshot("Mes amis, titre natif sans bandeau supplémentaire")
         let start = friendsHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -80)))
         let friendsHeight = friendsList.frame.height
@@ -234,6 +237,11 @@ final class MotionDockUITests: XCTestCase {
         }
         XCTAssertTrue(row.isHittable)
         let rowY = row.frame.minY
+        let friendsHeader = friendsList.staticTexts["Mes amis"]
+        XCTAssertTrue(friendsHeader.isHittable)
+        XCTAssertEqual(friendsHeader.frame.minY, friendsList.frame.minY, accuracy: 2,
+                       "L’en-tête Mes amis s’accroche en haut pendant le défilement.")
+        attachScreenshot("Mes amis, en-tête natif pendant le défilement")
 
         command("events").tap()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
@@ -268,6 +276,10 @@ final class MotionDockUITests: XCTestCase {
     func testBottomOfFriendsListClearsNativeDock() {
         command("friends").tap()
         assertFriendsListIsHittable(true)
+        XCTAssertFalse(app.staticTexts["friends-panel-title"].exists)
+        XCTAssertEqual(friendsList.staticTexts.matching(identifier: "Mes amis").count, 1)
+        XCTAssertTrue(friendsList.staticTexts["Demandes reçues"].isHittable)
+        XCTAssertTrue(friendsList.buttons["Accepter"].isHittable)
         let tabBar = app.tabBars["native-map-tab-bar"]
         XCTAssertEqual(friendsList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
         attachScreenshot("Les amis défilent derrière le dock")
@@ -280,6 +292,9 @@ final class MotionDockUITests: XCTestCase {
 
         XCTAssertTrue(lastFriend.isHittable)
         XCTAssertLessThanOrEqual(lastFriend.frame.maxY, tabBar.frame.minY)
+        XCTAssertTrue(friendsList.staticTexts["En attente"].isHittable)
+        XCTAssertFalse(friendsList.buttons["Accepter"].isHittable)
+        XCTAssertTrue(lastFriend.staticTexts["Alex, Demande envoyée"].isHittable)
         attachScreenshot("Dernier ami au-dessus du dock")
     }
 
@@ -290,6 +305,10 @@ final class MotionDockUITests: XCTestCase {
         command("events").tap()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertTrue(eventList.isHittable)
+        let title = eventList.staticTexts["Événements"]
+        XCTAssertTrue(title.isHittable)
+        XCTAssertEqual(eventList.staticTexts.matching(identifier: "Événements").count, 1)
+        XCTAssertFalse(app.staticTexts["events-panel-title"].exists)
         XCTAssertTrue(command("events").isSelected)
         XCTAssertTrue(command("explore").isSelected)
         XCTAssertFalse(command("friends").isSelected)
@@ -308,6 +327,9 @@ final class MotionDockUITests: XCTestCase {
 
         XCTAssertTrue(lastEvent.isHittable)
         XCTAssertLessThanOrEqual(lastEvent.frame.maxY, tabBar.frame.minY)
+        XCTAssertTrue(title.isHittable)
+        XCTAssertEqual(title.frame.minY, eventList.frame.minY, accuracy: 2,
+                       "L’en-tête Événements s’accroche en haut pendant le défilement.")
         attachScreenshot("Dernier événement au-dessus du dock")
     }
 

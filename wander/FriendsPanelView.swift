@@ -3,7 +3,6 @@ import SwiftUI
 // MARK: - Friends
 
 struct FriendsPanelView: View {
-    @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     @ObservedObject var service: FriendSyncService
     let friends: [FriendMapSummary]
     let onShowOnMap: (FriendMapSummary) -> Void
@@ -15,106 +14,12 @@ struct FriendsPanelView: View {
     @State private var friendPendingRemoval: FriendMapSummary?
 
     var body: some View {
-        NavigationStack {
-            List {
-                if !service.incomingRequests.isEmpty {
-                    Section("Demandes reçues") {
-                        ForEach(service.incomingRequests) { request in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(spacing: 10) {
-                                    ProfileAvatarView(
-                                        avatarID: request.avatarID,
-                                        size: 32
-                                    )
-                                    .accessibilityHidden(true)
-
-                                    Text(request.displayName)
-                                }
-
-                                if processingRequestID == request.id {
-                                    HStack(spacing: 10) {
-                                        ProgressView()
-                                        Text("Mise à jour…")
-                                            .foregroundStyle(.secondary)
-                                    }
-                                } else {
-                                    HStack {
-                                        Button("Accepter") {
-                                            process(request, accepting: true)
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .disabled(service.isProcessingFriendAction)
-
-                                        Button("Refuser", role: .destructive) {
-                                            process(request, accepting: false)
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(service.isProcessingFriendAction)
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 3)
-                        }
-                    }
-                }
-
-                Section("Mes amis") {
-                    if friends.isEmpty {
-                        Text("Aucun ami pour le moment.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(friends) { friend in
-                            HStack {
-                                if friend.canShowOnMap {
-                                    Button {
-                                        onShowOnMap(friend)
-                                    } label: {
-                                        FriendRow(friend: friend)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel(
-                                        "Afficher \(friend.displayName) sur la carte"
-                                    )
-                                } else {
-                                    Button {
-                                        onViewProfile(friend.userID)
-                                    } label: {
-                                        FriendRow(friend: friend)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityHint("Ouvrir le profil de cet ami")
-                                }
-
-                                if processingFriendUserID == friend.userID {
-                                    ProgressView()
-                                }
-                            }
-                            .swipeActions(
-                                edge: .trailing,
-                                allowsFullSwipe: false
-                            ) {
-                                Button(role: .destructive) {
-                                    friendPendingRemoval = friend
-                                } label: {
-                                    Label(
-                                        "Retirer",
-                                        systemImage: "person.badge.minus"
-                                    )
-                                }
-                                .disabled(service.isProcessingFriendAction)
-                            }
-                        }
-                    }
-                }
-
-                if !service.outgoingRequests.isEmpty {
-                    Section("En attente") {
-                        ForEach(service.outgoingRequests) { request in
-                            HStack {
+        List {
+            if !service.incomingRequests.isEmpty {
+                Section("Demandes reçues") {
+                    ForEach(service.incomingRequests) { request in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 10) {
                                 ProfileAvatarView(
                                     avatarID: request.avatarID,
                                     size: 32
@@ -122,49 +27,136 @@ struct FriendsPanelView: View {
                                 .accessibilityHidden(true)
 
                                 Text(request.displayName)
-                                Spacer()
-                                Text("Demande envoyée")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                             }
+
+                            if processingRequestID == request.id {
+                                HStack(spacing: 10) {
+                                    ProgressView()
+                                    Text("Mise à jour…")
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                HStack {
+                                    Button("Accepter") {
+                                        process(request, accepting: true)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(service.isProcessingFriendAction)
+
+                                    Button("Refuser", role: .destructive) {
+                                        process(request, accepting: false)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(service.isProcessingFriendAction)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+            }
+
+            Section("Mes amis") {
+                if friends.isEmpty {
+                    Text("Aucun ami pour le moment.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(friends) { friend in
+                        HStack {
+                            if friend.canShowOnMap {
+                                Button {
+                                    onShowOnMap(friend)
+                                } label: {
+                                    FriendRow(friend: friend)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(
+                                    "Afficher \(friend.displayName) sur la carte"
+                                )
+                            } else {
+                                Button {
+                                    onViewProfile(friend.userID)
+                                } label: {
+                                    FriendRow(friend: friend)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityHint("Ouvrir le profil de cet ami")
+                            }
+
+                            if processingFriendUserID == friend.userID {
+                                ProgressView()
+                            }
+                        }
+                        .swipeActions(
+                            edge: .trailing,
+                            allowsFullSwipe: false
+                        ) {
+                            Button(role: .destructive) {
+                                friendPendingRemoval = friend
+                            } label: {
+                                Label(
+                                    "Retirer",
+                                    systemImage: "person.badge.minus"
+                                )
+                            }
+                            .disabled(service.isProcessingFriendAction)
                         }
                     }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
-            .accessibilityIdentifier("friends-expanded-list")
-            .toolbar(.hidden, for: .navigationBar)
-            .scrollDismissesKeyboard(.interactively)
-            .alert(
-                removalAlertTitle,
-                isPresented: removalAlertIsPresented,
-                presenting: friendPendingRemoval
-            ) { friend in
-                Button("Retirer", role: .destructive) {
-                    remove(friend)
+
+            if !service.outgoingRequests.isEmpty {
+                Section("En attente") {
+                    ForEach(service.outgoingRequests) { request in
+                        HStack {
+                            ProfileAvatarView(
+                                avatarID: request.avatarID,
+                                size: 32
+                            )
+                            .accessibilityHidden(true)
+
+                            Text(request.displayName)
+                            Spacer()
+                            Text("Demande envoyée")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                Button("Annuler", role: .cancel) {}
-            } message: { _ in
-                Text(
-                    "Vous disparaîtrez tous les deux de la liste d’amis de l’autre. "
-                        + "Il faudra envoyer une nouvelle demande pour redevenir amis."
-                )
             }
-            .alert(
-                "Impossible de terminer l’action",
-                isPresented: errorIsPresented
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(service.errorMessage ?? "Réessaie dans quelques instants.")
+        }
+        .accessibilityIdentifier("friends-expanded-list")
+        .alert(
+            removalAlertTitle,
+            isPresented: removalAlertIsPresented,
+            presenting: friendPendingRemoval
+        ) { friend in
+            Button("Retirer", role: .destructive) {
+                remove(friend)
             }
-            .onChange(of: service.isProcessingFriendAction) { _, isProcessing in
-                if !isProcessing {
-                    processingRequestID = nil
-                    processingFriendUserID = nil
-                }
+            Button("Annuler", role: .cancel) {}
+        } message: { _ in
+            Text(
+                "Vous disparaîtrez tous les deux de la liste d’amis de l’autre. "
+                    + "Il faudra envoyer une nouvelle demande pour redevenir amis."
+            )
+        }
+        .alert(
+            "Impossible de terminer l’action",
+            isPresented: errorIsPresented
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(service.errorMessage ?? "Réessaie dans quelques instants.")
+        }
+        .onChange(of: service.isProcessingFriendAction) { _, isProcessing in
+            if !isProcessing {
+                processingRequestID = nil
+                processingFriendUserID = nil
             }
         }
     }

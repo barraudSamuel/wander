@@ -91,7 +91,6 @@ enum MapEventListPresentation {
 
 /// The list stays mounted while hidden so reopening preserves its scroll position.
 struct MapEventsPanelView: View {
-    @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     @ScaledMetric(relativeTo: .caption) private var avatarSize: CGFloat = 18
     @State private var visibleEventIDs: Set<String> = []
 
@@ -126,21 +125,20 @@ struct MapEventsPanelView: View {
 
     private func detailedList(_ outings: [MapOutingPlan], now: Date) -> some View {
         List {
-            statusContent
-            ForEach(outings, id: \.plan.id) { outing in
-                eventButton(outing, now: now)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .listRowBackground(selectedEventID == outing.plan.id ? Color.accentColor.opacity(0.12) : .clear)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        eventActions(for: outing)
-                    }
-                    .onAppear { visibleEventIDs.insert(outing.plan.id) }
-                    .onDisappear { visibleEventIDs.remove(outing.plan.id) }
+            Section("Événements") {
+                statusContent
+                ForEach(outings, id: \.plan.id) { outing in
+                    eventButton(outing, now: now)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowBackground(selectedEventID == outing.plan.id ? Color.accentColor.opacity(0.12) : .clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            eventActions(for: outing)
+                        }
+                        .onAppear { visibleEventIDs.insert(outing.plan.id) }
+                        .onDisappear { visibleEventIDs.remove(outing.plan.id) }
+                }
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
         .accessibilityIdentifier("events-expanded-list")
     }
 

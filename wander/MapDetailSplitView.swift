@@ -148,6 +148,11 @@ struct MapDetailSplitView<Detail: View, Events: View, Friends: View, MapContent:
                 .accessibilityHidden(bottomList != .friends || areListsObscured)
                 .allowsHitTesting(bottomList == .friends && !areListsObscured)
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.top, 0, for: .scrollContent)
+        .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
+        .scrollDismissesKeyboard(.interactively)
     }
 
     private var listPosition: Position {
