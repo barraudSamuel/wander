@@ -111,7 +111,7 @@ struct ContentView: View {
 
     @ObservedObject private var cityBoundary = CityBoundary.shared
 
-    @State private var dockSelection: MotionDockSelection = .explore
+    @State private var bottomList: MapBottomList?
     @State private var friendCodeInput = ""
     @State private var isProfileAccountFlowActive = false
     @State private var outingComposerVisible = false
@@ -123,7 +123,6 @@ struct ContentView: View {
     @State private var centerOnFriendUserID: String?
     @State private var centerOnOutingPlanEventID: String?
     @State private var selectedMapDetail: MapDetailSelection?
-    @State private var eventsExpanded = false
     @State private var visibleRosterEventIDs: Set<String> = []
     @State private var heatMapEnabled = false
     @State private var cityProgress: CityProgress?
@@ -145,10 +144,6 @@ struct ContentView: View {
     }
 
     private var mapDockContent: some View {
-        let summaries = friendSummaries(
-            locations: friendSyncService.friendLocations
-        )
-
         return GeometryReader { geometry in
             MotionDockView(
                 selection: dockSelectionBinding,
@@ -156,14 +151,6 @@ struct ContentView: View {
                 onToggleEvents: toggleEvents
             ) {
                 exploreTab()
-            } friends: {
-                FriendsPanelView(
-                    service: friendSyncService,
-                    friends: summaries,
-                    onShowOnMap: showFriendOnMap,
-                    onViewProfile: presentMapFriendProfile,
-                    friendCodeInput: $friendCodeInput
-                )
             }
             #if DEBUG
             .overlay(alignment: .bottom) {
@@ -282,23 +269,22 @@ struct ContentView: View {
     }
 
     private var areEventsPresented: Bool {
-        eventsExpanded && dockSelection == .explore && selectedMapDetail?.profile == nil
+        bottomList == .events && selectedMapDetail?.profile == nil
     }
 
     private func toggleEvents() {
         guard !isProfileAccountFlowActive else { return }
         let shouldPresent = !areEventsPresented
-        dockSelection = .explore
         if selectedMapDetail?.profile != nil { selectedMapDetail = nil }
-        eventsExpanded = shouldPresent
+        bottomList = shouldPresent ? .events : nil
     }
 
     private var dockSelectionBinding: Binding<MotionDockSelection> {
         Binding(
-            get: { dockSelection },
+            get: { bottomList == .friends ? .friends : .explore },
             set: { newSelection in
                 guard !isProfileAccountFlowActive else { return }
-                dockSelection = newSelection
+                bottomList = newSelection == .friends ? .friends : nil
             }
         )
     }
@@ -412,6 +398,7 @@ struct ContentView: View {
                             displayName: $displayName,
                             avatarID: $avatarID,
                             profileColorHex: $profileColorHex,
+                            friendCodeInput: $friendCodeInput,
                             locationTracker: locationTracker,
                             summary: summary,
                             heatMapEnabled: $heatMapEnabled,
@@ -458,8 +445,8 @@ struct ContentView: View {
 
         return MapDetailSplitView(
             isPresented: false,
-            isEventsExpanded: $eventsExpanded,
-            areEventsObscured: selectedMapDetail?.profile != nil
+            bottomList: $bottomList,
+            areListsObscured: selectedMapDetail?.profile != nil
         ) {
             EmptyView()
         } events: {
@@ -487,6 +474,14 @@ struct ContentView: View {
                     selectedMapDetail = .outing(eventID)
                     centerOnOutingPlanEventID = eventID
                 }
+            )
+        } friends: {
+            FriendsPanelView(
+                service: friendSyncService,
+                friends: friendSummaries(locations: friendSyncService.friendLocations),
+                onShowOnMap: showFriendOnMap,
+                onViewProfile: presentMapFriendProfile,
+                isActive: bottomList == .friends && selectedMapDetail?.profile == nil
             )
         } map: {
             ZStack(alignment: .topTrailing) {
@@ -706,7 +701,6 @@ struct ContentView: View {
         guard selectedMapDetail != .ownProfile else { return }
         shouldFocusOwnProfile = focusOnMap
         if !focusOnMap { friendCameraRequest = nil }
-        dockSelection = .explore
         selectedMapDetail = .ownProfile
     }
 
@@ -714,7 +708,6 @@ struct ContentView: View {
         guard !isProfileAccountFlowActive else { return }
         guard acceptedFriendUserIDs.contains(userID) else { return }
         guard selectedMapDetail?.friendUserID != userID else { return }
-        dockSelection = .explore
         selectedMapDetail = .friend(userID)
         guard !friendSyncService.ghostFriendUserIDs.contains(userID),
               let location = friendSyncService.friendLocation(for: userID) else {
@@ -739,7 +732,6 @@ struct ContentView: View {
 
     private func recenterAfterProfile(_ profile: MapProfileSelection) {
         guard selectedMapDetail == nil,
-              dockSelection == .explore,
               !outingComposerVisible else { return }
         switch profile {
         case .currentUser:
@@ -1319,7 +1311,7 @@ struct ContentView: View {
 
                 // The account flow may have opened while the event was loading.
                 guard !isProfileAccountFlowActive else { return }
-                dockSelection = .explore
+                bottomList = .events
                 centerOnOutingPlanEventID = route.eventIDValue
                 notificationService.consume(route)
             } catch is OutingPlanServiceError {
@@ -1339,7 +1331,7 @@ struct ContentView: View {
         }
 
         if selectedMapDetail?.profile != nil { selectedMapDetail = nil }
-        dockSelection = .friends
+        bottomList = .friends
         notificationService.consume(route)
     }
 

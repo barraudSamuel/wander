@@ -1,6 +1,7 @@
 #if DEBUG && targetEnvironment(simulator)
 import CoreLocation
 import SwiftUI
+import UIKit
 
 enum DebugSocialMapScenario {
     static let isEnabled = ProcessInfo.processInfo.arguments.contains("-debug-social-map")
@@ -18,36 +19,22 @@ struct DebugSocialMapScenarioView: View {
     @State private var scene: SceneKind = ProcessInfo.processInfo.arguments
         .contains("-debug-social-map-mixed") ? .mixed : .events
     @State private var revision = 0
-    @State private var dockSelection: MotionDockSelection = ProcessInfo.processInfo.arguments
-        .contains("-debug-dock-friends") ? .friends : .explore
+    @State private var bottomList: MapBottomList? = {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-debug-dock-friends") { return .friends }
+        return nil
+    }()
     @State private var friendCode = ""
-    @State private var eventsExpanded = false
     @State private var selectedDetail = DebugSocialMapScene.initialSelection
 
     var body: some View {
         if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
             MotionDockView(
-                selection: $dockSelection,
+                selection: dockSelection,
                 isEventsPresented: areEventsPresented,
                 onToggleEvents: toggleEvents
             ) {
                 mapScene
-            } friends: {
-                NavigationStack {
-                    List {
-                        Section("Ajouter un ami") {
-                            TextField("Code ami", text: $friendCode)
-                                .autocorrectionDisabled()
-                        }
-                        Section("Mes amis") {
-                            ForEach(1...30, id: \.self) { number in
-                                Text("Ami \(number)")
-                            }
-                        }
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .toolbar(.hidden, for: .navigationBar)
-                }
             }
         } else {
             mapScene
@@ -77,28 +64,34 @@ struct DebugSocialMapScenarioView: View {
         }
     }
 
+    private var dockSelection: Binding<MotionDockSelection> {
+        Binding(
+            get: { bottomList == .friends ? .friends : .explore },
+            set: { bottomList = $0 == .friends ? .friends : nil }
+        )
+    }
+
     private var areEventsPresented: Bool {
-        eventsExpanded && dockSelection == .explore && selectedDetail?.profile == nil
+        bottomList == .events && selectedDetail?.profile == nil
     }
 
     private func toggleEvents() {
         let shouldPresent = !areEventsPresented
-        dockSelection = .explore
         if selectedDetail?.profile != nil { selectedDetail = nil }
-        eventsExpanded = shouldPresent
+        bottomList = shouldPresent ? .events : nil
     }
 
     private func resetPresentation() {
-        eventsExpanded = false
+        bottomList = nil
         selectedDetail = nil
     }
 
     private var mapScene: some View {
         DebugSocialMapScene(
             kind: scene,
-            isListActive: dockSelection == .explore,
-            eventsExpanded: $eventsExpanded,
-            selectedDetail: $selectedDetail
+            bottomList: $bottomList,
+            selectedDetail: $selectedDetail,
+            friendCode: $friendCode
         )
         .id("\(scene.rawValue)-\(revision)")
         .onChange(of: scene) { _, _ in resetPresentation() }
@@ -107,18 +100,19 @@ struct DebugSocialMapScenarioView: View {
 }
 
 private struct DebugSocialMapScene: View {
+    @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     private static let coordinate = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
     private static let ownerID = "scenario-owner"
     private static let arguments = Set(ProcessInfo.processInfo.arguments)
 
     private let friends: [String: FriendLocation]
-    private let isListActive: Bool
     @State private var requestedRosterIDs: Set<String> = []
     @State private var didSuspendRosters = false
     @StateObject private var locationTracker: LocationTracker
     @State private var plans: [String: OutingPlan]
     @Binding private var selectedDetail: MapDetailSelection?
-    @Binding private var eventsExpanded: Bool
+    @Binding private var bottomList: MapBottomList?
+    @Binding private var friendCode: String
     @State private var editingEvent: OutingPlan?
     @State private var centerOnUser = false
     @State private var resetOrientation = false
@@ -135,6 +129,15 @@ private struct DebugSocialMapScene: View {
     @State private var heatMapEnabled = false
     @State private var ghostModeEnabled = false
     @State private var profileConfirmation = false
+    private enum RequestState {
+        case incoming
+        case accepted
+        case declined
+    }
+
+    @State private var requestState: RequestState = .incoming
+    @State private var friendPendingRemoval: String?
+    @State private var removedFriendIDs: Set<String> = []
 
     private static func hasArgument(_ argument: String) -> Bool {
         arguments.contains("-debug-social-map-" + argument)
@@ -142,13 +145,13 @@ private struct DebugSocialMapScene: View {
 
     init(
         kind: DebugSocialMapScenarioView.SceneKind,
-        isListActive: Bool,
-        eventsExpanded: Binding<Bool>,
-        selectedDetail: Binding<MapDetailSelection?>
+        bottomList: Binding<MapBottomList?>,
+        selectedDetail: Binding<MapDetailSelection?>,
+        friendCode: Binding<String>
     ) {
-        self.isListActive = isListActive
-        self._eventsExpanded = eventsExpanded
+        self._bottomList = bottomList
         self._selectedDetail = selectedDetail
+        self._friendCode = friendCode
         self.friends = Self.makeFriends(kind: kind)
         let coordinate = Self.coordinate
         _locationTracker = StateObject(wrappedValue: LocationTracker(
@@ -232,8 +235,8 @@ private struct DebugSocialMapScene: View {
         let presentations = presentations
         MapDetailSplitView(
             isPresented: false,
-            isEventsExpanded: $eventsExpanded,
-            areEventsObscured: selectedDetail?.profile != nil
+            bottomList: $bottomList,
+            areListsObscured: selectedDetail?.profile != nil
         ) {
             EmptyView()
         } events: {
@@ -243,9 +246,9 @@ private struct DebugSocialMapScene: View {
                 currentLocation: listLocation,
                 isLoading: Self.hasArgument("list-loading"),
                 hasLoadError: Self.hasArgument("list-error") || Self.hasArgument("partial-list-error"),
-                isListActive: isListActive && eventsExpanded && selectedDetail?.profile == nil,
+                isListActive: bottomList == .events && selectedDetail?.profile == nil,
                 onVisibleEventIDsChange: { ids in
-                    if !isListActive && ids.isEmpty { didSuspendRosters = true }
+                    if bottomList != .events && ids.isEmpty { didSuspendRosters = true }
                     requestedRosterIDs = ids
                 },
                 onSetAttendance: { id, shouldAttend in
@@ -258,6 +261,8 @@ private struct DebugSocialMapScene: View {
                     centerOnEvent = id
                 }
             )
+        } friends: {
+            friendsList
         } map: {
             mapView(presentations: presentations)
         }
@@ -282,6 +287,39 @@ private struct DebugSocialMapScene: View {
                                 summary
                                     .listRowInsets(EdgeInsets())
                                     .listRowBackground(Color.clear)
+                            }
+                            Section("Ton code ami") {
+                                HStack {
+                                    Text("WANDER23456")
+                                        .font(.title3.weight(.semibold))
+                                        .monospaced()
+                                        .textSelection(.enabled)
+                                    Spacer()
+                                    Button {
+                                        UIPasteboard.general.string = "WANDER23456"
+                                    } label: {
+                                        Label("Copier", systemImage: "doc.on.doc")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                                ShareLink(item: "Ajoute-moi sur Wander avec le code WANDER23456.") {
+                                    Label("Partager mon code", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                            Section("Ajouter un ami") {
+                                TextField("Code ami", text: $friendCode)
+                                    .textInputAutocapitalization(.characters)
+                                    .autocorrectionDisabled()
+                                    .submitLabel(.send)
+                                    .onSubmit { friendCode = "" }
+                                Button {
+                                    friendCode = ""
+                                } label: {
+                                    Label("Ajouter un ami", systemImage: "person.badge.plus")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(friendCode.isEmpty)
                             }
                             Section("Affichage de la carte") {
                                 Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
@@ -372,6 +410,62 @@ private struct DebugSocialMapScene: View {
         }
     }
 
+    private var friendsList: some View {
+        List {
+            if requestState == .incoming {
+                Section("Demandes reçues") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Camille")
+                        HStack {
+                            Button("Accepter") {
+                                requestState = .accepted
+                            }
+                            .buttonStyle(.borderedProminent)
+                            Button("Refuser", role: .destructive) {
+                                requestState = .declined
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+            Section("Mes amis") {
+                if requestState == .accepted { Text("Camille") }
+                ForEach(friends.values.sorted { $0.displayName < $1.displayName }, id: \.userID) { friend in
+                    if !removedFriendIDs.contains(friend.userID) {
+                        Button(friend.displayName) { selectedDetail = .friend(friend.userID) }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button("Retirer", role: .destructive) {
+                                    friendPendingRemoval = friend.userID
+                                }
+                            }
+                    }
+                }
+                ForEach(1...30, id: \.self) { number in
+                    Text("Ami \(number)")
+                }
+            }
+            Section("En attente") {
+                LabeledContent("Alex", value: "Demande envoyée")
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
+        .accessibilityIdentifier("friends-expanded-list")
+        .alert("Retirer cet ami ?", isPresented: Binding(
+            get: { friendPendingRemoval != nil && bottomList == .friends && selectedDetail?.profile == nil },
+            set: { if !$0 { friendPendingRemoval = nil } }
+        )) {
+            Button("Retirer", role: .destructive) {
+                if let friendPendingRemoval { removedFriendIDs.insert(friendPendingRemoval) }
+                friendPendingRemoval = nil
+            }
+            Button("Annuler", role: .cancel) { friendPendingRemoval = nil }
+        }
+    }
+
     private func presentOwnProfile(focusOnMap: Bool) {
         // MapKit can echo a programmatic pin selection after the sheet opens.
         guard selectedDetail != .ownProfile else { return }
@@ -384,7 +478,7 @@ private struct DebugSocialMapScene: View {
         guard selectedDetail?.profile == nil else { return }
         let dismissedProfile = presentedProfile
         presentedProfile = nil
-        if let dismissedProfile, selectedDetail == nil, isListActive, editingEvent == nil {
+        if let dismissedProfile, selectedDetail == nil, editingEvent == nil {
             let canRecenter: Bool
             switch dismissedProfile {
             case .currentUser: canRecenter = shouldFocusOwnProfile && locationTracker.lastLocation != nil

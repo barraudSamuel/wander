@@ -19,16 +19,16 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(tabBar.waitForExistence(timeout: 3), "La navigation doit utiliser la barre système.")
         let tabFrames = ["explore", "friends"].map { command($0).frame }
         command("friends").doubleTap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
+        assertFriendsListIsHittable(false)
         XCTAssertTrue(command("explore").isSelected)
         assertTabFrames(tabFrames)
         let start = command("explore").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = command("friends").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         start.press(forDuration: 0.6, thenDragTo: end)
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(true)
         XCTAssertTrue(command("friends").isSelected)
         XCTAssertFalse(command("profile").exists)
-        assertPanelAboveTabBar()
+        assertFriendsBelowMap()
         attachScreenshot("Barre native après appui maintenu et glissement")
     }
 
@@ -57,9 +57,10 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(eventList.isHittable)
         XCTAssertTrue(events.isSelected)
         XCTAssertTrue(command("explore").isSelected)
-        XCTAssertEqual(mapViewport.frame.maxY, eventsHandle.frame.minY, accuracy: 2)
+        // The 44 pt hit target overlaps the 20 pt separator by 12 pt.
+        XCTAssertEqual(mapViewport.frame.maxY, eventsHandle.frame.minY + 12, accuracy: 2)
         XCTAssertLessThan(mapViewport.frame.height, fullMapFrame.height)
-        XCTAssertLessThanOrEqual(eventList.frame.maxY, events.frame.minY)
+        XCTAssertEqual(eventList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
         XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
         XCTAssertEqual(events.frame, buttonFrame)
         assertTabFrames(tabFrames)
@@ -77,14 +78,14 @@ final class MotionDockUITests: XCTestCase {
 
     func testEventsButtonReturnsFromPanelsAndOpensAfterFriendSheetCloses() {
         let buttonFrame = command("events").frame
-        for (panel, field) in [("friends", "Code ami")] {
+        for panel in ["friends"] {
             command(panel).tap()
-            XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 3))
+            assertFriendsListIsHittable(true)
             XCTAssertFalse(command("events").isSelected)
             XCTAssertFalse(eventList.isHittable)
             assertEventsFrame(buttonFrame)
             command("events").tap()
-            XCTAssertTrue(app.textFields[field].waitForNonExistence(timeout: 3))
+            assertFriendsListIsHittable(false)
             XCTAssertTrue(command("explore").isSelected)
             XCTAssertTrue(command("events").isSelected)
             XCTAssertTrue(eventList.isHittable)
@@ -148,12 +149,12 @@ final class MotionDockUITests: XCTestCase {
         let originalMap = app.maps.firstMatch.frame
         let tabFrames = ["explore", "friends"].map { command($0).frame }
         command("friends").tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
-        XCTAssertEqual(app.staticTexts["motion-dock-heading"].label, "Amis")
+        assertFriendsListIsHittable(true)
+        XCTAssertTrue(friendsList.buttons["Accepter"].exists)
         assertTabFrames(tabFrames)
-        assertPanelAboveTabBar()
+        assertFriendsBelowMap()
         command("friends").tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
+        assertFriendsListIsHittable(false)
         XCTAssertTrue(command("explore").isSelected)
         XCTAssertFalse(command("profile").exists)
         XCTAssertFalse(app.buttons["Filtres de la carte"].exists)
@@ -174,7 +175,7 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(profileButton.isHittable)
         XCTAssertEqual(profileButton.frame, profileFrame)
         XCTAssertTrue(ownSheet.staticTexts["Moi"].exists)
-        XCTAssertFalse(app.otherElements["motion-dock-panel"].exists)
+        assertFriendsListIsHittable(false)
         assertMapMarkerRemains(group, at: groupFrame)
         closeOwnSheet()
         assertMapMarkerRemains(group, at: groupFrame)
@@ -184,77 +185,199 @@ final class MotionDockUITests: XCTestCase {
         assertTabFrames(tabFrames)
     }
 
-    func testOutsideTapOnlyClosesPanelAndPreservesCamera() {
-        let map = app.maps.firstMatch
+    func testMapRemainsInteractiveAboveFriendsList() {
+        let nativeMapSize = app.maps.firstMatch.frame.size
+        let fullHeight = mapViewport.frame.height
+        command("friends").tap()
+        assertFriendsListIsHittable(true)
+        XCTAssertTrue(friendsHandle.waitForExistence(timeout: 3))
+        XCTAssertLessThan(mapViewport.frame.height, fullHeight * 0.7)
+        XCTAssertGreaterThan(mapViewport.frame.height, fullHeight * 0.3)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+        assertFriendsBelowMap()
+        XCTAssertFalse(app.buttons["motion-dock-dismiss"].exists)
+        mapViewport.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.4)).tap()
+        assertFriendsListIsHittable(true)
+
         let group = app.buttons["Groupe, 2 sorties prévues"]
         XCTAssertTrue(group.waitForExistence(timeout: 5))
-        let user = app.buttons["Moi, Vous"]
-        XCTAssertTrue(user.exists)
-        let originalSeparation = hypot(
-            group.frame.midX - user.frame.midX,
-            group.frame.maxY - user.frame.maxY
-        )
-        map.pinch(withScale: 1.3, velocity: 1)
-        let zoomed = NSPredicate { _, _ in
-            hypot(group.frame.midX - user.frame.midX, group.frame.maxY - user.frame.maxY)
-                > originalSeparation * 1.15
-        }
-        expectation(for: zoomed, evaluatedWith: app)
-        waitForExpectations(timeout: 3)
-
-        let beforePanX = group.frame.midX
-        let panStart = map.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.7))
-        panStart.press(
+        let beforeX = group.frame.midX
+        let start = mapViewport.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.6))
+        start.press(
             forDuration: 0.05,
-            thenDragTo: panStart.withOffset(CGVector(dx: 70, dy: 0)),
+            thenDragTo: start.withOffset(CGVector(dx: 65, dy: 0)),
             withVelocity: .slow,
             thenHoldForDuration: 0.3
         )
-        XCTAssertGreaterThan(abs(group.frame.midX - beforePanX), 30)
-        let mapFrame = map.frame
-        let groupFrame = group.frame
-        command("friends").tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
-        XCTAssertEqual(map.frame, mapFrame)
-        XCTAssertEqual(group.frame.midX, groupFrame.midX, accuracy: 2)
-        XCTAssertEqual(group.frame.midY, groupFrame.midY, accuracy: 2)
-        XCTAssertFalse(app.scrollViews["friend-profile-scroll"].firstMatch.isHittable)
+        XCTAssertGreaterThan(abs(group.frame.midX - beforeX), 25)
+        assertFriendsListIsHittable(true)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+        command("explore").tap()
+        assertFriendsListIsHittable(false)
+        XCTAssertEqual(mapViewport.frame.height, fullHeight, accuracy: 2)
         XCTAssertFalse(eventList.isHittable)
-        XCTAssertFalse(command("events").isSelected)
     }
 
-    func testKeyboardAndDraftSurvivePanelSwitch() {
+    func testFriendsListKeepsRequestsHeightAndScrollAcrossEventsAndProfile() {
         command("friends").tap()
-        let code = app.textFields["Code ami"]
-        XCTAssertTrue(code.waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(true)
+        friendsList.buttons["Accepter"].tap()
+        XCTAssertFalse(friendsList.buttons["Accepter"].exists)
+        XCTAssertTrue(friendsList.staticTexts["Camille"].exists)
+        let start = friendsHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -80)))
+        let friendsHeight = friendsList.frame.height
+        let row = friendsList.staticTexts["Ami 20"]
+        for _ in 0..<8 {
+            if row.isHittable { break }
+            friendsList.swipeUp()
+        }
+        XCTAssertTrue(row.isHittable)
+        let rowY = row.frame.minY
+
+        command("events").tap()
+        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(false)
+        let eventStart = eventsHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        eventStart.press(forDuration: 0.05, thenDragTo: eventStart.withOffset(CGVector(dx: 0, dy: -60)))
+        let eventsHeight = eventList.frame.height
+        command("friends").tap()
+        assertFriendsListIsHittable(true)
+        XCTAssertFalse(eventList.isHittable)
+        XCTAssertEqual(friendsList.frame.height, friendsHeight, accuracy: 2)
+        XCTAssertEqual(row.frame.minY, rowY, accuracy: 2)
+        profileButton.tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(false)
+        closeOwnSheet()
+        assertFriendsListIsHittable(true)
+        XCTAssertEqual(friendsList.frame.height, friendsHeight, accuracy: 2)
+        XCTAssertEqual(row.frame.minY, rowY, accuracy: 2)
+        command("events").tap()
+        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        XCTAssertEqual(eventList.frame.height, eventsHeight, accuracy: 2)
+        command("friends").tap()
+        XCTAssertTrue(friendsHandle.waitForExistence(timeout: 3))
+        let closeStart = friendsHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        closeStart.press(forDuration: 0.05, thenDragTo: command("friends").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        assertFriendsListIsHittable(false)
+        XCTAssertTrue(command("explore").isSelected)
+        XCTAssertFalse(eventList.isHittable)
+    }
+
+    func testBottomOfFriendsListClearsNativeDock() {
+        command("friends").tap()
+        assertFriendsListIsHittable(true)
+        let tabBar = app.tabBars["native-map-tab-bar"]
+        XCTAssertEqual(friendsList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
+        attachScreenshot("Les amis défilent derrière le dock")
+
+        let lastFriend = friendsList.cells.containing(.staticText, identifier: "Alex").firstMatch
+        for _ in 0..<25 {
+            if lastFriend.isHittable && lastFriend.frame.maxY <= tabBar.frame.minY { break }
+            swipeListAboveDock(friendsList, tabBar: tabBar)
+        }
+
+        XCTAssertTrue(lastFriend.isHittable)
+        XCTAssertLessThanOrEqual(lastFriend.frame.maxY, tabBar.frame.minY)
+        attachScreenshot("Dernier ami au-dessus du dock")
+    }
+
+    func testBottomOfEventsListClearsNativeDock() {
+        app.terminate()
+        app.launchArguments += ["-debug-social-map-many-events"]
+        app.launch()
+        command("events").tap()
+        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+        XCTAssertTrue(eventList.isHittable)
+        XCTAssertTrue(command("events").isSelected)
+        XCTAssertTrue(command("explore").isSelected)
+        XCTAssertFalse(command("friends").isSelected)
+        XCTAssertFalse(friendsList.isHittable)
+        XCTAssertTrue(eventsHandle.isHittable)
+        XCTAssertEqual(eventList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
+        attachScreenshot("Les événements défilent derrière le dock")
+
+        let lastEvent = app.buttons["event-detail-row-00000000-0000-4000-8000-000000000018"]
+        let tabBar = app.tabBars["native-map-tab-bar"]
+        for _ in 0..<25 {
+            if lastEvent.isHittable && lastEvent.frame.maxY <= tabBar.frame.minY { break }
+            swipeListAboveDock(eventList, tabBar: tabBar)
+            XCTAssertTrue(command("events").isSelected)
+        }
+
+        XCTAssertTrue(lastEvent.isHittable)
+        XCTAssertLessThanOrEqual(lastEvent.frame.maxY, tabBar.frame.minY)
+        attachScreenshot("Dernier événement au-dessus du dock")
+    }
+
+    func testFriendListRestoresAfterOpeningAnIndividualProfile() {
+        app.terminate()
+        app.launchArguments += ["-debug-social-map-mixed", "-debug-dock-friends"]
+        app.launch()
+        assertFriendsListIsHittable(true, timeout: 10)
+        friendsList.buttons["Refuser"].tap()
+        XCTAssertFalse(friendsList.buttons["Refuser"].exists)
+        let listFrame = friendsList.frame
+        friendsList.buttons["Amina"].tap()
+        let sheet = app.scrollViews["friend-profile-scroll"].firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(false)
+        let start = sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 3))
+        assertFriendsListIsHittable(true)
+        XCTAssertEqual(friendsList.frame, listFrame)
+        XCTAssertTrue(command("friends").isSelected)
+        XCTAssertFalse(friendsList.buttons["Refuser"].exists)
+        attachScreenshot("Amis et invitations sous la carte")
+    }
+
+    func testFriendInvitationsLiveInProfileAndDraftSurvivesClosing() {
+        command("friends").tap()
+        assertFriendsListIsHittable(true)
+        XCTAssertTrue(app.staticTexts["Ami 1"].exists)
+        XCTAssertFalse(app.textFields["Code ami"].exists)
+        XCTAssertFalse(app.buttons["Partager mon code"].exists)
+        XCTAssertFalse(app.buttons["Ajouter un ami"].exists)
+        command("explore").tap()
+
+        profileButton.tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        let share = ownSheet.buttons["Partager mon code"]
+        revealInOwnSheet(share)
+        XCTAssertTrue(ownSheet.staticTexts["WANDER23456"].exists)
+        XCTAssertTrue(ownSheet.buttons["Copier"].exists)
+        let code = ownSheet.textFields["Code ami"]
+        revealInOwnSheet(code)
+        let add = ownSheet.buttons["Ajouter un ami"]
+        XCTAssertTrue(add.exists)
+        XCTAssertFalse(add.isEnabled)
         code.tap()
         code.typeText("WANDER")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
-        XCTAssertTrue(command("events").isHittable)
-        XCTAssertLessThanOrEqual(command("events").frame.maxY, app.keyboards.firstMatch.frame.minY)
-        XCTAssertEqual(command("events").frame.midY, command("friends").frame.midY, accuracy: 2)
-        command("explore").tap()
+        XCTAssertTrue(add.isEnabled)
+        closeOwnSheet()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+
+        command("friends").tap()
+        assertFriendsListIsHittable(true)
+        XCTAssertFalse(app.textFields["Code ami"].exists)
+        command("explore").tap()
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
-        closeOwnSheet()
-        command("friends").tap()
-        XCTAssertTrue(code.waitForExistence(timeout: 3))
+        revealInOwnSheet(code)
         XCTAssertEqual(code.value as? String, "WANDER")
-        command("explore").tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(app.maps.firstMatch.exists)
-        command("friends").tap()
-        XCTAssertTrue(code.waitForExistence(timeout: 3))
-        code.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
-        command("events").tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(command("explore").isSelected)
-        XCTAssertTrue(command("events").isSelected)
-        XCTAssertTrue(eventList.isHittable)
+        attachScreenshot("Code ami et invitation dans le profil personnel")
+        closeOwnSheet()
+
+        let user = app.buttons["Moi, Vous"]
+        XCTAssertTrue(user.waitForExistence(timeout: 3))
+        user.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
+        revealInOwnSheet(code)
+        XCTAssertEqual(code.value as? String, "WANDER")
     }
 
     func testProfileSettingsPersistBetweenButtonAndAvatarAndConfirmationStaysInSheet() {
@@ -309,12 +432,12 @@ final class MotionDockUITests: XCTestCase {
         expectation(for: landscapeReady, evaluatedWith: app)
         waitForExpectations(timeout: 5)
         command("friends").tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(true)
         XCTAssertTrue(command("events").isHittable)
         XCTAssertLessThanOrEqual(command("events").frame.maxX, app.windows.firstMatch.frame.maxX)
         XCTAssertEqual(command("events").frame.midY, command("friends").frame.midY, accuracy: 2)
         command("explore").tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
+        assertFriendsListIsHittable(false)
         XCTAssertTrue(profileButton.isHittable)
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
@@ -366,6 +489,38 @@ final class MotionDockUITests: XCTestCase {
         app.descendants(matching: .any)["events-expanded-list"].firstMatch
     }
 
+    private func assertFriendsListIsHittable(
+        _ expected: Bool,
+        timeout: TimeInterval = 3,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let predicate = NSPredicate { _, _ in
+            let list = self.friendsList
+            return (list.exists && list.isHittable) == expected
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed,
+                       file: file, line: line)
+    }
+
+    private var friendsList: XCUIElement {
+        app.descendants(matching: .any)["friends-expanded-list"].firstMatch
+    }
+
+    private var friendsHandle: XCUIElement { app.buttons["map-friends-resize-handle"] }
+
+    private func swipeListAboveDock(_ list: XCUIElement, tabBar: XCUIElement) {
+        let startY = min(list.frame.maxY - 30, tabBar.frame.minY - 40)
+        let endY = list.frame.minY + 40
+        let window = app.windows.firstMatch
+        let start = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: list.frame.midX, dy: startY))
+        let end = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: list.frame.midX, dy: endY))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
     private var eventsHandle: XCUIElement { app.buttons["map-events-resize-handle"] }
 
     private var mapViewport: XCUIElement { app.otherElements["map-visible-viewport"].firstMatch }
@@ -385,10 +540,11 @@ final class MotionDockUITests: XCTestCase {
         }
     }
 
-    private func assertPanelAboveTabBar() {
-        let panel = app.otherElements["motion-dock-panel"].firstMatch
-        XCTAssertTrue(panel.exists)
-        XCTAssertLessThanOrEqual(panel.frame.maxY, app.tabBars["native-map-tab-bar"].frame.minY)
+    private func assertFriendsBelowMap() {
+        assertFriendsListIsHittable(true)
+        XCTAssertLessThanOrEqual(mapViewport.frame.maxY, friendsList.frame.minY)
+        XCTAssertEqual(friendsList.frame.width, mapViewport.frame.width, accuracy: 2)
+        XCTAssertEqual(friendsList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
     }
 
     private func command(_ name: String) -> XCUIElement {

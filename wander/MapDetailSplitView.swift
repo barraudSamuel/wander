@@ -1,98 +1,115 @@
 import SwiftUI
 import UIKit
 
-private enum EventsSeparatorMetrics {
+enum MapBottomList: Equatable {
+    case events
+    case friends
+}
+
+private enum ListSeparatorMetrics {
     static let height: CGFloat = 20
     static let hitHeight: CGFloat = 44
     static let overlap = (hitHeight - height) / 2
 }
 
-struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
+struct MapDetailSplitView<Detail: View, Events: View, Friends: View, MapContent: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     @ScaledMetric(relativeTo: .body) private var minimumPaneHeight = 140
     @State private var position: Position = .third
     @State private var dragOrigin: DragOrigin?
     @GestureState private var isDragging = false
     @State private var eventsPosition: Position = .third
-    @State private var eventsDragOrigin: DragOrigin?
-    @GestureState private var isEventsDragging = false
+    @State private var friendsPosition: Position = .custom(0.5)
+    @State private var listDragOrigin: DragOrigin?
+    @GestureState private var isListDragging = false
     @State private var isDragCancelled = false
-    @State private var isEventsDragCancelled = false
-    @State private var didEmitEventsClosingFeedback = false
+    @State private var isListDragCancelled = false
+    @State private var didEmitListClosingFeedback = false
 
     let isPresented: Bool
-    private let areEventsObscured: Bool
-    @Binding private var isEventsExpanded: Bool
+    private let areListsObscured: Bool
+    @Binding private var bottomList: MapBottomList?
     private let detail: Detail
     private let events: Events
+    private let friends: Friends
     private let mapContent: MapContent
 
     init(
         isPresented: Bool,
-        isEventsExpanded: Binding<Bool>,
-        areEventsObscured: Bool = false,
+        bottomList: Binding<MapBottomList?>,
+        areListsObscured: Bool = false,
         @ViewBuilder detail: () -> Detail,
         @ViewBuilder events: () -> Events,
+        @ViewBuilder friends: () -> Friends,
         @ViewBuilder map: () -> MapContent
     ) {
         self.isPresented = isPresented
-        self._isEventsExpanded = isEventsExpanded
-        self.areEventsObscured = areEventsObscured
+        self._bottomList = bottomList
+        self.areListsObscured = areListsObscured
         self.detail = detail()
         self.events = events()
+        self.friends = friends()
         self.mapContent = map()
     }
 
     var body: some View {
         GeometryReader { safeGeometry in
             GeometryReader { geometry in
-                let safeInsets = safeGeometry.safeAreaInsets
+                let swiftUIInsets = safeGeometry.safeAreaInsets
+                let safeInsets = EdgeInsets(
+                    top: swiftUIInsets.top,
+                    leading: swiftUIInsets.leading,
+                    bottom: max(swiftUIInsets.bottom, navigationBottomInset),
+                    trailing: swiftUIInsets.trailing
+                )
                 let separatorHeight = min(44, max(0, geometry.size.height))
                 let availableHeight = max(
                     0,
                     geometry.size.height - safeInsets.top - safeInsets.bottom - separatorHeight
                 )
-                let eventsSeparatorHeight = min(EventsSeparatorMetrics.height, max(0, geometry.size.height))
-                let eventsAvailableHeight = max(
-                    0, geometry.size.height - safeInsets.top - safeInsets.bottom - eventsSeparatorHeight
+                let listSeparatorHeight = min(ListSeparatorMetrics.height, max(0, geometry.size.height))
+                let listAvailableHeight = max(
+                    0, geometry.size.height - safeInsets.top - safeInsets.bottom - listSeparatorHeight
                 )
                 let detailHeight = isPresented
                     ? safeInsets.top + height(for: position, availableHeight: availableHeight)
                     : 0
-                let showsEventsPane = isEventsExpanded && !isPresented && !areEventsObscured
+                let showsListPane = bottomList != nil && !isPresented && !areListsObscured
 
                 MapDetailArrangement(
                     detailHeight: detailHeight,
                     separatorHeight: isPresented ? separatorHeight : 0,
-                    eventsHeight: showsEventsPane
-                        ? eventsHeight(availableHeight: eventsAvailableHeight)
+                    listHeight: showsListPane
+                        ? listHeight(availableHeight: listAvailableHeight)
                         : 0,
-                    eventsSeparatorHeight: showsEventsPane ? eventsSeparatorHeight : 0,
+                    listSeparatorHeight: showsListPane ? listSeparatorHeight : 0,
                     windowSize: geometry.size,
                     safeInsets: safeInsets,
                     isPresented: isPresented,
                     detail: detail,
-                    events: events,
+                    lists: lists,
+                    listKind: bottomList,
                     mapContent: mapContent
                 ) { displayedHeight in
                     resizeHandle(availableHeight: availableHeight, displayedHeight: displayedHeight)
-                } eventsHandle: { displayedHeight in
-                    eventsResizeHandle(availableHeight: eventsAvailableHeight, displayedHeight: displayedHeight)
+                } listHandle: { displayedHeight in
+                    listResizeHandle(availableHeight: listAvailableHeight, displayedHeight: displayedHeight)
                 }
                 .animation(resizeAnimation, value: isPresented)
-                .animation(resizeAnimation, value: isEventsExpanded)
-                .animation(resizeAnimation, value: areEventsObscured)
+                .animation(resizeAnimation, value: bottomList)
+                .animation(resizeAnimation, value: areListsObscured)
                 .onChange(of: isDragging) { _, dragging in
                     if !dragging {
                         dragOrigin = nil
                         isDragCancelled = false
                     }
                 }
-                .onChange(of: isEventsDragging) { _, dragging in
+                .onChange(of: isListDragging) { _, dragging in
                     if !dragging {
-                        eventsDragOrigin = nil
-                        isEventsDragCancelled = false
-                        didEmitEventsClosingFeedback = false
+                        listDragOrigin = nil
+                        isListDragCancelled = false
+                        didEmitListClosingFeedback = false
                     }
                 }
                 .onChange(of: geometry.size) { _, _ in
@@ -105,12 +122,42 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
             cancelDrags()
             position = .third
         }
-        .onChange(of: areEventsObscured) { _, _ in
+        .onChange(of: areListsObscured) { _, _ in
             cancelDrags()
         }
-        .onChange(of: isEventsExpanded) { _, _ in
+        .onChange(of: bottomList) { previous, current in
             cancelDrags()
-            eventsPosition = .third
+            if current == nil {
+                if previous == .friends {
+                    friendsPosition = .custom(0.5)
+                } else {
+                    eventsPosition = .third
+                }
+            }
+        }
+    }
+
+    private var lists: some View {
+        ZStack {
+            events
+                .opacity(bottomList == .events ? 1 : 0)
+                .accessibilityHidden(bottomList != .events || areListsObscured)
+                .allowsHitTesting(bottomList == .events && !areListsObscured)
+            friends
+                .opacity(bottomList == .friends ? 1 : 0)
+                .accessibilityHidden(bottomList != .friends || areListsObscured)
+                .allowsHitTesting(bottomList == .friends && !areListsObscured)
+        }
+    }
+
+    private var listPosition: Position {
+        get { bottomList == .friends ? friendsPosition : eventsPosition }
+        nonmutating set {
+            if bottomList == .friends {
+                friendsPosition = newValue
+            } else {
+                eventsPosition = newValue
+            }
         }
     }
 
@@ -199,14 +246,14 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
         )
     }
 
-    private func eventsResizeHandle(availableHeight: CGFloat, displayedHeight: CGFloat) -> some View {
+    private func listResizeHandle(availableHeight: CGFloat, displayedHeight: CGFloat) -> some View {
         Button {
             let expandedHeight = height(for: .expanded, availableHeight: availableHeight)
             withAnimation(resizeAnimation) {
                 if displayedHeight < expandedHeight - 1 {
-                    eventsPosition = .expanded
+                    listPosition = .expanded
                 } else {
-                    isEventsExpanded = false
+                    bottomList = nil
                 }
             }
         } label: {
@@ -214,93 +261,95 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
-                .frame(height: EventsSeparatorMetrics.hitHeight)
+                .frame(height: ListSeparatorMetrics.hitHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Taille de la liste des événements")
-        .accessibilityValue(eventsPosition.accessibilityValue(
+        .accessibilityLabel(bottomList == .friends
+            ? "Taille de la liste des amis" : "Taille de la liste des événements")
+        .accessibilityValue(listPosition.accessibilityValue(
             displayedFraction: availableHeight > 0 ? displayedHeight / availableHeight : 0
         ))
         .accessibilityHint("Faites glisser pour redimensionner. Touchez deux fois pour agrandir, puis replier.")
-        .accessibilityIdentifier("map-events-resize-handle")
+        .accessibilityIdentifier(bottomList == .friends
+            ? "map-friends-resize-handle" : "map-events-resize-handle")
         .accessibilityAdjustableAction { direction in
             guard availableHeight > 0 else { return }
             switch direction {
             case .increment:
-                selectEventsHeight(displayedHeight + 0.05 * availableHeight, availableHeight: availableHeight)
+                selectListHeight(displayedHeight + 0.05 * availableHeight, availableHeight: availableHeight)
             case .decrement:
-                selectEventsHeight(displayedHeight - 0.05 * availableHeight, availableHeight: availableHeight)
+                selectListHeight(displayedHeight - 0.05 * availableHeight, availableHeight: availableHeight)
             @unknown default:
                 break
             }
         }
         .highPriorityGesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .global)
-                .updating($isEventsDragging) { _, dragging, transaction in
+                .updating($isListDragging) { _, dragging, transaction in
                     dragging = true
                     transaction.animation = nil
                 }
                 .onChanged { value in
-                    guard availableHeight > 0, !isEventsDragCancelled else { return }
-                    let origin = eventsDragOrigin
+                    guard availableHeight > 0, !isListDragCancelled else { return }
+                    let origin = listDragOrigin
                         ?? DragOrigin(height: displayedHeight, availableHeight: availableHeight)
                     guard origin.availableHeight == availableHeight else { return }
                     let proposedHeight = origin.height - value.translation.height
-                    if !didEmitEventsClosingFeedback,
-                       proposedHeight < eventsClosingThreshold(availableHeight: availableHeight) {
-                        didEmitEventsClosingFeedback = true
+                    if !didEmitListClosingFeedback,
+                       proposedHeight < listClosingThreshold(availableHeight: availableHeight) {
+                        didEmitListClosingFeedback = true
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                     withTransaction(Transaction(animation: nil)) {
-                        eventsDragOrigin = origin
-                        eventsPosition = .custom(min(
+                        listDragOrigin = origin
+                        listPosition = .custom(min(
                             availableHeight * 0.85,
                             max(0, proposedHeight)
                         ) / availableHeight)
                     }
                 }
                 .onEnded { value in
-                    guard !isEventsDragCancelled, let origin = eventsDragOrigin, availableHeight > 0,
+                    guard !isListDragCancelled, let origin = listDragOrigin, availableHeight > 0,
                           origin.availableHeight == availableHeight else {
-                        eventsDragOrigin = nil
+                        listDragOrigin = nil
                         return
                     }
-                    eventsDragOrigin = nil
-                    selectEventsHeight(origin.height - value.translation.height, availableHeight: availableHeight)
+                    listDragOrigin = nil
+                    selectListHeight(origin.height - value.translation.height, availableHeight: availableHeight)
                 }
         )
     }
 
-    private func selectEventsHeight(_ height: CGFloat, availableHeight: CGFloat) {
+    private func selectListHeight(_ height: CGFloat, availableHeight: CGFloat) {
         guard availableHeight > 0 else { return }
-        eventsDragOrigin = nil
+        listDragOrigin = nil
         withAnimation(resizeAnimation) {
-            if height < eventsClosingThreshold(availableHeight: availableHeight) {
-                isEventsExpanded = false
+            if height < listClosingThreshold(availableHeight: availableHeight) {
+                bottomList = nil
             } else {
-                eventsPosition = .custom(min(availableHeight * 0.85, height) / availableHeight)
+                listPosition = .custom(min(availableHeight * 0.85, height) / availableHeight)
             }
         }
     }
 
-    private func eventsClosingThreshold(availableHeight: CGFloat) -> CGFloat {
+    private func listClosingThreshold(availableHeight: CGFloat) -> CGFloat {
         min(120, availableHeight * 0.1)
     }
 
-    private func eventsHeight(availableHeight: CGFloat) -> CGFloat {
-        if case .custom(let fraction) = eventsPosition {
+    private func listHeight(availableHeight: CGFloat) -> CGFloat {
+        if case .custom(let fraction) = listPosition {
             return min(availableHeight * 0.85, max(0, availableHeight * fraction))
         }
-        return height(for: eventsPosition, availableHeight: availableHeight)
+        return height(for: listPosition, availableHeight: availableHeight)
     }
 
     private func cancelDrags() {
         isDragCancelled = isDragging
-        isEventsDragCancelled = isEventsDragging
+        isListDragCancelled = isListDragging
         dragOrigin = nil
-        eventsDragOrigin = nil
-        didEmitEventsClosingFeedback = false
+        listDragOrigin = nil
+        didEmitListClosingFeedback = false
     }
 
     private func adjustHeight(by fraction: CGFloat, displayedHeight: CGFloat, availableHeight: CGFloat) {
@@ -360,44 +409,43 @@ struct MapDetailSplitView<Detail: View, Events: View, MapContent: View>: View {
 
 /// Interpolate the geometry once, then lay out each frame without another
 /// animation on text runs, attachment positions or line breaks.
-private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View, Handle: View, EventsHandle: View>:
+private struct MapDetailArrangement<Detail: View, Lists: View, MapContent: View, Handle: View, ListHandle: View>:
     View, Animatable {
     var detailHeight: CGFloat
     var separatorHeight: CGFloat
-    var eventsHeight: CGFloat
-    var eventsSeparatorHeight: CGFloat
+    var listHeight: CGFloat
+    var listSeparatorHeight: CGFloat
     let windowSize: CGSize
     let safeInsets: EdgeInsets
     let isPresented: Bool
     let detail: Detail
-    let events: Events
+    let lists: Lists
+    let listKind: MapBottomList?
     let mapContent: MapContent
     @ViewBuilder let handle: (CGFloat) -> Handle
-    @ViewBuilder let eventsHandle: (CGFloat) -> EventsHandle
+    @ViewBuilder let listHandle: (CGFloat) -> ListHandle
 
     var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
         get {
             AnimatablePair(
                 AnimatablePair(detailHeight, separatorHeight),
-                AnimatablePair(eventsHeight, eventsSeparatorHeight)
+                AnimatablePair(listHeight, listSeparatorHeight)
             )
         }
         set {
             detailHeight = newValue.first.first
             separatorHeight = newValue.first.second
-            eventsHeight = newValue.second.first
-            eventsSeparatorHeight = newValue.second.second
+            listHeight = newValue.second.first
+            listSeparatorHeight = newValue.second.second
         }
     }
 
     var body: some View {
-        let expansion = min(1, max(0, eventsSeparatorHeight / EventsSeparatorMetrics.height))
-        let eventsBottomInset = safeInsets.bottom * expansion
-        let eventsPaneHeight = (eventsHeight + safeInsets.bottom) * expansion
-        let displayedEventsHeight = max(0, eventsHeight * expansion)
-        let eventsTopInset = min(EventsSeparatorMetrics.overlap, displayedEventsHeight)
+        let expansion = min(1, max(0, listSeparatorHeight / ListSeparatorMetrics.height))
+        let listPaneHeight = (listHeight + safeInsets.bottom) * expansion
+        let displayedListHeight = max(0, listHeight * expansion)
         let mapHeight = max(
-            0, windowSize.height - detailHeight - separatorHeight - eventsSeparatorHeight - eventsPaneHeight
+            0, windowSize.height - detailHeight - separatorHeight - listSeparatorHeight - listPaneHeight
         )
         let detailRadius = cornerRadius(height: detailHeight)
         let mapRadius = isPresented ? cornerRadius(height: mapHeight) : 0
@@ -444,7 +492,7 @@ private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View
                 .environment(\.mapContentInsets, EdgeInsets(
                     top: isPresented ? 0 : safeInsets.top,
                     leading: safeInsets.leading,
-                    bottom: max(safeInsets.bottom * (1 - expansion), EventsSeparatorMetrics.overlap * expansion),
+                    bottom: max(safeInsets.bottom * (1 - expansion), ListSeparatorMetrics.overlap * expansion),
                     trailing: safeInsets.trailing
                 ))
                 .frame(maxWidth: .infinity)
@@ -453,39 +501,39 @@ private struct MapDetailArrangement<Detail: View, Events: View, MapContent: View
                 .contentShape(mapShape)
 
             Color.black
-                .frame(height: max(0, eventsSeparatorHeight))
+                .frame(height: max(0, listSeparatorHeight))
                 .accessibilityHidden(true)
 
-            Color.clear.frame(height: max(0, eventsPaneHeight))
+            Color.clear.frame(height: max(0, listPaneHeight))
         }
         .background(.black)
         .overlay(alignment: .bottom) {
-            // Keep the list mounted while its pane is closed.
-            events
-                .frame(height: max(0, displayedEventsHeight - eventsTopInset))
+            // Keep both lists mounted while their pane is closed.
+            lists
+                .frame(height: max(0, listPaneHeight))
                 .padding(EdgeInsets(
-                    top: eventsTopInset, leading: safeInsets.leading,
-                    bottom: eventsBottomInset, trailing: safeInsets.trailing
+                    top: 0, leading: safeInsets.leading,
+                    bottom: 0, trailing: safeInsets.trailing
                 ))
                 .background(Color(.secondarySystemGroupedBackground).opacity(expansion))
                 .clipShape(UnevenRoundedRectangle(
-                    topLeadingRadius: cornerRadius(height: eventsPaneHeight) * expansion,
-                    topTrailingRadius: cornerRadius(height: eventsPaneHeight) * expansion,
+                    topLeadingRadius: cornerRadius(height: listPaneHeight) * expansion,
+                    topTrailingRadius: cornerRadius(height: listPaneHeight) * expansion,
                     style: .continuous
                 ))
                 .opacity(expansion)
                 .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("map-events-pane")
-                .accessibilityHidden(isPresented || eventsSeparatorHeight == 0)
-                .allowsHitTesting(!isPresented && eventsSeparatorHeight > 0)
+                .accessibilityIdentifier(listKind == .friends ? "map-friends-pane" : "map-events-pane")
+                .accessibilityHidden(isPresented || listSeparatorHeight == 0)
+                .allowsHitTesting(!isPresented && listSeparatorHeight > 0)
         }
         .overlay(alignment: .top) {
-            if eventsSeparatorHeight > 0 {
+            if listSeparatorHeight > 0 {
                 // Keep the hit target larger than the visible black separator.
-                eventsHandle(displayedEventsHeight)
-                    .frame(height: EventsSeparatorMetrics.hitHeight)
-                    .offset(y: windowSize.height - eventsPaneHeight
-                        - eventsSeparatorHeight / 2 - EventsSeparatorMetrics.hitHeight / 2)
+                listHandle(displayedListHeight)
+                    .frame(height: ListSeparatorMetrics.hitHeight)
+                    .offset(y: windowSize.height - listPaneHeight
+                        - listSeparatorHeight / 2 - ListSeparatorMetrics.hitHeight / 2)
                     .opacity(expansion)
                     .accessibilityHidden(isPresented)
                     .allowsHitTesting(!isPresented)

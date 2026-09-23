@@ -367,11 +367,11 @@ final class MapSocialGestureUITests: XCTestCase {
         let mapFrame = map.frame
         let nativeSize = app.maps.firstMatch.frame.size
         closeFriendSheet()
-        for (panel, field) in [("friends", "Code ami")] {
+        for panel in ["friends"] {
             app.buttons["motion-dock-" + panel].tap()
-            XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 3))
+            assertFriendsListIsHittable(true)
             app.buttons["motion-dock-explore"].tap()
-            XCTAssertTrue(app.textFields[field].waitForNonExistence(timeout: 3))
+            assertFriendsListIsHittable(false)
             XCTAssertFalse(detailPane.exists)
             XCTAssertEqual(map.frame, mapFrame)
             XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
@@ -393,10 +393,10 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertTrue(revealEvent(2).isSelected)
         assertEventsBelowMap(nativeSize: nativeSize)
         app.buttons["motion-dock-friends"].tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(true)
         XCTAssertFalse(eventsButton.isSelected)
-        app.buttons["motion-dock-explore"].tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForNonExistence(timeout: 3))
+        eventsButton.tap()
+        assertFriendsListIsHittable(false)
         XCTAssertTrue(revealEvent(2).isSelected)
         XCTAssertTrue(eventsButton.isSelected)
         eventsButton.tap()
@@ -652,9 +652,9 @@ final class MapSocialGestureUITests: XCTestCase {
         let nativeSize = app.maps.firstMatch.frame.size
         XCTAssertFalse(eventRow(1).isHittable)
         app.buttons["motion-dock-friends"].tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(true)
         XCTAssertFalse(eventsButton.isSelected)
-        app.buttons["motion-dock-explore"].tap()
+        eventsButton.tap()
         XCTAssertTrue(row.isSelected)
         app.buttons["map-own-profile"].tap()
         let ownSheet = app.descendants(matching: .any)["own-profile-scroll"].firstMatch
@@ -859,9 +859,9 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertNotEqual(requestedIDs(), firstIDs)
         XCTAssertLessThan(requestedIDs().components(separatedBy: ",").count, 18)
         app.buttons["motion-dock-friends"].tap()
-        XCTAssertTrue(app.textFields["Code ami"].waitForExistence(timeout: 3))
+        assertFriendsListIsHittable(true)
         XCTAssertFalse(eventsButton.isSelected)
-        app.buttons["motion-dock-explore"].tap()
+        eventsButton.tap()
         XCTAssertTrue(probe.waitForExistence(timeout: 3))
         XCTAssertTrue((probe.value as? String ?? "").contains("suspended=true"))
         XCTAssertFalse(requestedIDs().isEmpty)
@@ -1174,6 +1174,25 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertEqual(map.frame.minY, window.minY, accuracy: 1)
         XCTAssertEqual(map.frame.maxY, window.maxY, accuracy: 1)
         XCTAssertEqual(map.frame.width, window.width, accuracy: 1)
+    }
+
+    private func assertFriendsListIsHittable(
+        _ expected: Bool,
+        timeout: TimeInterval = 3,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let predicate = NSPredicate { _, _ in
+            let list = self.friendsList
+            return (list.exists && list.isHittable) == expected
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed,
+                       file: file, line: line)
+    }
+
+    private var friendsList: XCUIElement {
+        app.descendants(matching: .any)["friends-expanded-list"].firstMatch
     }
 
     private var eventList: XCUIElement {

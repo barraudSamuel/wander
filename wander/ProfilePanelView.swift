@@ -9,6 +9,7 @@ struct ProfilePanelView: View {
     @Binding var displayName: String
     @Binding var avatarID: String
     @Binding var profileColorHex: String
+    @Binding var friendCodeInput: String
     @ObservedObject var locationTracker: LocationTracker
     @ObservedObject private var authenticationService = FirebaseService.shared
     @ObservedObject private var friendSyncService = FriendSyncService.shared
@@ -35,6 +36,8 @@ struct ProfilePanelView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
+
+                friendSections
 
                 Section {
                     Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
@@ -240,11 +243,12 @@ struct ProfilePanelView: View {
         }
         .alert(
             "Impossible de terminer l’action",
-            isPresented: accountActionErrorPresented
+            isPresented: profileActionErrorPresented
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(accountActionErrorMessage ?? "Réessaie dans quelques instants.")
+            Text(accountActionErrorMessage ?? friendSyncService.errorMessage
+                ?? "Réessaie dans quelques instants.")
         }
     }
 
@@ -312,12 +316,108 @@ struct ProfilePanelView: View {
         )
     }
 
-    private var accountActionErrorPresented: Binding<Bool> {
+    // MARK: - Friend invitations
+
+    @ViewBuilder
+    private var friendSections: some View {
+        Section("Ton code ami") {
+            if friendSyncService.isPreparingProfile {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Création de ton code…")
+                        .foregroundStyle(.secondary)
+                }
+            } else if let friendCode = friendSyncService.friendCode, !friendCode.isEmpty {
+                HStack {
+                    Text(friendCode)
+                        .font(.title3.weight(.semibold))
+                        .monospaced()
+                        .textSelection(.enabled)
+
+                    Spacer()
+
+                    Button {
+                        UIPasteboard.general.string = friendCode
+                    } label: {
+                        Label("Copier", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderless)
+                }
+
+                ShareLink(item: shareMessage(for: friendCode)) {
+                    Label("Partager mon code", systemImage: "square.and.arrow.up")
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(
+                        "Code indisponible",
+                        systemImage: "exclamationmark.circle"
+                    )
+                    .foregroundStyle(.secondary)
+
+                    Button("Réessayer") {
+                        friendSyncService.retryProfileSetup()
+                    }
+                }
+            }
+        }
+
+        Section("Ajouter un ami") {
+            TextField("Code ami", text: $friendCodeInput)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .submitLabel(.send)
+                .onSubmit(sendFriendRequest)
+
+            Button(action: sendFriendRequest) {
+                if friendSyncService.isProcessingFriendAction {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Label("Ajouter un ami", systemImage: "person.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                friendCodeInput.isEmpty
+                    || !friendSyncService.isProfileReady
+                    || friendSyncService.isProcessingFriendAction
+            )
+        }
+    }
+
+    private func shareMessage(for friendCode: String) -> String {
+        "Ajoute-moi sur Wander avec le code \(friendCode)."
+    }
+
+    private func sendFriendRequest() {
+        guard friendSyncService.isProfileReady,
+              !friendCodeInput.isEmpty,
+              !friendSyncService.isProcessingFriendAction else { return }
+        let submittedCode = friendCodeInput
+
+        friendSyncService.sendFriendRequest(code: submittedCode) { didSend in
+            guard didSend else { return }
+
+            DispatchQueue.main.async {
+                if friendCodeInput == submittedCode {
+                    friendCodeInput = ""
+                }
+            }
+        }
+    }
+
+    private var profileActionErrorPresented: Binding<Bool> {
         Binding(
-            get: { accountActionErrorMessage != nil },
+            get: { accountActionErrorMessage != nil || friendSyncService.errorMessage != nil },
             set: { isPresented in
                 if !isPresented {
-                    accountActionErrorMessage = nil
+                    if accountActionErrorMessage != nil {
+                        accountActionErrorMessage = nil
+                    } else if friendSyncService.errorMessage != nil {
+                        friendSyncService.clearError()
+                    }
                 }
             }
         )

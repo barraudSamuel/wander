@@ -1,15 +1,15 @@
 import SwiftUI
-import UIKit
 
 // MARK: - Friends
 
 struct FriendsPanelView: View {
+    @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     @ObservedObject var service: FriendSyncService
     let friends: [FriendMapSummary]
     let onShowOnMap: (FriendMapSummary) -> Void
     let onViewProfile: (String) -> Void
+    var isActive = true
 
-    @Binding var friendCodeInput: String
     @State private var processingRequestID: String?
     @State private var processingFriendUserID: String?
     @State private var friendPendingRemoval: FriendMapSummary?
@@ -17,73 +17,6 @@ struct FriendsPanelView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Ton code ami") {
-                    if service.isPreparingProfile {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text("Création de ton code…")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if let friendCode = service.friendCode, !friendCode.isEmpty {
-                        HStack {
-                            Text(friendCode)
-                                .font(.title3.weight(.semibold))
-                                .monospaced()
-                                .textSelection(.enabled)
-
-                            Spacer()
-
-                            Button {
-                                UIPasteboard.general.string = friendCode
-                            } label: {
-                                Label("Copier", systemImage: "doc.on.doc")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-
-                        ShareLink(item: shareMessage(for: friendCode)) {
-                            Label("Partager mon code", systemImage: "square.and.arrow.up")
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label(
-                                "Code indisponible",
-                                systemImage: "exclamationmark.circle"
-                            )
-                            .foregroundStyle(.secondary)
-
-                            Button("Réessayer") {
-                                service.retryProfileSetup()
-                            }
-                        }
-                    }
-                }
-
-                Section("Ajouter un ami") {
-                    TextField("Code ami", text: $friendCodeInput)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                        .submitLabel(.send)
-                        .onSubmit(sendFriendRequest)
-
-                    Button(action: sendFriendRequest) {
-                        if service.isProcessingFriendAction
-                            && processingRequestID == nil {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                        } else {
-                            Label("Ajouter un ami", systemImage: "person.badge.plus")
-                                .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        friendCodeInput.isEmpty
-                            || !service.isProfileReady
-                            || service.isProcessingFriendAction
-                    )
-                }
-
                 if !service.incomingRequests.isEmpty {
                     Section("Demandes reçues") {
                         ForEach(service.incomingRequests) { request in
@@ -198,6 +131,10 @@ struct FriendsPanelView: View {
                     }
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
+            .accessibilityIdentifier("friends-expanded-list")
             .toolbar(.hidden, for: .navigationBar)
             .scrollDismissesKeyboard(.interactively)
             .alert(
@@ -235,7 +172,7 @@ struct FriendsPanelView: View {
     private var errorIsPresented: Binding<Bool> {
         Binding(
             get: {
-                service.errorMessage != nil
+                isActive && service.errorMessage != nil
             },
             set: { isPresented in
                 if !isPresented {
@@ -248,7 +185,7 @@ struct FriendsPanelView: View {
     private var removalAlertIsPresented: Binding<Bool> {
         Binding(
             get: {
-                friendPendingRemoval != nil
+                isActive && friendPendingRemoval != nil
             },
             set: { isPresented in
                 if !isPresented {
@@ -263,27 +200,6 @@ struct FriendsPanelView: View {
             return "Retirer cet ami ?"
         }
         return "Retirer \(friendPendingRemoval.displayName) de tes amis ?"
-    }
-
-    private func shareMessage(for friendCode: String) -> String {
-        "Ajoute-moi sur Wander avec le code \(friendCode)."
-    }
-
-    private func sendFriendRequest() {
-        guard service.isProfileReady,
-              !friendCodeInput.isEmpty,
-              !service.isProcessingFriendAction else { return }
-        let submittedCode = friendCodeInput
-
-        service.sendFriendRequest(code: submittedCode) { didSend in
-            guard didSend else { return }
-
-            DispatchQueue.main.async {
-                if friendCodeInput == submittedCode {
-                    friendCodeInput = ""
-                }
-            }
-        }
     }
 
     private func process(_ request: FriendRequest, accepting: Bool) {
@@ -411,4 +327,3 @@ private struct FriendRow: View {
     }()
 
 }
-

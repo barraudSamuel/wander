@@ -2,6 +2,17 @@ import SwiftData
 import SwiftUI
 import UIKit
 
+private struct MapNavigationBottomInsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var mapNavigationBottomInset: CGFloat {
+        get { self[MapNavigationBottomInsetKey.self] }
+        set { self[MapNavigationBottomInsetKey.self] = newValue }
+    }
+}
+
 /// Keeps one map hierarchy beneath the system tab bar while tabs select panels.
 struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
     @Binding var selection: MotionDockSelection
@@ -38,6 +49,7 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
     private func rootView(context: Context) -> AnyView {
         AnyView(content()
             .environment(\.modelContext, context.environment.modelContext)
+            .environment(\.mapNavigationBottomInset, contentInsets.bottom)
             .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: contentInsets.top) }
             .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: contentInsets.bottom) }
             .safeAreaInset(edge: .leading, spacing: 0) { Color.clear.frame(width: contentInsets.left) }
@@ -210,16 +222,15 @@ final class NativeMapTabController: UIViewController {
 
     private func reportContentInsets() {
         let safeFrame = view.safeAreaLayoutGuide.layoutFrame
-        let navigationContentFrame = tabsController.view.convert(
-            tabsController.contentLayoutGuide.layoutFrame, to: view
-        )
-        guard navigationContentFrame.height > 0 else { return }
-        // Reserve the resting geometry, not the glass interaction's transformed frame.
+        let tabBar = tabsController.tabBar
+        let tabBarFrame = tabBar.convert(tabBar.bounds, to: view)
+        guard tabBarFrame.height > 0 else { return }
+        // The content guide ends below the floating bar's top edge.
         let buttonTop = eventsButton.bounds.height > 0
             ? eventsButton.center.y - eventsButton.bounds.height / 2 - 8
             : safeFrame.maxY
         let bottom = min(
-            safeFrame.maxY, navigationContentFrame.maxY, buttonTop,
+            safeFrame.maxY, tabBarFrame.minY, buttonTop,
             view.keyboardLayoutGuide.layoutFrame.minY
         )
         let insets = UIEdgeInsets(

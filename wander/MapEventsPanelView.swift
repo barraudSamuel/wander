@@ -91,6 +91,7 @@ enum MapEventListPresentation {
 
 /// The list stays mounted while hidden so reopening preserves its scroll position.
 struct MapEventsPanelView: View {
+    @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     @ScaledMetric(relativeTo: .caption) private var avatarSize: CGFloat = 18
     @State private var visibleEventIDs: Set<String> = []
 
@@ -139,6 +140,7 @@ struct MapEventsPanelView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
         .accessibilityIdentifier("events-expanded-list")
     }
 

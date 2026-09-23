@@ -86,8 +86,8 @@ final class MapViewportViewTests: XCTestCase {
         let map = MKMapView()
         let viewport = MapViewportView(mapView: map, renderSize: size)
 
-        // Include intermediate drag samples, detents and the closed pane.
-        let heights: [CGFloat] = [680, 317, 300, 243, 180, 140, 475, 317, 680]
+        // Include drags, event/friend list switches, a profile suspension and closure.
+        let heights: [CGFloat] = [680, 317, 300, 243, 180, 140, 475, 340, 260, 475, 260, 680, 260, 680]
         for height in heights {
             viewport.frame = CGRect(x: 0, y: 0, width: 375, height: height)
             viewport.layoutIfNeeded()
