@@ -15,6 +15,10 @@ les extensions ont les CFBundleVersion 15 et 27, contre 42 pour l’application.
 Les valeurs viennent de `CURRENT_PROJECT_VERSION` dans
 `wander.xcodeproj/project.pbxproj`, non modifié par la suppression du rail.
 
+Reconfirmé le 23 septembre pendant la validation du détail événement : extensions
+15 et 27, application 46. Compilation réussie, journal
+`/tmp/wander-event-detail-build.log`. Ce changement ne modifie pas les versions.
+
 ## Critères d’acceptation
 
 - [ ] Aligner les versions après approbation d’un plan dédié.

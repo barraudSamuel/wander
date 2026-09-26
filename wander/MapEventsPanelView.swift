@@ -105,17 +105,47 @@ struct MapEventsPanelView: View {
     var onSetAttendance: (String, Bool) -> Void = { _, _ in }
     var onEdit: (String) -> Void = { _ in }
     var onOpenDirections: (String) -> Void = { _ in }
+    let onBack: () -> Void
     let onSelect: (String) -> Void
 
     private var requestedRosterEventIDs: Set<String> {
-        guard isListActive else { return [] }
+        guard isListActive, selectedOuting == nil else { return [] }
         return visibleEventIDs.intersection(outings.keys)
+    }
+
+    private var selectedOuting: MapOutingPlan? {
+        selectedEventID.flatMap { outings[$0] }
+    }
+
+    private var navigationPath: Binding<[String]> {
+        Binding(
+            get: { selectedOuting.map { [$0.plan.id] } ?? [] },
+            set: { path in
+                if path.isEmpty { onBack() }
+            }
+        )
     }
 
     var body: some View {
         let orderedOutings = MapEventListPresentation.sortedOutings(Array(outings.values))
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            detailedList(orderedOutings, now: context.date)
+        NavigationStack(path: navigationPath) {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                detailedList(orderedOutings, now: context.date)
+            }
+            .navigationTitle("Événements")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: String.self) { eventID in
+                if let outing = outings[eventID] {
+                    MapEventDetailView(
+                        outing: outing,
+                        onSetAttendance: { onSetAttendance(eventID, $0) },
+                        onEdit: { onEdit(eventID) },
+                        onOpenDirections: { onOpenDirections(eventID) }
+                    )
+                    .toolbar(.visible, for: .navigationBar)
+                }
+            }
         }
         .onChange(of: requestedRosterEventIDs, initial: true) { _, ids in
             onVisibleEventIDsChange(ids)
@@ -177,7 +207,7 @@ struct MapEventsPanelView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("event-detail-row-" + outing.plan.id)
-        .accessibilityHint("Centrer la carte. Maintenir pour les actions de l’événement.")
+        .accessibilityHint("Ouvrir le détail de l’événement. Maintenir pour les actions.")
         .accessibilityAddTraits(selectedEventID == outing.plan.id ? .isSelected : [])
         .contextMenu {
             eventActions(for: outing)

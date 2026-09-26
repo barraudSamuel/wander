@@ -470,10 +470,10 @@ struct ContentView: View {
                     outingComposerVisible = true
                 },
                 onOpenDirections: presentOutingNavigationOptions,
-                onSelect: { eventID in
-                    selectedMapDetail = .outing(eventID)
-                    centerOnOutingPlanEventID = eventID
-                }
+                onBack: {
+                    if selectedMapDetail?.outingEventID != nil { selectedMapDetail = nil }
+                },
+                onSelect: { selectOuting($0, centerOnMap: true) }
             )
         } friends: {
             FriendsPanelView(
@@ -515,10 +515,7 @@ struct ContentView: View {
                     onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
                     onSelectFriend: presentMapFriendProfile,
                     onViewFriendProfile: presentMapFriendProfile,
-                    onSelectOutingPlan: { eventID in
-                        guard !isProfileAccountFlowActive else { return }
-                        selectedMapDetail = .outing(eventID)
-                    },
+                    onSelectOutingPlan: { selectOuting($0, centerOnMap: false) },
                     onCreateEvent: { coordinate in
                         guard !isProfileAccountFlowActive,
                               CLLocationCoordinate2DIsValid(coordinate),
@@ -686,6 +683,13 @@ struct ContentView: View {
     private func presentNavigationOptions(_ userID: String) {
         guard currentNavigationDestination(for: userID) != nil else { return }
         friendNavigationSelection = FriendSelection(userID: userID)
+    }
+
+    private func selectOuting(_ eventID: String, centerOnMap: Bool) {
+        guard !isProfileAccountFlowActive, mapOutingPlans[eventID] != nil else { return }
+        bottomList = .events
+        selectedMapDetail = .outing(eventID)
+        if centerOnMap { centerOnOutingPlanEventID = eventID }
     }
 
     private func presentOutingNavigationOptions(eventID: String) {

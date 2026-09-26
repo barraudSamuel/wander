@@ -22,6 +22,7 @@ struct DebugSocialMapScenarioView: View {
     @State private var bottomList: MapBottomList? = {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("-debug-dock-friends") { return .friends }
+        if arguments.contains("-debug-social-map-open-event") { return .events }
         return nil
     }()
     @State private var friendCode = ""
@@ -255,7 +256,11 @@ private struct DebugSocialMapScene: View {
                 },
                 onEdit: { id in editingEvent = plans[id] },
                 onOpenDirections: { _ in showsDirections = true },
+                onBack: {
+                    if selectedDetail?.outingEventID != nil { selectedDetail = nil }
+                },
                 onSelect: { id in
+                    bottomList = .events
                     selectedDetail = .outing(id)
                     centerOnEvent = id
                 }
@@ -518,7 +523,10 @@ private struct DebugSocialMapScene: View {
             showsHeatMap: heatMapEnabled,
             onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
             onSelectFriend: { selectedDetail = .friend($0) },
-            onSelectOutingPlan: { selectedDetail = .outing($0) }
+            onSelectOutingPlan: {
+                bottomList = .events
+                selectedDetail = .outing($0)
+            }
         )
         .overlay(alignment: .topTrailing) {
             MapImageButton(assetName: "TabIconProfile", label: "Mon profil") {
