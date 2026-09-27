@@ -130,34 +130,13 @@ final class PassiveMapTapObserver: UIGestureRecognizer {
     }
 }
 
-struct MapUserCalloutInfo: Equatable {
+struct MapUserPresenceInfo: Equatable {
     let displayName: String
     let relationshipText: String
-    let isExplorationLoaded: Bool
-    let cityProgress: CityProgress?
-    let totalExploredCellCount: Int
-    let coordinate: MapUserCoordinate?
     let locationSampledAt: Date?
     let spotEnteredAt: Date?
     let isLocationFresh: Bool
     let keepsSpotDurationVisible: Bool
-}
-
-private struct FriendCalloutActions {
-    let join: () -> Void
-    let viewProfile: () -> Void
-}
-
-private enum UserLocationCalloutContent {
-    case information
-    case friendActions(FriendCalloutActions)
-
-    var showsFriendActions: Bool {
-        if case .friendActions = self {
-            return true
-        }
-        return false
-    }
 }
 
 struct FriendNavigationDestination: Equatable {
@@ -182,10 +161,6 @@ struct MapUserCoordinate: Equatable {
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-    }
-
-    func distance(to other: MapUserCoordinate) -> CLLocationDistance {
-        location.distance(from: other.location)
     }
 
     var cacheKey: NSString {
@@ -549,33 +524,10 @@ final class UserLocationAnnotationView: MKAnnotationView {
     private let avatarImageView = UIImageView()
     private let locationRefreshIndicator = UIActivityIndicatorView(style: .medium)
     private var configuredAvatarID: String?
-    private var configuredCalloutInfo: MapUserCalloutInfo?
+    private var configuredPresenceInfo: MapUserPresenceInfo?
     private var configuredIsRefreshingLocation = false
     private var isSocialClusterFocused = false
-    private var calloutContent = UserLocationCalloutContent.information
     private var presenceRefreshTimer: Timer?
-    private var addressRequest: MKReverseGeocodingRequest?
-    private var addressCoordinate: MapUserCoordinate?
-    private var addressResolutionState = AddressResolutionState.idle
-    private var copyConfirmationResetWorkItem: DispatchWorkItem?
-    private lazy var copyAddressButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
-        button.setImage(UIImage(systemName: "doc.on.doc"), for: .normal)
-        button.accessibilityLabel = "Copier l’adresse"
-        button.accessibilityHint = "Copie la dernière adresse connue"
-        return button
-    }()
-
-    private static let addressRefreshDistance: CLLocationDistance = 20
-
-    private enum AddressResolutionState {
-        case idle
-        case loading
-        case resolved(String)
-        case unavailable
-    }
-
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         configureView()
@@ -613,52 +565,32 @@ final class UserLocationAnnotationView: MKAnnotationView {
             Self.avatarVisualSize / 2
     }
 
-    override func setSelected(_ selected: Bool, animated: Bool) {
-        let wasSelected = isSelected
-        super.setSelected(selected, animated: animated)
-        guard selected != wasSelected else { return }
-
-        if selected {
-            refreshCallout()
-        } else {
-            pauseAddressResolution()
-        }
-    }
-
     override func prepareForReuse() {
         super.prepareForReuse()
         stopPresenceRefreshTimer()
-        resetAddressResolution()
-        configuredCalloutInfo = nil
+        configuredPresenceInfo = nil
         configuredIsRefreshingLocation = false
         configuredAvatarID = nil
         isSocialClusterFocused = false
         avatarImageView.image = nil
         avatarImageView.alpha = 1
         locationRefreshIndicator.stopAnimating()
-        calloutContent = .information
         circularPresenceTextView.text = nil
         applySocialClusterPresentation()
     }
 
     deinit {
         presenceRefreshTimer?.invalidate()
-        addressRequest?.cancel()
-        copyConfirmationResetWorkItem?.cancel()
     }
 
     fileprivate func configure(
         avatarID: String,
         profileColorHex: String,
-        calloutInfo: MapUserCalloutInfo,
-        calloutContent: UserLocationCalloutContent = .information,
+        presenceInfo: MapUserPresenceInfo,
         isRefreshingLocation: Bool = false
     ) {
-        let calloutModeChanged = self.calloutContent.showsFriendActions
-            != calloutContent.showsFriendActions
         let refreshStateChanged = configuredIsRefreshingLocation
             != isRefreshingLocation
-        self.calloutContent = calloutContent
         configuredIsRefreshingLocation = isRefreshingLocation
 
         let resolvedAvatar = ProfileAvatar(rawValue: avatarID)
@@ -678,38 +610,21 @@ final class UserLocationAnnotationView: MKAnnotationView {
             locationRefreshIndicator.stopAnimating()
         }
 
-        if configuredCalloutInfo != calloutInfo
-            || calloutModeChanged
+        if configuredPresenceInfo != presenceInfo
             || refreshStateChanged {
-            if shouldResetAddress(for: calloutInfo.coordinate) {
-                resetAddressResolution()
-            }
-            configuredCalloutInfo = calloutInfo
-            pinBackgroundView.alpha = calloutInfo.isLocationFresh ? 1 : 0.5
+            configuredPresenceInfo = presenceInfo
+            pinBackgroundView.alpha = presenceInfo.isLocationFresh ? 1 : 0.5
             refreshPresencePresentation()
-            refreshCallout()
-            accessibilityLabel = "\(calloutInfo.displayName), \(calloutInfo.relationshipText)"
+            accessibilityLabel = "\(presenceInfo.displayName), \(presenceInfo.relationshipText)"
             accessibilityValue = isRefreshingLocation
                 ? "Actualisation de la position en cours"
-                : Self.locationAccessibilityText(for: calloutInfo)
-            accessibilityHint = calloutContent.showsFriendActions
-                ? "Touchez pour afficher les actions de cet ami"
-                : "Touchez pour afficher l’adresse et les informations d’exploration"
+                : Self.locationAccessibilityText(for: presenceInfo)
             accessibilityTraits = .button
         }
     }
 
-    private func shouldResetAddress(
-        for coordinate: MapUserCoordinate?
-    ) -> Bool {
-        guard let addressCoordinate else { return false }
-        guard let coordinate else { return true }
-        return addressCoordinate.distance(to: coordinate)
-            >= Self.addressRefreshDistance
-    }
-
     private static func locationAccessibilityText(
-        for info: MapUserCalloutInfo
+        for info: MapUserPresenceInfo
     ) -> String? {
         let presenceSampledAt = info.isLocationFresh
             ? info.locationSampledAt
@@ -738,27 +653,26 @@ final class UserLocationAnnotationView: MKAnnotationView {
     }
 
     private func refreshPresencePresentation() {
-        guard let configuredCalloutInfo else {
+        guard let configuredPresenceInfo else {
             circularPresenceTextView.text = nil
             stopPresenceRefreshTimer()
             return
         }
 
-        let circularText = configuredCalloutInfo.isLocationFresh
+        let circularText = configuredPresenceInfo.isLocationFresh
             && !isSocialClusterFocused
             ? Self.circularDurationText(
-                enteredAt: configuredCalloutInfo.spotEnteredAt,
-                sampledAt: configuredCalloutInfo.locationSampledAt,
+                enteredAt: configuredPresenceInfo.spotEnteredAt,
+                sampledAt: configuredPresenceInfo.locationSampledAt,
                 relativeTo: Date(),
                 keepsSpotDurationVisible:
-                    configuredCalloutInfo.keepsSpotDurationVisible
+                    configuredPresenceInfo.keepsSpotDurationVisible
             )
             : nil
-        let didChange = circularPresenceTextView.text != circularText
         circularPresenceTextView.text = circularText
         circularPresenceTextView.isHidden = circularText == nil
         accessibilityValue = Self.locationAccessibilityText(
-            for: configuredCalloutInfo
+            for: configuredPresenceInfo
         )
 
         if circularText == nil {
@@ -766,164 +680,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
         } else {
             ensurePresenceRefreshTimer()
         }
-
-        if isSelected, didChange {
-            refreshCallout()
-        }
-    }
-
-    private func refreshCallout() {
-        guard canShowCallout, let configuredCalloutInfo else { return }
-        detailCalloutAccessoryView = makeCalloutDetailView(
-            for: configuredCalloutInfo,
-            addressText: addressText
-        )
-
-        if calloutContent.showsFriendActions {
-            rightCalloutAccessoryView = nil
-            return
-        }
-
-        updateCopyAddressAccessory()
-        resolveAddressIfNeeded(for: configuredCalloutInfo)
-    }
-
-    func copyResolvedAddressToPasteboard() {
-        guard case .resolved(let address) = addressResolutionState else {
-            return
-        }
-
-        UIPasteboard.general.string = address
-        copyConfirmationResetWorkItem?.cancel()
-        copyAddressButton.setImage(
-            UIImage(systemName: "checkmark"),
-            for: .normal
-        )
-        copyAddressButton.accessibilityLabel = "Adresse copiée"
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        UIAccessibility.post(
-            notification: .announcement,
-            argument: "Adresse copiée"
-        )
-
-        let resetWorkItem = DispatchWorkItem { [weak self] in
-            self?.resetCopyAddressButtonAppearance()
-        }
-        copyConfirmationResetWorkItem = resetWorkItem
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + 1.5,
-            execute: resetWorkItem
-        )
-    }
-
-    private func updateCopyAddressAccessory() {
-        guard case .resolved = addressResolutionState else {
-            copyConfirmationResetWorkItem?.cancel()
-            copyConfirmationResetWorkItem = nil
-            resetCopyAddressButtonAppearance()
-            rightCalloutAccessoryView = nil
-            return
-        }
-
-        if rightCalloutAccessoryView !== copyAddressButton {
-            resetCopyAddressButtonAppearance()
-            rightCalloutAccessoryView = copyAddressButton
-        }
-    }
-
-    private func resetCopyAddressButtonAppearance() {
-        copyAddressButton.setImage(
-            UIImage(systemName: "doc.on.doc"),
-            for: .normal
-        )
-        copyAddressButton.accessibilityLabel = "Copier l’adresse"
-    }
-
-    private var addressText: String? {
-        switch addressResolutionState {
-        case .idle:
-            nil
-        case .loading:
-            "Recherche de la dernière adresse…"
-        case .resolved(let address):
-            "Dernière adresse connue : \(address)"
-        case .unavailable:
-            "Adresse de la dernière position indisponible"
-        }
-    }
-
-    private func resolveAddressIfNeeded(for info: MapUserCalloutInfo) {
-        guard isSelected,
-              case .idle = addressResolutionState,
-              let coordinate = info.coordinate else {
-            return
-        }
-
-        if let cachedAddress = MapProfileAddress.cache.object(
-            forKey: coordinate.cacheKey
-        ) {
-            addressCoordinate = coordinate
-            addressResolutionState = .resolved(cachedAddress as String)
-            refreshCallout()
-            return
-        }
-
-        guard let request = MKReverseGeocodingRequest(
-            location: coordinate.location
-        ) else {
-            addressResolutionState = .unavailable
-            refreshCallout()
-            return
-        }
-
-        addressCoordinate = coordinate
-        addressResolutionState = .loading
-        addressRequest = request
-        refreshCallout()
-
-        request.getMapItems { [weak self] mapItems, _ in
-            guard let self,
-                  self.addressRequest === request,
-                  self.addressCoordinate == coordinate else {
-                return
-            }
-
-            self.addressRequest = nil
-            if let address = MapProfileAddress.formattedAddress(from: mapItems) {
-                MapProfileAddress.cache.setObject(
-                    address as NSString,
-                    forKey: coordinate.cacheKey
-                )
-                self.addressResolutionState = .resolved(address)
-            } else {
-                self.addressResolutionState = .unavailable
-            }
-
-            if self.isSelected {
-                self.refreshCallout()
-            }
-        }
-    }
-
-    private func pauseAddressResolution() {
-        if case .loading = addressResolutionState {
-            addressRequest?.cancel()
-            addressRequest = nil
-            addressResolutionState = .idle
-        } else if case .unavailable = addressResolutionState {
-            addressResolutionState = .idle
-        }
-    }
-
-    private func resetAddressResolution() {
-        addressRequest?.cancel()
-        addressRequest = nil
-        addressCoordinate = nil
-        addressResolutionState = .idle
-        copyConfirmationResetWorkItem?.cancel()
-        copyConfirmationResetWorkItem = nil
-        resetCopyAddressButtonAppearance()
-        rightCalloutAccessoryView = nil
     }
 
     private func configureView() {
@@ -945,7 +701,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
         calloutOffset = .zero
         backgroundColor = .clear
         clipsToBounds = false
-        canShowCallout = true
+        canShowCallout = false
         collisionMode = .circle
         clusteringIdentifier = nil
         displayPriority = .required
@@ -984,243 +740,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
         displayPriority = .required
     }
 
-    private func makeCalloutDetailView(
-        for info: MapUserCalloutInfo,
-        addressText: String?
-    ) -> UIView {
-        if calloutContent.showsFriendActions {
-            return makeFriendActionView(for: info)
-        }
-
-        let label = UILabel()
-        label.numberOfLines = 0
-        label.preferredMaxLayoutWidth = 230
-        label.adjustsFontForContentSizeCategory = true
-
-        let content = NSMutableAttributedString()
-        content.append(
-            NSAttributedString(
-                string: info.relationshipText.uppercased(),
-                attributes: [
-                    .font: UIFont.preferredFont(forTextStyle: .caption2),
-                    .foregroundColor: UIColor.secondaryLabel
-                ]
-            )
-        )
-        content.append(NSAttributedString(string: "\n"))
-
-        let progressText: String
-        let progressDetailText: String
-        if !info.isExplorationLoaded {
-            progressText = "Exploration indisponible"
-            progressDetailText = "La progression n’a pas encore été chargée"
-        } else if let progress = info.cityProgress {
-            let percentage = progress.percentage.formatted(
-                .percent.precision(.fractionLength(1))
-            )
-            progressText = "\(percentage) exploré"
-            progressDetailText = [
-                progress.cityName,
-                "\(progress.exploredCells.formatted()) / \(progress.totalCells.formatted()) zones"
-            ].joined(separator: " · ")
-        } else {
-            progressText = Self.exploredZoneText(info.totalExploredCellCount)
-            progressDetailText = "Progression par ville indisponible"
-        }
-
-        content.append(
-            NSAttributedString(
-                string: progressText,
-                attributes: [
-                    .font: UIFont.preferredFont(forTextStyle: .headline),
-                    .foregroundColor: UIColor.label
-                ]
-            )
-        )
-        content.append(NSAttributedString(string: "\n"))
-        content.append(
-            NSAttributedString(
-                string: progressDetailText,
-                attributes: [
-                    .font: UIFont.preferredFont(forTextStyle: .caption1),
-                    .foregroundColor: UIColor.secondaryLabel
-                ]
-            )
-        )
-
-        if let addressText {
-            content.append(NSAttributedString(string: "\n"))
-            content.append(
-                NSAttributedString(
-                    string: addressText,
-                    attributes: [
-                        .font: UIFont.preferredFont(forTextStyle: .caption1),
-                        .foregroundColor: UIColor.label
-                    ]
-                )
-            )
-        }
-
-        let presenceText = Self.presenceText(
-            enteredAt: info.spotEnteredAt,
-            sampledAt: info.locationSampledAt,
-            relativeTo: Date(),
-            keepsSpotDurationVisible: info.keepsSpotDurationVisible
-        )
-        if let presenceText {
-            content.append(NSAttributedString(string: "\n"))
-            content.append(
-                NSAttributedString(
-                    string: presenceText,
-                    attributes: [
-                        .font: UIFont.preferredFont(forTextStyle: .caption1),
-                        .foregroundColor: UIColor.secondaryLabel
-                    ]
-                )
-            )
-        }
-
-        if let locationText = Self.locationText(sampledAt: info.locationSampledAt) {
-            content.append(NSAttributedString(string: "\n"))
-            content.append(
-                NSAttributedString(
-                    string: locationText,
-                    attributes: [
-                        .font: UIFont.preferredFont(forTextStyle: .caption1),
-                        .foregroundColor: UIColor.tertiaryLabel
-                    ]
-                )
-            )
-        }
-
-        label.attributedText = content
-        label.accessibilityLabel = [
-            info.relationshipText,
-            progressText,
-            progressDetailText,
-            addressText,
-            presenceText,
-            Self.locationText(sampledAt: info.locationSampledAt)
-        ]
-        .compactMap { $0 }
-        .joined(separator: ", ")
-
-        return label
-    }
-
-    private func makeFriendActionView(for info: MapUserCalloutInfo) -> UIView {
-        let joinButton = UIButton(type: .system)
-        var joinConfiguration = UIButton.Configuration.plain()
-        joinConfiguration.image = UIImage(systemName: "map")
-        joinConfiguration.baseForegroundColor = .label
-        joinConfiguration.preferredSymbolConfigurationForImage =
-            UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        joinConfiguration.contentInsets = .zero
-        joinButton.configuration = joinConfiguration
-        joinButton.isEnabled = info.coordinate != nil
-        joinButton.accessibilityLabel = "Itinéraire vers \(info.displayName)"
-        joinButton.accessibilityHint = "Choisir une application pour afficher l’itinéraire"
-        joinButton.addTarget(
-            self,
-            action: #selector(joinButtonTapped),
-            for: .touchUpInside
-        )
-
-        let profileButton = UIButton(type: .system)
-        var profileConfiguration = UIButton.Configuration.plain()
-        profileConfiguration.image = UIImage(systemName: "person.crop.circle")
-        profileConfiguration.baseForegroundColor = .label
-        profileConfiguration.preferredSymbolConfigurationForImage =
-            UIImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        profileConfiguration.contentInsets = .zero
-        profileButton.configuration = profileConfiguration
-        profileButton.accessibilityLabel = "Voir le profil de \(info.displayName)"
-        profileButton.accessibilityHint = "Afficher les informations de cet ami"
-        profileButton.addTarget(
-            self,
-            action: #selector(profileButtonTapped),
-            for: .touchUpInside
-        )
-
-        let separator = UIView()
-        separator.backgroundColor = .separator
-        separator.widthAnchor.constraint(equalToConstant: 0.5).isActive = true
-        separator.heightAnchor.constraint(equalToConstant: 24).isActive = true
-
-        let actionStack = UIStackView(
-            arrangedSubviews: [joinButton, separator, profileButton]
-        )
-        actionStack.axis = .horizontal
-        actionStack.alignment = .center
-        actionStack.spacing = 0
-        actionStack.isLayoutMarginsRelativeArrangement = true
-        actionStack.directionalLayoutMargins = NSDirectionalEdgeInsets(
-            top: 4,
-            leading: 2,
-            bottom: 4,
-            trailing: 2
-        )
-
-        for button in [joinButton, profileButton] {
-            button.widthAnchor.constraint(equalToConstant: 44).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        }
-
-        let presenceText = info.isLocationFresh
-            ? Self.presenceText(
-                enteredAt: info.spotEnteredAt,
-                sampledAt: info.locationSampledAt,
-                relativeTo: Date(),
-                keepsSpotDurationVisible: info.keepsSpotDurationVisible
-            )
-            : nil
-        guard let statusText = presenceText
-            ?? Self.locationText(sampledAt: info.locationSampledAt) else {
-            return actionStack
-        }
-
-        let statusLabel = UILabel()
-        statusLabel.text = statusText
-        statusLabel.font = .preferredFont(forTextStyle: .caption1)
-        statusLabel.textColor = .secondaryLabel
-        statusLabel.numberOfLines = 0
-        statusLabel.textAlignment = .center
-        statusLabel.adjustsFontForContentSizeCategory = true
-        statusLabel.accessibilityLabel = statusText
-
-        let stack = UIStackView(arrangedSubviews: [statusLabel, actionStack])
-        stack.axis = .vertical
-        stack.alignment = .center
-        stack.spacing = 2
-        return stack
-    }
-
-    @objc private func joinButtonTapped() {
-        guard let configuredCalloutInfo,
-              configuredCalloutInfo.coordinate != nil else {
-            return
-        }
-        guard case .friendActions(let actions) = calloutContent else { return }
-        actions.join()
-    }
-
-    @objc private func profileButtonTapped() {
-        guard configuredCalloutInfo != nil else { return }
-        guard case .friendActions(let actions) = calloutContent else { return }
-        actions.viewProfile()
-    }
-
-    private static func exploredZoneText(_ count: Int) -> String {
-        switch count {
-        case 0:
-            "Aucune zone explorée"
-        case 1:
-            "1 zone explorée"
-        default:
-            "\(count.formatted()) zones explorées"
-        }
-    }
-
     private static func locationText(sampledAt: Date?) -> String? {
         guard let sampledAt else { return nil }
 
@@ -1243,7 +762,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
             relativeTo: referenceDate,
             keepsSpotDurationVisible: keepsSpotDurationVisible
         ) else { return nil }
-        return "Au même endroit depuis \(durationText(duration))"
+        return "Au même endroit depuis \(FriendPresenceFormatting.durationText(duration))"
     }
 
     private static func circularDurationText(
@@ -1292,23 +811,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
             return nil
         }
         return max(0, referenceDate.timeIntervalSince(enteredAt))
-    }
-
-    private static func durationText(_ duration: TimeInterval) -> String {
-        let totalMinutes = max(0, Int(duration / 60))
-        guard totalMinutes > 0 else { return "moins d’1 min" }
-
-        let days = totalMinutes / (24 * 60)
-        let hours = (totalMinutes % (24 * 60)) / 60
-        let minutes = totalMinutes % 60
-
-        if days > 0 {
-            return hours > 0 ? "\(days) j \(hours) h" : "\(days) j"
-        }
-        if hours > 0 {
-            return minutes > 0 ? "\(hours) h \(minutes) min" : "\(hours) h"
-        }
-        return "\(minutes) min"
     }
 
     private static let maximumPresenceSampleAge: TimeInterval = 5 * 60
@@ -1438,9 +940,6 @@ struct MapWithFogView: UIViewRepresentable {
     /// Events belonging to the account and accepted friends, keyed by event ID.
     var outingPlans: [String: MapOutingPlan] = [:]
 
-    /// Exploration progress for the current user's city.
-    var userExplorationProgress: CityProgress?
-
     var userDisplayName = ""
     var userAvatarID = ""
     var userProfileColorHex = ""
@@ -1481,17 +980,11 @@ struct MapWithFogView: UIViewRepresentable {
     /// Monotonic token that must change whenever heat-map values change.
     var heatMapRevision: Int = 0
 
-    /// Presents external navigation choices for the selected friend.
-    var onJoinFriend: (String) -> Void = { _ in }
-
     /// Opens the personal map profile.
     var onSelectOwnProfile: () -> Void = {}
 
     /// Opens the profile and requests a location update when a friend is selected.
     var onSelectFriend: (String) -> Void = { _ in }
-
-    /// Opens the profile information for the selected friend.
-    var onViewFriendProfile: (String) -> Void = { _ in }
 
     /// Presents the information for the selected outing.
     var onSelectOutingPlan: (String) -> Void = { _ in }
@@ -1566,10 +1059,8 @@ struct MapWithFogView: UIViewRepresentable {
         viewport.renderSize = mapRenderSize
         viewport.contentInsets = viewportContentInsets
         let uiView = viewport.mapView
-        context.coordinator.onJoinFriend = onJoinFriend
         context.coordinator.onSelectOwnProfile = onSelectOwnProfile
         context.coordinator.onSelectFriend = onSelectFriend
-        context.coordinator.onViewFriendProfile = onViewFriendProfile
         context.coordinator.refreshingFriendUserIDs =
             refreshingFriendLocationUserIDs
         context.coordinator.onSelectOutingPlan = onSelectOutingPlan
@@ -1694,9 +1185,7 @@ struct MapWithFogView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             fogColor: fogColor,
-            onJoinFriend: onJoinFriend,
             onSelectFriend: onSelectFriend,
-            onViewFriendProfile: onViewFriendProfile,
             onSelectOutingPlan: onSelectOutingPlan,
             onDeselectOutingPlan: onDeselectOutingPlan,
             onCreateEvent: onCreateEvent
@@ -1739,15 +1228,9 @@ struct MapWithFogView: UIViewRepresentable {
         let resolvedDisplayName = trimmedDisplayName.isEmpty
             ? "Explorer"
             : trimmedDisplayName
-        let calloutInfo = MapUserCalloutInfo(
+        let presenceInfo = MapUserPresenceInfo(
             displayName: resolvedDisplayName,
             relationshipText: "Vous",
-            isExplorationLoaded: true,
-            cityProgress: userExplorationProgress,
-            totalExploredCellCount: discoveredCellIDs.count,
-            coordinate: locationTracker.lastLocation.map {
-                MapUserCoordinate($0.coordinate)
-            },
             locationSampledAt: locationTracker.lastLocation?.timestamp,
             spotEnteredAt: locationTracker.currentSpotEnteredAt,
             isLocationFresh: true,
@@ -1758,7 +1241,7 @@ struct MapWithFogView: UIViewRepresentable {
             displayName: resolvedDisplayName,
             avatarID: userAvatarID,
             profileColorHex: userProfileColorHex,
-            calloutInfo: calloutInfo,
+            presenceInfo: presenceInfo,
             on: mapView
         )
 
@@ -1804,7 +1287,7 @@ struct MapWithFogView: UIViewRepresentable {
             coordinator.friendAnnotations.removeValue(forKey: userID)
             coordinator.friendAvatarIDByUserID.removeValue(forKey: userID)
             coordinator.friendProfileColorHexByUserID.removeValue(forKey: userID)
-            coordinator.friendCalloutInfoByUserID.removeValue(forKey: userID)
+            coordinator.friendPresenceInfoByUserID.removeValue(forKey: userID)
         }
 
         // Incrementally add or move annotations for accepted friends' last locations.
@@ -1818,19 +1301,15 @@ struct MapWithFogView: UIViewRepresentable {
             let isLocationFresh = freshFriendLocationUserIDs.contains(
                 friendLocation.userID
             )
-            let calloutInfo = MapUserCalloutInfo(
+            let presenceInfo = MapUserPresenceInfo(
                 displayName: friendLocation.displayName,
                 relationshipText: "Ami",
-                isExplorationLoaded: false,
-                cityProgress: nil,
-                totalExploredCellCount: 0,
-                coordinate: MapUserCoordinate(friendLocation.coordinate),
                 locationSampledAt: friendLocation.sampledAt,
                 spotEnteredAt: friendLocation.spotEnteredAt,
                 isLocationFresh: isLocationFresh,
                 keepsSpotDurationVisible: isLocationFresh
             )
-            coordinator.friendCalloutInfoByUserID[friendLocation.userID] = calloutInfo
+            coordinator.friendPresenceInfoByUserID[friendLocation.userID] = presenceInfo
 
             if let existing = coordinator.friendAnnotations[friendLocation.userID] {
                 if existing.coordinate.latitude != friendLocation.coordinate.latitude
@@ -1845,7 +1324,7 @@ struct MapWithFogView: UIViewRepresentable {
                         annotationView,
                         avatarID: friendLocation.avatarID,
                         profileColorHex: friendLocation.profileColorHex,
-                        calloutInfo: calloutInfo,
+                        presenceInfo: presenceInfo,
                         isRefreshingLocation: refreshingFriendLocationUserIDs
                             .contains(friendLocation.userID)
                     )
@@ -2092,7 +1571,9 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.lastRequestedDetailSelection = requested
         if let requested {
             coordinator.userCamera.stopFollowing()
-            coordinator.socialProximityController.select(requested, on: mapView)
+            coordinator.socialProximityController.select(
+                requested, on: mapView, silently: selectedOutingPlanEventID != nil
+            )
         } else {
             coordinator.socialProximityController.collapse(on: mapView)
         }
@@ -2133,7 +1614,8 @@ struct MapWithFogView: UIViewRepresentable {
         )
         context.coordinator.socialProximityController.select(
             .outing(eventID),
-            on: mapView
+            on: mapView,
+            silently: true
         )
     }
 
@@ -2247,21 +1729,19 @@ struct MapWithFogView: UIViewRepresentable {
         private var userDisplayName = ""
         private var userAvatarID = ""
         private var userProfileColorHex = ""
-        private var userCalloutInfo: MapUserCalloutInfo?
+        private var userPresenceInfo: MapUserPresenceInfo?
         var friendAnnotations: [String: FriendLocationAnnotation] = [:]
         var friendAvatarIDByUserID: [String: String] = [:]
         var friendProfileColorHexByUserID: [String: String] = [:]
-        var friendCalloutInfoByUserID: [String: MapUserCalloutInfo] = [:]
+        var friendPresenceInfoByUserID: [String: MapUserPresenceInfo] = [:]
         var refreshingFriendUserIDs: Set<String> = []
         fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
         fileprivate var draftOutingAnnotation: DraftOutingAnnotation?
         fileprivate var lastFocusedDraftCoordinate: MapUserCoordinate?
         fileprivate var lastRequestedDetailSelection: MapSocialClusterMemberID?
         let friendCamera = MapFriendCameraController()
-        var onJoinFriend: (String) -> Void
         var onSelectOwnProfile: () -> Void = {}
         var onSelectFriend: (String) -> Void
-        var onViewFriendProfile: (String) -> Void
         var onSelectOutingPlan: (String) -> Void
         var onDeselectOutingPlan: (String) -> Void
         var onCreateEvent: (CLLocationCoordinate2D) -> Void
@@ -2270,6 +1750,7 @@ struct MapWithFogView: UIViewRepresentable {
             PassiveMapTapObserver?
         private weak var pressedSocialAnnotationView: MKAnnotationView?
         private var pressedSocialAnnotationOriginalAlpha: CGFloat?
+        private var pressedSocialAnnotationWasSelected = false
         private var isPressingMapBackground = false
         private var socialPressGeneration: UInt64 = 0
         private var suppressedNativeSelectionAnnotationID: ObjectIdentifier?
@@ -2324,17 +1805,13 @@ struct MapWithFogView: UIViewRepresentable {
 
         init(
             fogColor: UIColor,
-            onJoinFriend: @escaping (String) -> Void,
             onSelectFriend: @escaping (String) -> Void,
-            onViewFriendProfile: @escaping (String) -> Void,
             onSelectOutingPlan: @escaping (String) -> Void,
             onDeselectOutingPlan: @escaping (String) -> Void,
             onCreateEvent: @escaping (CLLocationCoordinate2D) -> Void
         ) {
             self.fogColor = fogColor
-            self.onJoinFriend = onJoinFriend
             self.onSelectFriend = onSelectFriend
-            self.onViewFriendProfile = onViewFriendProfile
             self.onSelectOutingPlan = onSelectOutingPlan
             self.onDeselectOutingPlan = onDeselectOutingPlan
             self.onCreateEvent = onCreateEvent
@@ -2464,7 +1941,7 @@ struct MapWithFogView: UIViewRepresentable {
                 }
 
                 if let friend = member as? FriendLocationAnnotation {
-                    let info = friendCalloutInfoByUserID[friend.userID]
+                    let info = friendPresenceInfoByUserID[friend.userID]
                     people.append(
                         MapSocialClusterPersonPresentation(
                             id: friend.userID,
@@ -2640,7 +2117,7 @@ struct MapWithFogView: UIViewRepresentable {
 
                 switch target {
                 case .friend(let userID):
-                    guard let calloutInfo = friendCalloutInfoByUserID[userID]
+                    guard let presenceInfo = friendPresenceInfoByUserID[userID]
                     else {
                         continue
                     }
@@ -2652,12 +2129,12 @@ struct MapWithFogView: UIViewRepresentable {
                         mapView: mapView
                     )
                     indicatorView.configure(
-                        displayName: calloutInfo.displayName,
+                        displayName: presenceInfo.displayName,
                         avatarID: friendAvatarIDByUserID[userID]
                             ?? ProfileAvatar.generatedID(seed: userID),
                         profileColorHex: friendProfileColorHexByUserID[userID]
                             ?? ProfileColor.generatedHex(seed: userID),
-                        isLocationFresh: calloutInfo.isLocationFresh,
+                        isLocationFresh: presenceInfo.isLocationFresh,
                         directionName: placement.directionName,
                         pointerAngle: placement.pointerAngle
                     )
@@ -2934,6 +2411,7 @@ struct MapWithFogView: UIViewRepresentable {
             case .annotation(let annotationView):
                 pressedSocialAnnotationView = annotationView
                 pressedSocialAnnotationOriginalAlpha = annotationView.alpha
+                pressedSocialAnnotationWasSelected = annotationView.isSelected
                 UIView.animate(
                     withDuration: 0.06,
                     delay: 0,
@@ -2982,10 +2460,16 @@ struct MapWithFogView: UIViewRepresentable {
                 return
             }
 
+            let wasSelectedAtTouchStart = pressedSocialAnnotationWasSelected
             restorePressedSocialAnnotationAppearance(animated: true)
             guard !mapView.selectedAnnotations.contains(where: {
                 ($0 as AnyObject) === (annotation as AnyObject)
             }) else {
+                // A repeated event tap reveals its card again. A first tap may
+                // already have been delivered by MapKit during this touch.
+                if wasSelectedAtTouchStart, let outing = annotation as? OutingPlanAnnotation {
+                    onSelectOutingPlan(outing.eventID)
+                }
                 return
             }
             activateSocialAnnotation(
@@ -3000,6 +2484,7 @@ struct MapWithFogView: UIViewRepresentable {
 
         private func restorePressedSocialAnnotationAppearance(animated: Bool) {
             isPressingMapBackground = false
+            pressedSocialAnnotationWasSelected = false
             guard let annotationView = pressedSocialAnnotationView,
                   let originalAlpha = pressedSocialAnnotationOriginalAlpha else {
                 pressedSocialAnnotationView = nil
@@ -3207,13 +2692,9 @@ struct MapWithFogView: UIViewRepresentable {
                 annotationView.configure(
                     avatarID: userAvatarID,
                     profileColorHex: userProfileColorHex,
-                    calloutInfo: userCalloutInfo ?? MapUserCalloutInfo(
+                    presenceInfo: userPresenceInfo ?? MapUserPresenceInfo(
                         displayName: userDisplayName,
                         relationshipText: "Vous",
-                        isExplorationLoaded: true,
-                        cityProgress: nil,
-                        totalExploredCellCount: 0,
-                        coordinate: nil,
                         locationSampledAt: nil,
                         spotEnteredAt: nil,
                         isLocationFresh: true,
@@ -3312,14 +2793,10 @@ struct MapWithFogView: UIViewRepresentable {
                 ?? ProfileAvatar.generatedID(seed: userID)
             let profileColorHex = friendProfileColorHexByUserID[userID]
                 ?? ProfileColor.generatedHex(seed: userID)
-            let calloutInfo = friendCalloutInfoByUserID[userID]
-                ?? MapUserCalloutInfo(
+            let presenceInfo = friendPresenceInfoByUserID[userID]
+                ?? MapUserPresenceInfo(
                     displayName: displayName,
                     relationshipText: "Ami",
-                    isExplorationLoaded: false,
-                    cityProgress: nil,
-                    totalExploredCellCount: 0,
-                    coordinate: nil,
                     locationSampledAt: nil,
                     spotEnteredAt: nil,
                     isLocationFresh: false,
@@ -3329,7 +2806,7 @@ struct MapWithFogView: UIViewRepresentable {
                 annotationView,
                 avatarID: avatarID,
                 profileColorHex: profileColorHex,
-                calloutInfo: calloutInfo,
+                presenceInfo: presenceInfo,
                 isRefreshingLocation: refreshingFriendUserIDs.contains(userID)
             )
             annotationView.setSocialClusterFocus(
@@ -3354,13 +2831,19 @@ struct MapWithFogView: UIViewRepresentable {
             if consumeSuppressedNativeSelection(for: annotation) {
                 return
             }
-            activateSocialAnnotation(annotation, view: view, on: mapView)
+            let isProgrammaticOutingSelection = annotation is OutingPlanAnnotation
+                && socialProximityController.isSilentPendingSelection(annotation)
+            activateSocialAnnotation(
+                annotation, view: view, on: mapView,
+                notifyOutingSelection: !isProgrammaticOutingSelection
+            )
         }
 
         private func activateSocialAnnotation(
             _ annotation: any MKAnnotation,
             view: MKAnnotationView,
-            on mapView: MKMapView
+            on mapView: MKMapView,
+            notifyOutingSelection: Bool = true
         ) {
             // MapKit can finish selecting this friend after its pin enters view.
             if !socialProximityController.isFocused(annotation) {
@@ -3378,7 +2861,7 @@ struct MapWithFogView: UIViewRepresentable {
             case .friend(let userID):
                 onSelectFriend(userID)
             case .outing(let eventID):
-                onSelectOutingPlan(eventID)
+                if notifyOutingSelection { onSelectOutingPlan(eventID) }
             }
         }
 
@@ -3387,23 +2870,11 @@ struct MapWithFogView: UIViewRepresentable {
             socialProximityController.didDeselect(annotation, on: mapView)
         }
 
-        func mapView(
-            _ mapView: MKMapView,
-            annotationView view: MKAnnotationView,
-            calloutAccessoryControlTapped control: UIControl
-        ) {
-            guard control === view.rightCalloutAccessoryView,
-                  let annotationView = view as? UserLocationAnnotationView else {
-                return
-            }
-            annotationView.copyResolvedAddressToPasteboard()
-        }
-
         func updateUserMarkerAppearance(
             displayName: String,
             avatarID: String,
             profileColorHex: String,
-            calloutInfo: MapUserCalloutInfo,
+            presenceInfo: MapUserPresenceInfo,
             on mapView: MKMapView
         ) {
             let normalizedAvatarID = ProfileAvatar.normalizedID(avatarID)
@@ -3415,12 +2886,12 @@ struct MapWithFogView: UIViewRepresentable {
             guard userDisplayName != displayName ||
                     userAvatarID != normalizedAvatarID ||
                     userProfileColorHex != normalizedProfileColorHex ||
-                    userCalloutInfo != calloutInfo else { return }
+                    userPresenceInfo != presenceInfo else { return }
 
             userDisplayName = displayName
             userAvatarID = normalizedAvatarID
             userProfileColorHex = normalizedProfileColorHex
-            userCalloutInfo = calloutInfo
+            userPresenceInfo = presenceInfo
 
             guard let annotation = userLocationAnnotation,
                   let annotationView = mapView.view(for: annotation)
@@ -3429,7 +2900,7 @@ struct MapWithFogView: UIViewRepresentable {
             annotationView.configure(
                 avatarID: normalizedAvatarID,
                 profileColorHex: normalizedProfileColorHex,
-                calloutInfo: calloutInfo
+                presenceInfo: presenceInfo
             )
             annotationView.accessibilityHint = "Ouvrir mon profil"
         }
@@ -3438,31 +2909,19 @@ struct MapWithFogView: UIViewRepresentable {
             _ annotationView: MKAnnotationView,
             avatarID: String,
             profileColorHex: String,
-            calloutInfo: MapUserCalloutInfo,
+            presenceInfo: MapUserPresenceInfo,
             isRefreshingLocation: Bool
         ) {
             guard let annotationView = annotationView as? UserLocationAnnotationView,
-                  let friendAnnotation = annotationView.annotation
-                    as? FriendLocationAnnotation else {
+                  annotationView.annotation is FriendLocationAnnotation else {
                 return
             }
-            let userID = friendAnnotation.userID
             annotationView.canShowCallout = false
 
             annotationView.configure(
                 avatarID: avatarID,
                 profileColorHex: profileColorHex,
-                calloutInfo: calloutInfo,
-                calloutContent: .friendActions(
-                    FriendCalloutActions(
-                        join: { [weak self] in
-                            self?.onJoinFriend(userID)
-                        },
-                        viewProfile: { [weak self] in
-                            self?.onViewFriendProfile(userID)
-                        }
-                    )
-                ),
+                presenceInfo: presenceInfo,
                 isRefreshingLocation: isRefreshingLocation
             )
             annotationView.accessibilityHint = "Afficher le profil de cet ami"

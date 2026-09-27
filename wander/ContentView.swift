@@ -123,6 +123,7 @@ struct ContentView: View {
     @State private var centerOnFriendUserID: String?
     @State private var centerOnOutingPlanEventID: String?
     @State private var selectedMapDetail: MapDetailSelection?
+    @State private var eventScrollRequest: MapEventScrollRequest?
     @State private var visibleRosterEventIDs: Set<String> = []
     @State private var heatMapEnabled = false
     @State private var cityProgress: CityProgress?
@@ -302,9 +303,6 @@ struct ContentView: View {
             synchronizeOutingAttendanceObservation()
             reconcileSelectedOutingPlan()
         }
-        .onChange(of: selectedOutingPlanEventID) {
-            synchronizeOutingAttendanceObservation()
-        }
         .onChange(of: visibleRosterEventIDs) {
             synchronizeOutingAttendanceObservation()
         }
@@ -444,21 +442,19 @@ struct ContentView: View {
         let outingPlans = mapOutingPlans
 
         return MapDetailSplitView(
-            isPresented: false,
             bottomList: $bottomList,
             areListsObscured: selectedMapDetail?.profile != nil
         ) {
-            EmptyView()
-        } events: {
             MapEventsPanelView(
                 outings: outingPlans,
-                selectedEventID: selectedOutingPlanEventID,
+                scrollRequest: eventScrollRequest,
                 currentLocation: locationTracker.lastLocation,
                 isLoading: outingPlanService.isLoading,
                 hasLoadError: outingPlanService.hasLoadError,
                 onRetry: { outingPlanService.retryFailedObservations() },
                 isListActive: areEventsPresented && scenePhase == .active,
                 onVisibleEventIDsChange: { visibleRosterEventIDs = $0 },
+                onShowOnMap: showOutingOnMap,
                 onSetAttendance: { eventID, shouldAttend in
                     setOutingAttendance(shouldAttend, eventID: eventID)
                 },
@@ -469,11 +465,7 @@ struct ContentView: View {
                     outingComposerDetent = .large
                     outingComposerVisible = true
                 },
-                onOpenDirections: presentOutingNavigationOptions,
-                onBack: {
-                    if selectedMapDetail?.outingEventID != nil { selectedMapDetail = nil }
-                },
-                onSelect: { selectOuting($0, centerOnMap: true) }
+                onOpenDirections: presentOutingNavigationOptions
             )
         } friends: {
             FriendsPanelView(
@@ -495,7 +487,6 @@ struct ContentView: View {
                     refreshingFriendLocationUserIDs:
                         locationPushService.refreshingFriendUserIDs,
                     outingPlans: outingPlans,
-                    userExplorationProgress: cityProgress,
                     userDisplayName: displayName,
                     userAvatarID: avatarID,
                     userProfileColorHex: profileColorHex,
@@ -511,11 +502,9 @@ struct ContentView: View {
                     showsHeatMap: heatMapEnabled,
                     heatMapCellData: locationTracker.heatMapCellData,
                     heatMapRevision: locationTracker.heatMapRevision,
-                    onJoinFriend: presentNavigationOptions,
                     onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
                     onSelectFriend: presentMapFriendProfile,
-                    onViewFriendProfile: presentMapFriendProfile,
-                    onSelectOutingPlan: { selectOuting($0, centerOnMap: false) },
+                    onSelectOutingPlan: selectOuting,
                     onCreateEvent: { coordinate in
                         guard !isProfileAccountFlowActive,
                               CLLocationCoordinate2DIsValid(coordinate),
@@ -685,11 +674,17 @@ struct ContentView: View {
         friendNavigationSelection = FriendSelection(userID: userID)
     }
 
-    private func selectOuting(_ eventID: String, centerOnMap: Bool) {
+    private func selectOuting(_ eventID: String) {
         guard !isProfileAccountFlowActive, mapOutingPlans[eventID] != nil else { return }
         bottomList = .events
         selectedMapDetail = .outing(eventID)
-        if centerOnMap { centerOnOutingPlanEventID = eventID }
+        eventScrollRequest = MapEventScrollRequest(eventID: eventID)
+    }
+
+    private func showOutingOnMap(_ eventID: String) {
+        guard !isProfileAccountFlowActive, mapOutingPlans[eventID] != nil else { return }
+        selectedMapDetail = .outing(eventID)
+        centerOnOutingPlanEventID = eventID
     }
 
     private func presentOutingNavigationOptions(eventID: String) {
@@ -1099,52 +1094,19 @@ struct ContentView: View {
         ) { result, friend in
             result[friend.userID] = friend
         }
-        func attendees(for plan: OutingPlan) -> [MapOutingAttendee] {
-            outingAttendanceService.visibleAttendances(for: plan)
-            .filter {
-                plan.ownerID != currentUserID
-                    || acceptedFriendUserIDs.contains($0.participantID)
-            }
-            .map { attendance in
-                MapOutingAttendee(
-                    userID: attendance.participantID,
-                    displayName: attendance.displayName,
-                    avatarID: attendance.avatarID
-                )
-            }
-            .sorted { lhs, rhs in
-                let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
-                    rhs.displayName
-                )
-                if comparison != .orderedSame {
-                    return comparison == .orderedAscending
+        func visiblePeople(_ people: [MapOutingAttendee], for plan: OutingPlan) -> [MapOutingAttendee] {
+            people
+                .filter {
+                    plan.ownerID != currentUserID
+                        || acceptedFriendsByUserID[$0.userID] != nil
                 }
-                return lhs.userID < rhs.userID
-            }
-        }
-
-        func declines(for plan: OutingPlan) -> [MapOutingAttendee] {
-            outingAttendanceService.visibleDeclines(for: plan)
-            .filter {
-                plan.ownerID != currentUserID
-                    || acceptedFriendUserIDs.contains($0.participantID)
-            }
-            .map { decline in
-                MapOutingAttendee(
-                    userID: decline.participantID,
-                    displayName: decline.displayName,
-                    avatarID: decline.avatarID
-                )
-            }
-            .sorted { lhs, rhs in
-                let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
-                    rhs.displayName
-                )
-                if comparison != .orderedSame {
-                    return comparison == .orderedAscending
+                .sorted { lhs, rhs in
+                    let comparison = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                    if comparison != .orderedSame {
+                        return comparison == .orderedAscending
+                    }
+                    return lhs.userID < rhs.userID
                 }
-                return lhs.userID < rhs.userID
-            }
         }
 
         return outingPlanService.events.reduce(
@@ -1152,6 +1114,18 @@ struct ContentView: View {
         ) { result, entry in
             let (eventID, plan) = entry
             let ownerID = plan.ownerID
+            let attendees = visiblePeople(
+                outingAttendanceService.visibleAttendances(for: plan).map {
+                    MapOutingAttendee(userID: $0.participantID, displayName: $0.displayName, avatarID: $0.avatarID)
+                },
+                for: plan
+            )
+            let declines = visiblePeople(
+                outingAttendanceService.visibleDeclines(for: plan).map {
+                    MapOutingAttendee(userID: $0.participantID, displayName: $0.displayName, avatarID: $0.avatarID)
+                },
+                for: plan
+            )
             if ownerID == currentUserID {
                 result[eventID] = MapOutingPlan(
                     plan: plan,
@@ -1170,8 +1144,8 @@ struct ContentView: View {
                         eventIDValue: eventID
                     ),
                     participationState: .notRequested,
-                    attendees: attendees(for: plan),
-                    declines: declines(for: plan),
+                    attendees: attendees,
+                    declines: declines,
                     isAttendanceUpdating: false
                 )
                 return
@@ -1199,8 +1173,8 @@ struct ContentView: View {
                         eventIDValue: eventID,
                         publicationIDValue: plan.publicationIDValue
                     ),
-                attendees: attendees(for: plan),
-                declines: declines(for: plan),
+                attendees: attendees,
+                declines: declines,
                 isAttendanceUpdating:
                     outingAttendanceService.updatingEventIDs.contains(eventID)
             )
@@ -1239,7 +1213,6 @@ struct ContentView: View {
         outingAttendanceService.observe(
             events: outingPlanService.events,
             acceptedFriendUserIDs: acceptedFriendUserIDs,
-            selectedEventID: selectedOutingPlanEventID,
             visibleRosterEventIDs: visibleRosterEventIDs
         )
     }
@@ -1316,6 +1289,8 @@ struct ContentView: View {
                 // The account flow may have opened while the event was loading.
                 guard !isProfileAccountFlowActive else { return }
                 bottomList = .events
+                selectedMapDetail = .outing(route.eventIDValue)
+                eventScrollRequest = MapEventScrollRequest(eventID: route.eventIDValue)
                 centerOnOutingPlanEventID = route.eventIDValue
                 notificationService.consume(route)
             } catch is OutingPlanServiceError {

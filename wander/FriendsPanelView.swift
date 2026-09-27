@@ -63,29 +63,7 @@ struct FriendsPanelView: View {
                 } else {
                     ForEach(friends) { friend in
                         HStack {
-                            if friend.canShowOnMap {
-                                Button {
-                                    onShowOnMap(friend)
-                                } label: {
-                                    FriendRow(friend: friend)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(
-                                    "Afficher \(friend.displayName) sur la carte"
-                                )
-                            } else {
-                                Button {
-                                    onViewProfile(friend.userID)
-                                } label: {
-                                    FriendRow(friend: friend)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityHint("Ouvrir le profil de cet ami")
-                            }
+                            friendButton(friend)
 
                             if processingFriendUserID == friend.userID {
                                 ProgressView()
@@ -158,6 +136,28 @@ struct FriendsPanelView: View {
                 processingRequestID = nil
                 processingFriendUserID = nil
             }
+        }
+    }
+
+    @ViewBuilder
+    private func friendButton(_ friend: FriendMapSummary) -> some View {
+        let button = Button {
+            if friend.canShowOnMap {
+                onShowOnMap(friend)
+            } else {
+                onViewProfile(friend.userID)
+            }
+        } label: {
+            FriendRow(friend: friend)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        if friend.canShowOnMap {
+            button.accessibilityLabel("Afficher \(friend.displayName) sur la carte")
+        } else {
+            button.accessibilityHint("Ouvrir le profil de cet ami")
         }
     }
 
@@ -288,24 +288,7 @@ private struct FriendRow: View {
         }
 
         let duration = max(0, referenceDate.timeIntervalSince(enteredAt))
-        return "Au même endroit depuis \(Self.durationText(duration))"
-    }
-
-    private static func durationText(_ duration: TimeInterval) -> String {
-        let totalMinutes = max(0, Int(duration / 60))
-        guard totalMinutes > 0 else { return "moins d’1 min" }
-
-        let days = totalMinutes / (24 * 60)
-        let hours = (totalMinutes % (24 * 60)) / 60
-        let minutes = totalMinutes % 60
-
-        if days > 0 {
-            return hours > 0 ? "\(days) j \(hours) h" : "\(days) j"
-        }
-        if hours > 0 {
-            return minutes > 0 ? "\(hours) h \(minutes) min" : "\(hours) h"
-        }
-        return "\(minutes) min"
+        return "Au même endroit depuis \(FriendPresenceFormatting.durationText(duration))"
     }
 
     private static let maximumFutureTimestampSkew: TimeInterval = 60

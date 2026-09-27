@@ -436,6 +436,7 @@ final class OutingCategoryBadgeView: UIView {
     private let categoryBackgroundView = UIView()
     private let symbolImageView = UIImageView()
     private var participantViews: [UIView] = []
+    private var configuredParticipantAvatarIDs: [String] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -505,7 +506,10 @@ final class OutingCategoryBadgeView: UIView {
             for: backgroundColor
         )
 
-        rebuildParticipantViews(avatarIDs: participantAvatarIDs)
+        if configuredParticipantAvatarIDs != participantAvatarIDs {
+            configuredParticipantAvatarIDs = participantAvatarIDs
+            rebuildParticipantViews(avatarIDs: participantAvatarIDs)
+        }
         setNeedsLayout()
     }
 

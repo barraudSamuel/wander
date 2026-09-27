@@ -40,27 +40,6 @@ final class MapEventListPresentationTests: XCTestCase {
         }
     }
 
-    func testHighlightedTextReflowsAndClearsCachedContent() {
-        let label = MapDetailFittingLabel()
-        label.configure(
-            content: MapDetailTextContent(fragments: [
-                .avatars(["skull"]), .text(" Théo organise un "), .highlighted("☕️"),
-                .text(" au "), .highlighted("📍 Café du parc et des promenades au bord de la rivière")
-            ], accessibilityLabel: "Sortie au café"),
-            minimumFontSize: 17, appearance: .dark, contrast: .normal
-        )
-        let wide = label.fittedSize(width: 360, height: nil)
-        let narrow = label.fittedSize(width: 160, height: nil)
-        XCTAssertGreaterThan(narrow.height, wide.height)
-        XCTAssertEqual(label.fittedSize(width: 360, height: nil), wide)
-        label.configure(
-            content: MapDetailTextContent(fragments: [.text("Court")], accessibilityLabel: "Court"),
-            minimumFontSize: 17, appearance: .light, contrast: .normal
-        )
-        XCTAssertLessThan(label.fittedSize(width: 360, height: nil).height, wide.height)
-        XCTAssertEqual(label.attributedText?.string, "Court")
-    }
-
     func testSingleParticipantIncludesNameAndAvatarWithoutRepeatingOrganizer() {
         let organizer = MapOutingAttendee(userID: "owner", displayName: "Théo", avatarID: "skull")
         let person = MapOutingAttendee(userID: "guest", displayName: "Jules", avatarID: "guest-avatar")
@@ -103,31 +82,44 @@ final class MapEventListPresentationTests: XCTestCase {
         }
     }
 
-    func testCompactStatusesAndResponseGuards() {
-        for (state, title, allowed) in [
-            (OutingAttendanceParticipationState.notResponded, "À répondre", true),
-            (.attending, "J’y vais", true), (.declined, "Pas cette fois", true),
-            (.loading, "Vérification…", false), (.notRequested, "Vérification…", false),
-            (.unavailable, "Indisponible", false)
+    func testResponseGuards() {
+        for (state, allowed) in [
+            (OutingAttendanceParticipationState.notResponded, true),
+            (.attending, true), (.declined, true),
+            (.loading, false), (.notRequested, false),
+            (.unavailable, false)
         ] {
             let event = outing(number: 1, response: state)
-            XCTAssertEqual(MapEventListPresentation.compactStatus(for: event), title)
             XCTAssertEqual(MapEventListPresentation.canRespond(to: event), allowed)
         }
         let pending = outing(number: 1, response: .attending, updating: true)
         XCTAssertFalse(MapEventListPresentation.canRespond(to: pending))
-        XCTAssertEqual(MapEventListPresentation.compactStatus(for: pending), "Envoi…")
         let owner = outing(number: 1, mine: true)
         XCTAssertFalse(MapEventListPresentation.canRespond(to: owner))
-        XCTAssertEqual(MapEventListPresentation.compactStatus(for: owner), "Vous organisez")
     }
 
-    func testParticipantPreviewExcludesOrganizerDuplicatesAndStaleData() {
+    func testParticipantPreviewIncludesOrganizerOnceAndExcludesDeclinesAndStaleData() {
         let owner = MapOutingAttendee(userID: "owner", displayName: "Théo", avatarID: "skull")
         let guest = MapOutingAttendee(userID: "guest", displayName: "Jules", avatarID: "skull")
-        XCTAssertEqual(MapEventListPresentation.participants(for: outing(number: 1, attendees: [owner, guest, guest])), [guest])
-        for state in [OutingAttendanceRosterState.loading, .notRequested, .unavailable] {
-            XCTAssertTrue(MapEventListPresentation.participants(for: outing(number: 1, rosterState: state, attendees: [guest])).isEmpty)
+        let declined = MapOutingAttendee(userID: "declined", displayName: "Absent", avatarID: "skull")
+        for mine in [false, true] {
+            for (attendees, expected) in [
+                ([MapOutingAttendee](), [owner]),
+                ([guest], [owner, guest]),
+                ([owner, guest, guest], [owner, guest])
+            ] {
+                XCTAssertEqual(
+                    MapEventListPresentation.participants(
+                        for: outing(number: 1, mine: mine, attendees: attendees, declines: [declined])
+                    ),
+                    expected
+                )
+            }
+            for state in [OutingAttendanceRosterState.loading, .notRequested, .unavailable] {
+                XCTAssertTrue(MapEventListPresentation.participants(
+                    for: outing(number: 1, mine: mine, rosterState: state, attendees: [guest])
+                ).isEmpty)
+            }
         }
     }
 

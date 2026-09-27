@@ -68,3 +68,17 @@ connexion Apple. Le plan conserve les scénarios et les preuves manquantes.
 Ce premier incrément ne clôt pas la dette globale : `ContentView` et
 `FriendSyncService` n'ont pas été refactorisés et aucun sprint suivant n'est
 autorisé.
+
+### Nettoyage amis et événements — 26 septembre 2026
+
+Le [plan approuvé](../docs/plans/2026-09-26-nettoyage-affichage-social.md)
+retire le détail supérieur obsolète, son moteur de texte et les bulles MapKit
+désactivées. Les boutons amis, durées et traitements des participants/refus
+sont mutualisés. Les badges conservent leurs sous-vues d’avatars lorsque la
+liste ordonnée reste identique. Le bug de notification est hors périmètre.
+
+Parsing Swift, compilation de l’app et des tests (`build-for-testing`) et
+contrôle du diff réussis. Trois tests UIKit couvrent la réutilisation et les
+changements d’avatars ; ils sont compilés, non exécutés. Aucune validation
+interactive n’a été menée pour cet incrément, conformément à son approbation.
+Le chantier global de refactorisation reste ouvert.

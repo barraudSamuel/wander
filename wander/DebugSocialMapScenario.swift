@@ -7,7 +7,7 @@ enum DebugSocialMapScenario {
     static let isEnabled = ProcessInfo.processInfo.arguments.contains("-debug-social-map")
 }
 
-/// Uses production map, detail and composer views. Only the data source is local.
+/// Uses production map, event cards, profiles and composer views. Only the data source is local.
 struct DebugSocialMapScenarioView: View {
     enum SceneKind: String, CaseIterable, Identifiable {
         case events = "Événements"
@@ -118,6 +118,7 @@ private struct DebugSocialMapScene: View {
     @State private var resetOrientation = false
     @State private var centerOnFriend: String?
     @State private var centerOnEvent: String?
+    @State private var eventScrollRequest: MapEventScrollRequest?
     @State private var responses: [String: OutingAttendanceParticipationState] = [:]
     @State private var showsDirections = false
     @State private var opensDirectionsAfterDismiss = false
@@ -151,6 +152,9 @@ private struct DebugSocialMapScene: View {
     ) {
         self._bottomList = bottomList
         self._selectedDetail = selectedDetail
+        _eventScrollRequest = State(initialValue: selectedDetail.wrappedValue?.outingEventID.map {
+            MapEventScrollRequest(eventID: $0)
+        })
         self._friendCode = friendCode
         self.friends = Self.makeFriends(kind: kind)
         let coordinate = Self.coordinate
@@ -233,16 +237,14 @@ private struct DebugSocialMapScene: View {
 
     var body: some View {
         let presentations = presentations
+        let visibleOutings = Self.hasArgument("list-loading") || Self.hasArgument("list-error") ? [:] : presentations
         MapDetailSplitView(
-            isPresented: false,
             bottomList: $bottomList,
             areListsObscured: selectedDetail?.profile != nil
         ) {
-            EmptyView()
-        } events: {
             MapEventsPanelView(
-                outings: Self.hasArgument("list-loading") || Self.hasArgument("list-error") ? [:] : presentations,
-                selectedEventID: selectedDetail?.outingEventID,
+                outings: visibleOutings,
+                scrollRequest: eventScrollRequest,
                 currentLocation: listLocation,
                 isLoading: Self.hasArgument("list-loading"),
                 hasLoadError: Self.hasArgument("list-error") || Self.hasArgument("partial-list-error"),
@@ -251,19 +253,16 @@ private struct DebugSocialMapScene: View {
                     if bottomList != .events && ids.isEmpty { didSuspendRosters = true }
                     requestedRosterIDs = ids
                 },
+                onShowOnMap: { id in
+                    guard visibleOutings[id] != nil else { return }
+                    selectedDetail = .outing(id)
+                    centerOnEvent = id
+                },
                 onSetAttendance: { id, shouldAttend in
                     responses[id] = shouldAttend ? .attending : .declined
                 },
                 onEdit: { id in editingEvent = plans[id] },
-                onOpenDirections: { _ in showsDirections = true },
-                onBack: {
-                    if selectedDetail?.outingEventID != nil { selectedDetail = nil }
-                },
-                onSelect: { id in
-                    bottomList = .events
-                    selectedDetail = .outing(id)
-                    centerOnEvent = id
-                }
+                onOpenDirections: { _ in showsDirections = true }
             )
         } friends: {
             friendsList
@@ -382,7 +381,7 @@ private struct DebugSocialMapScene: View {
         .alert("Itinéraire de test", isPresented: $showsDirections) {
             Button("Fermer", role: .cancel) {}
         } message: {
-            Text("L’action de la fiche a été reçue par le scénario local.")
+            Text("L’action a été reçue par le scénario local.")
         }
         .sheet(item: $editingEvent) { event in
             OutingPlanComposerView(
@@ -526,6 +525,7 @@ private struct DebugSocialMapScene: View {
             onSelectOutingPlan: {
                 bottomList = .events
                 selectedDetail = .outing($0)
+                eventScrollRequest = MapEventScrollRequest(eventID: $0)
             }
         )
         .overlay(alignment: .topTrailing) {

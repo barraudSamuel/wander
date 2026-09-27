@@ -25,6 +25,7 @@ final class MapSocialProximityController {
     private var expandedGroupID: String?
     private weak var expandedView: MapSocialClusterAnnotationView?
     private var pendingSelection: MapSocialClusterMemberID?
+    private var pendingSelectionIsSilent = false
     private var selectionGeneration = 0
     private var scheduledSelectionGeneration: Int?
     private var isFittingExpandedGroup = false
@@ -262,12 +263,18 @@ final class MapSocialProximityController {
         }
     }
 
-    func select(_ memberID: MapSocialClusterMemberID, on mapView: MKMapView) {
+    func isSilentPendingSelection(_ annotation: any MKAnnotation) -> Bool {
+        guard let memberID = memberID(for: annotation) else { return false }
+        return pendingSelection == memberID && pendingSelectionIsSilent
+    }
+
+    func select(_ memberID: MapSocialClusterMemberID, on mapView: MKMapView, silently: Bool = false) {
         guard let annotation = sources[memberID],
               CLLocationCoordinate2DIsValid(annotation.coordinate) else { return }
         if isFocused(annotation), isSelected(annotation, on: mapView) {
             return
         }
+        pendingSelectionIsSilent = silently
         if pendingSelection == memberID {
             selectPendingAnnotationIfVisible(on: mapView)
             return

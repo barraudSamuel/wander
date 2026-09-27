@@ -55,6 +55,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
     private let pan = UIPanGestureRecognizer()
     private var edge: Edge?
     private var session: ZoomSession?
+    private var isZoomingIn: Bool?
     private var previousTranslationY: CGFloat = 0
     private var pendingTranslationY: CGFloat = 0
     private var focusStartedAt: CFTimeInterval = 0
@@ -119,7 +120,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
 
     static func edge(at point: CGPoint, in bounds: CGRect) -> Edge? {
         guard !bounds.isEmpty, bounds.contains(point) else { return nil }
-        let width = min(CGFloat(28), bounds.width / 2)
+        let width = min(CGFloat(44), bounds.width / 2)
         if point.x <= bounds.minX + width { return .left }
         if point.x >= bounds.maxX - width { return .right }
         return nil
@@ -176,6 +177,15 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         return MKMapPoint(x: x, y: y).coordinate
     }
 
+    static func acceleratedTranslation(_ translationY: CGFloat, velocityY: CGFloat) -> CGFloat {
+        guard translationY.isFinite else { return 0 }
+        guard velocityY.isFinite else { return translationY }
+        // Preserve precise slow gestures; smoothly reach the capped gain at 900 pt/s.
+        let progress = max(0, min(1, (abs(velocityY) - 100) / 800))
+        let gain = 1 + 2 * progress * progress * (3 - 2 * progress)
+        return translationY * gain
+    }
+
     static func distance(
         from distance: CLLocationDistance,
         translationY: CGFloat,
@@ -186,7 +196,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         // MapKit returns -1 for each default limit, even when the range is non-nil.
         let lowerBound = minimum == MKMapCameraZoomDefault ? 80 : minimum
         let upperBound = maximum == MKMapCameraZoomDefault ? 30_000_000 : maximum
-        // Each 150 points doubles or halves the distance, at every zoom level.
+        // Each 150 weighted points doubles or halves the distance, at every zoom level.
         let exponent = max(-20, min(20, Double(translationY) / 150))
         return max(lowerBound, min(upperBound, distance * pow(2, exponent)))
     }
@@ -257,9 +267,25 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    func begin(on mapView: MKMapView, at timestamp: CFTimeInterval = CACurrentMediaTime()) {
+    func begin(on mapView: MKMapView) {
         stopFocusAnimation()
         finishesAfterFocus = false
+        session = ZoomSession(camera: mapView.camera, target: nil)
+        isZoomingIn = nil
+        previousTranslationY = 0
+        pendingTranslationY = 0
+        onBegin()
+    }
+
+    private func startZoomPhase(on mapView: MKMapView, zoomingIn: Bool, at timestamp: CFTimeInterval) {
+        stopFocusAnimation()
+        // Drop any unrendered movement from the previous direction and keep the displayed camera.
+        pendingTranslationY = 0
+        isZoomingIn = zoomingIn
+        guard zoomingIn else {
+            session = ZoomSession(camera: mapView.camera, target: nil)
+            return
+        }
         let bounds = viewport?.visibleSafeMapRect ?? .zero
         let target = Self.nearestTarget(in: targets(mapView), visibleBounds: bounds)
         let focusPoint = CGPoint(x: bounds.midX, y: bounds.midY)
@@ -268,10 +294,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
             target: target,
             focusCoordinate: mapView.convert(focusPoint, toCoordinateFrom: mapView)
         )
-        previousTranslationY = 0
-        pendingTranslationY = 0
         focusStartedAt = timestamp
-        onBegin()
         if target != nil {
             onFocus()
             if !UIAccessibility.isReduceMotionEnabled {
@@ -323,13 +346,31 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
 
     private func update(on mapView: MKMapView) {
         guard session != nil, let edge else { return }
-        let translationY = pan.translation(in: mapView).y
-        pendingTranslationY += translationY - previousTranslationY
-        previousTranslationY = translationY
-        // During focus, the display link is the only camera writer for each frame.
-        if focusDisplayLink == nil { applyCamera(on: mapView, focusProgress: 1) }
+        move(on: mapView, translationY: pan.translation(in: mapView).y, velocityY: pan.velocity(in: mapView).y)
         mapView.bringSubviewToFront(feedback)
         feedback.show(at: pan.location(in: mapView), edge: edge, in: interactionBounds)
+    }
+
+    func move(
+        on mapView: MKMapView,
+        translationY: CGFloat,
+        velocityY: CGFloat,
+        at timestamp: CFTimeInterval = CACurrentMediaTime()
+    ) {
+        guard session != nil, translationY.isFinite else { return }
+        let delta = translationY - previousTranslationY
+        previousTranslationY = translationY
+        guard delta != 0 else { return }
+        let zoomingIn = delta < 0
+        if isZoomingIn != zoomingIn {
+            startZoomPhase(on: mapView, zoomingIn: zoomingIn, at: timestamp)
+        }
+        pendingTranslationY += Self.acceleratedTranslation(
+            delta,
+            velocityY: velocityY
+        )
+        // During focus, the display link is the only camera writer for each frame.
+        if focusDisplayLink == nil { applyCamera(on: mapView, focusProgress: 1) }
     }
 
     private func applyCamera(on mapView: MKMapView, focusProgress: Double) {
@@ -348,6 +389,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         stopFocusAnimation()
         finishesAfterFocus = false
         session = nil
+        isZoomingIn = nil
         edge = nil
         previousTranslationY = 0
         pendingTranslationY = 0

@@ -7,6 +7,21 @@ import XCTest
 /// Exercises the controller through real MapKit annotations, views, and delegate callbacks.
 @MainActor
 final class MapSocialProximityControllerTests: XCTestCase {
+    func testSilentEventSelectionDoesNotSilenceLaterUserCentering() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let event = fixture.annotation("Event", meters: 100)
+        fixture.update([.outing("event"): event])
+        fixture.controller.select(.outing("event"), on: fixture.mapView, silently: true)
+        XCTAssertTrue(fixture.controller.isSilentPendingSelection(event))
+
+        // Group-member and offscreen-indicator actions use center(on:).
+        fixture.controller.center(on: .outing("event"), on: fixture.mapView)
+        XCTAssertFalse(fixture.controller.isSilentPendingSelection(event))
+        fixture.controller.collapse(on: fixture.mapView)
+        XCTAssertFalse(fixture.controller.isSilentPendingSelection(event))
+    }
+
     func testProfileCameraOwnsFriendOpeningFromPinGroupAndOffscreenTarget() async throws {
         var requests: [String] = []
         let fixture = try await makeFixture(onRequestFriendProfile: { requests.append($0) })
