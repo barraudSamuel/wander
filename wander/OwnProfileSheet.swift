@@ -4,7 +4,7 @@ import SwiftUI
 /// Shares the personal summary and compact presentation across both entry points.
 struct OwnProfileSheet<ProfileContent: View>: View {
     let displayName: String
-    let avatarID: String
+    @Binding var avatarID: String
     let profileColorHex: String
     @ObservedObject var locationTracker: LocationTracker
     let cityProgress: CityProgress?
@@ -15,6 +15,7 @@ struct OwnProfileSheet<ProfileContent: View>: View {
     @State private var address: String?
     @State private var isResolvingAddress = false
     @State private var addressRequest: MKReverseGeocodingRequest?
+    @State private var avatarSelectionPresented = false
 
     private var coordinate: MapUserCoordinate? {
         locationTracker.lastLocation.map { MapUserCoordinate($0.coordinate) }
@@ -28,6 +29,26 @@ struct OwnProfileSheet<ProfileContent: View>: View {
             wrapsInScrollView: false,
             onPreparePresentation: onPreparePresentation
         )
+        .ignoresSafeArea(.container, edges: .bottom)
+        .sheet(isPresented: $avatarSelectionPresented) {
+            NavigationStack {
+                ScrollView {
+                    ProfileAvatarPicker(selection: avatarSelection)
+                        .padding()
+                }
+                .background(Color(uiColor: .systemBackground).ignoresSafeArea(edges: .bottom))
+                .navigationTitle("Choisir un avatar")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Fermer", systemImage: "xmark") {
+                            avatarSelectionPresented = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .task(id: coordinate?.cacheKey) {
             addressRequest?.cancel()
             address = nil
@@ -58,7 +79,8 @@ struct OwnProfileSheet<ProfileContent: View>: View {
                 displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? "Explorer" : displayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 avatarID: avatarID,
-                profileColorHex: profileColorHex
+                profileColorHex: profileColorHex,
+                onAvatarTap: { avatarSelectionPresented = true }
             )
 
             Label(
@@ -122,5 +144,15 @@ struct OwnProfileSheet<ProfileContent: View>: View {
         .padding(.horizontal, 24)
         .padding(.top, 24)
         .padding(.bottom, 16)
+    }
+
+    private var avatarSelection: Binding<String> {
+        Binding(
+            get: { avatarID },
+            set: { newAvatarID in
+                avatarID = newAvatarID
+                avatarSelectionPresented = false
+            }
+        )
     }
 }

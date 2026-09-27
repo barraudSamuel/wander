@@ -99,6 +99,7 @@ struct FriendProfileContentView: View {
             scrollIdentifier: "friend-profile-scroll",
             onPreparePresentation: onPreparePresentation
         )
+        .ignoresSafeArea(.container, edges: .bottom)
     }
 }
 
@@ -226,15 +227,23 @@ struct MapProfileIdentityView: View {
     let displayName: String
     let avatarID: String
     let profileColorHex: String
+    var onAvatarTap: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            FriendAvatarBadge(
-                avatarID: avatarID,
-                profileColorHex: profileColorHex,
-                size: 128
-            )
-            .accessibilityHidden(true)
+            Group {
+                if let onAvatarTap {
+                    Button(action: onAvatarTap) {
+                        avatarBadge
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Changer mon avatar")
+                    .accessibilityIdentifier("own-profile-avatar")
+                } else {
+                    avatarBadge
+                        .accessibilityHidden(true)
+                }
+            }
             .frame(maxWidth: .infinity)
             .frame(height: 176)
 
@@ -268,6 +277,14 @@ struct MapProfileIdentityView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var avatarBadge: some View {
+        FriendAvatarBadge(
+            avatarID: avatarID,
+            profileColorHex: profileColorHex,
+            size: 128
+        )
     }
 }
 
@@ -341,6 +358,7 @@ struct MapProfileNativeContent<Content: View>: UIViewControllerRepresentable {
         let visibleContent = wrapsInScrollView
             ? AnyView(ScrollView { content }
                 .scrollBounceBehavior(.basedOnSize)
+                .contentMargins(.bottom, 16, for: .scrollContent)
                 .accessibilityIdentifier(scrollIdentifier))
             : AnyView(content)
         let scroll = AnyView(visibleContent
@@ -384,6 +402,9 @@ final class FriendProfilePresentationController: UIViewController {
             host.didMove(toParent: self)
         }
         measurementHost.safeAreaRegions = []
+        // The representable fills the sheet, including its bottom inset. Let the
+        // scroll content use that space while keeping keyboard avoidance native.
+        visibleHost.safeAreaRegions = .keyboard
         measurementHost.view.isHidden = true
         measurementHost.view.isAccessibilityElement = false
     }

@@ -274,7 +274,7 @@ private struct DebugSocialMapScene: View {
                 switch selection {
                 case .currentUser:
                     OwnProfileSheet(
-                        displayName: profileName, avatarID: avatarID,
+                        displayName: profileName, avatarID: $avatarID,
                         profileColorHex: "#3478F6", locationTracker: locationTracker,
                         cityProgress: nil, isGhostModeEnabled: ghostModeEnabled,
                         onPreparePresentation: { sheetTop in
@@ -327,9 +327,6 @@ private struct DebugSocialMapScene: View {
                             Section("Affichage de la carte") {
                                 Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
                                     .accessibilityIdentifier("profile-heat-map")
-                            }
-                            Section("Avatar") {
-                                ProfileAvatarPicker(selection: $avatarID)
                             }
                             Section("Identité") {
                                 TextField("Pseudo", text: $profileName)

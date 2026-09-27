@@ -48,10 +48,6 @@ struct ProfilePanelView: View {
                     Text("Affiche les zones où tu as passé le plus de temps.")
                 }
 
-                Section("Avatar") {
-                    ProfileAvatarPicker(selection: $avatarID)
-                }
-
                 Section {
                     TextField("Pseudo", text: $displayName)
                         .textInputAutocapitalization(.words)
@@ -163,6 +159,7 @@ struct ProfilePanelView: View {
                 accountSection
             }
             .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.bottom, 16, for: .scrollContent)
             .accessibilityIdentifier("own-profile-scroll")
             .toolbar(.hidden, for: .navigationBar)
             .scrollDismissesKeyboard(.interactively)

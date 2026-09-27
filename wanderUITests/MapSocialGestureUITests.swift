@@ -65,6 +65,34 @@ final class MapSocialGestureUITests: XCTestCase {
         }
     }
 
+    func testOwnAvatarSelectionOpensSeparateSheetAndReturnsToProfile() {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
+        app.launch()
+        XCTAssertTrue(map.waitForExistence(timeout: 10))
+        app.buttons["map-own-profile"].tap()
+
+        let ownSheet = app.descendants(matching: .any)["own-profile-scroll"].firstMatch
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 5))
+        XCTAssertFalse(ownSheet.staticTexts["Avatar"].exists)
+
+        let avatarButton = app.buttons["own-profile-avatar"].firstMatch
+        XCTAssertTrue(avatarButton.waitForExistence(timeout: 3))
+        avatarButton.tap()
+
+        let title = app.navigationBars["Choisir un avatar"]
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        app.buttons["Crâne"].tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(ownSheet.exists)
+
+        avatarButton.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Crâne"].isSelected)
+        app.buttons["Fermer"].tap()
+        XCTAssertTrue(ownSheet.exists)
+    }
+
     func testOwnProfileFromGroupThenFriendProfile() {
         app.terminate()
         app.launchArguments = ["-debug-social-map", "-debug-social-map-mixed", "-debug-social-map-fullscreen"]

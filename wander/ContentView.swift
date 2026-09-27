@@ -380,7 +380,7 @@ struct ContentView: View {
                 switch selection {
                 case .currentUser:
                     OwnProfileSheet(
-                        displayName: displayName, avatarID: avatarID,
+                        displayName: displayName, avatarID: $avatarID,
                         profileColorHex: profileColorHex,
                         locationTracker: locationTracker, cityProgress: cityProgress,
                         isGhostModeEnabled: friendSyncService.isGhostModeEnabled,
