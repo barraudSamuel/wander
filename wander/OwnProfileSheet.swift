@@ -10,12 +10,13 @@ struct OwnProfileSheet<ProfileContent: View>: View {
     let cityProgress: CityProgress?
     let isGhostModeEnabled: Bool
     let onPreparePresentation: (CGFloat) -> Void
-    @ViewBuilder let content: (AnyView) -> ProfileContent
+    @ViewBuilder let content: (AnyView, Binding<Bool>) -> ProfileContent
 
     @State private var address: String?
     @State private var isResolvingAddress = false
     @State private var addressRequest: MKReverseGeocodingRequest?
     @State private var avatarSelectionPresented = false
+    @State private var settingsPresented = false
 
     private var coordinate: MapUserCoordinate? {
         locationTracker.lastLocation.map { MapUserCoordinate($0.coordinate) }
@@ -23,7 +24,7 @@ struct OwnProfileSheet<ProfileContent: View>: View {
 
     var body: some View {
         MapProfileNativeContent(
-            content: content(AnyView(profileBody)),
+            content: content(AnyView(profileBody), $settingsPresented),
             scrollIdentifier: "own-profile-scroll",
             compactContent: AnyView(profileBody),
             wrapsInScrollView: false,
@@ -36,7 +37,6 @@ struct OwnProfileSheet<ProfileContent: View>: View {
                     ProfileAvatarPicker(selection: avatarSelection)
                         .padding()
                 }
-                .background(Color(uiColor: .systemBackground).ignoresSafeArea(edges: .bottom))
                 .navigationTitle("Choisir un avatar")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -80,7 +80,8 @@ struct OwnProfileSheet<ProfileContent: View>: View {
                     ? "Explorer" : displayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 avatarID: avatarID,
                 profileColorHex: profileColorHex,
-                onAvatarTap: { avatarSelectionPresented = true }
+                onAvatarTap: { avatarSelectionPresented = true },
+                onSettingsTap: { settingsPresented = true }
             )
 
             Label(

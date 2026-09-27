@@ -284,7 +284,7 @@ private struct DebugSocialMapScene: View {
                                 target: selection, sheetTopInWindow: sheetTop
                             )
                         }
-                    ) { summary in
+                    ) { summary, settingsPresented in
                         Form {
                             Section {
                                 summary
@@ -324,26 +324,46 @@ private struct DebugSocialMapScene: View {
                                 .buttonStyle(.borderedProminent)
                                 .disabled(friendCode.isEmpty)
                             }
-                            Section("Affichage de la carte") {
-                                Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
-                                    .accessibilityIdentifier("profile-heat-map")
-                            }
-                            Section("Identité") {
-                                TextField("Pseudo", text: $profileName)
-                                    .submitLabel(.done)
-                            }
-                            Section("Visibilité auprès de mes amis") {
-                                Toggle("Mode fantôme", isOn: $ghostModeEnabled)
-                            }
-                            Section("Compte") {
-                                Button("Confirmation de test") { profileConfirmation = true }
-                            }
                         }
                         .contentMargins(.top, 0, for: .scrollContent)
                         .scrollDismissesKeyboard(.interactively)
                         .accessibilityIdentifier("own-profile-scroll")
-                        .alert("Action de test", isPresented: $profileConfirmation) {
-                            Button("Annuler", role: .cancel) {}
+                        .sheet(isPresented: settingsPresented) {
+                            NavigationStack {
+                                Form {
+                                    Section("Affichage de la carte") {
+                                        Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
+                                            .accessibilityIdentifier("profile-heat-map")
+                                    }
+                                    Section("Identité") {
+                                        TextField("Pseudo", text: $profileName)
+                                            .submitLabel(.done)
+                                    }
+                                    Section("Visibilité auprès de mes amis") {
+                                        Toggle("Mode fantôme", isOn: $ghostModeEnabled)
+                                    }
+                                    Section("Compte") {
+                                        Button("Confirmation de test") {
+                                            profileConfirmation = true
+                                        }
+                                    }
+                                }
+                                .navigationTitle("Réglages")
+                                .navigationBarTitleDisplayMode(.inline)
+                                .toolbar {
+                                    ToolbarItem(placement: .topBarTrailing) {
+                                        Button("Fermer", systemImage: "xmark") {
+                                            settingsPresented.wrappedValue = false
+                                        }
+                                        .disabled(profileConfirmation)
+                                    }
+                                }
+                            }
+                            .presentationDetents([.medium, .large])
+                            .interactiveDismissDisabled(profileConfirmation)
+                            .alert("Action de test", isPresented: $profileConfirmation) {
+                                Button("Annuler", role: .cancel) {}
+                            }
                         }
                     }
                 case .friend(let id):

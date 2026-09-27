@@ -18,6 +18,7 @@ struct ProfilePanelView: View {
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
     let summary: AnyView
+    @Binding var settingsPresented: Bool
     @Binding var heatMapEnabled: Bool
     let onProfileColorSelected: (String) -> Void
     var onAccountFlowStateChanged: (Bool) -> Void = { _ in }
@@ -38,7 +39,49 @@ struct ProfilePanelView: View {
                 }
 
                 friendSections
+            }
+            .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.bottom, 16, for: .scrollContent)
+            .accessibilityIdentifier("own-profile-scroll")
+            .toolbar(.hidden, for: .navigationBar)
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .sheet(isPresented: $settingsPresented) {
+            settingsSheet
+        }
+        .onAppear {
+            Task {
+                await notificationService.refreshAuthorizationStatus()
+            }
+            if friendSyncService.isAccountDeletionPending {
+                settingsPresented = true
+            }
+        }
+        .onChange(of: friendSyncService.isAccountDeletionPending) {
+            if friendSyncService.isAccountDeletionPending {
+                if settingsPresented {
+                    deletionAuthorizationPresented = true
+                } else {
+                    settingsPresented = true
+                }
+            }
+        }
+        .onChange(of: isAccountFlowActive, initial: true) { _, isActive in
+            onAccountFlowStateChanged(isActive)
+        }
+        .onDisappear {
+            onAccountFlowStateChanged(false)
+        }
+        .alert("Impossible de terminer l’action", isPresented: friendActionErrorPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(friendSyncService.errorMessage ?? "Réessaie dans quelques instants.")
+        }
+    }
 
+    private var settingsSheet: some View {
+        NavigationStack {
+            Form {
                 Section {
                     Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
                         .accessibilityIdentifier("profile-heat-map")
@@ -158,30 +201,25 @@ struct ProfilePanelView: View {
 
                 accountSection
             }
-            .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 16, for: .scrollContent)
-            .accessibilityIdentifier("own-profile-scroll")
-            .toolbar(.hidden, for: .navigationBar)
             .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Réglages")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Fermer", systemImage: "xmark") {
+                        settingsPresented = false
+                    }
+                    .disabled(isAccountFlowActive)
+                }
+            }
         }
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(isAccountFlowActive)
         .onAppear {
-            Task {
-                await notificationService.refreshAuthorizationStatus()
-            }
             if friendSyncService.isAccountDeletionPending {
                 deletionAuthorizationPresented = true
             }
-        }
-        .onChange(of: friendSyncService.isAccountDeletionPending) {
-            if friendSyncService.isAccountDeletionPending {
-                deletionAuthorizationPresented = true
-            }
-        }
-        .onChange(of: isAccountFlowActive, initial: true) { _, isActive in
-            onAccountFlowStateChanged(isActive)
-        }
-        .onDisappear {
-            onAccountFlowStateChanged(false)
         }
         .alert(
             "Se déconnecter ?",
@@ -416,6 +454,15 @@ struct ProfilePanelView: View {
                         friendSyncService.clearError()
                     }
                 }
+            }
+        )
+    }
+
+    private var friendActionErrorPresented: Binding<Bool> {
+        Binding(
+            get: { !settingsPresented && friendSyncService.errorMessage != nil },
+            set: { isPresented in
+                if !isPresented { friendSyncService.clearError() }
             }
         )
     }

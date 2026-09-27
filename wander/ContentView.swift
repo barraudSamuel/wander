@@ -391,7 +391,7 @@ struct ContentView: View {
                                 target: selection, sheetTopInWindow: sheetTop
                             )
                         }
-                    ) { summary in
+                    ) { summary, settingsPresented in
                         ProfilePanelView(
                             displayName: $displayName,
                             avatarID: $avatarID,
@@ -399,6 +399,7 @@ struct ContentView: View {
                             friendCodeInput: $friendCodeInput,
                             locationTracker: locationTracker,
                             summary: summary,
+                            settingsPresented: settingsPresented,
                             heatMapEnabled: $heatMapEnabled,
                             onProfileColorSelected: { selectedColorHex in
                                 friendSyncService.updateProfileColor(

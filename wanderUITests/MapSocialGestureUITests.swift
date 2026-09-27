@@ -93,6 +93,32 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertTrue(ownSheet.exists)
     }
 
+    func testOwnSettingsOpensSeparateSheetAndReturnsToProfile() {
+        app.terminate()
+        app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
+        app.launch()
+        XCTAssertTrue(map.waitForExistence(timeout: 10))
+        app.buttons["map-own-profile"].tap()
+
+        let ownSheet = app.descendants(matching: .any)["own-profile-scroll"].firstMatch
+        XCTAssertTrue(ownSheet.waitForExistence(timeout: 5))
+        XCTAssertFalse(ownSheet.staticTexts["Affichage de la carte"].exists)
+
+        let settingsButton = app.buttons["own-profile-settings"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 3))
+        settingsButton.tap()
+
+        let title = app.navigationBars["Réglages"]
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.switches["profile-heat-map"].exists)
+        app.buttons["Fermer"].tap()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(ownSheet.exists)
+
+        settingsButton.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+    }
+
     func testOwnProfileFromGroupThenFriendProfile() {
         app.terminate()
         app.launchArguments = ["-debug-social-map", "-debug-social-map-mixed", "-debug-social-map-fullscreen"]
@@ -114,6 +140,7 @@ final class MapSocialGestureUITests: XCTestCase {
         openMixedFriend(eventCount: 2)
         XCTAssertTrue(detailPane.staticTexts["Amina"].exists)
         XCTAssertTrue(app.buttons["Itinéraire"].isHittable)
+        XCTAssertFalse(app.buttons["own-profile-settings"].exists)
         XCTAssertFalse(ownSheet.exists)
         closeFriendSheet()
     }

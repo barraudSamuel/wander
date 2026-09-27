@@ -228,6 +228,7 @@ struct MapProfileIdentityView: View {
     let avatarID: String
     let profileColorHex: String
     var onAvatarTap: (() -> Void)? = nil
+    var onSettingsTap: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -267,7 +268,10 @@ struct MapProfileIdentityView: View {
                     .blur(radius: 3)
                     .mask {
                         if let nameBounds {
-                            ProfileCardBackgroundShape(nameBounds: geometry[nameBounds])
+                            ProfileCardBackgroundShape(
+                                nameBounds: geometry[nameBounds],
+                                hasSettingsNotch: onSettingsTap != nil
+                            )
                                 .fill(.white)
                         } else {
                             Rectangle().fill(.white)
@@ -277,6 +281,19 @@ struct MapProfileIdentityView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(alignment: .topLeading) {
+            if let onSettingsTap {
+                Button(action: onSettingsTap) {
+                    Image(systemName: "gearshape")
+                        .font(.title2)
+                        .frame(width: 64, height: 56)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Ouvrir les réglages")
+                .accessibilityIdentifier("own-profile-settings")
+            }
+        }
     }
 
     private var avatarBadge: some View {
@@ -298,6 +315,7 @@ private struct ProfileNameBoundsKey: PreferenceKey {
 
 private struct ProfileCardBackgroundShape: Shape {
     let nameBounds: CGRect
+    let hasSettingsNotch: Bool
 
     func path(in rect: CGRect) -> Path {
         let radius = min(18, min(nameBounds.width / 4, (rect.maxY - nameBounds.minY) / 2))
@@ -306,7 +324,7 @@ private struct ProfileCardBackgroundShape: Shape {
 
         // A single contour avoids a shared closing edge beneath the name.
         var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + (hasSettingsNotch ? 56 : 0)))
         path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
         path.addLine(to: CGPoint(x: nameBounds.minX, y: rect.maxY))
         path.addQuadCurve(
@@ -330,6 +348,24 @@ private struct ProfileCardBackgroundShape: Shape {
         )
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        if hasSettingsNotch {
+            let notchRight = rect.minX + 64
+            let notchBottom = rect.minY + 56
+            let notchRadius: CGFloat = 16
+            path.addLine(to: CGPoint(x: notchRight + notchRadius, y: rect.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: notchRight, y: rect.minY + notchRadius),
+                control: CGPoint(x: notchRight, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: notchRight, y: notchBottom - notchRadius))
+            path.addQuadCurve(
+                to: CGPoint(x: notchRight - notchRadius, y: notchBottom),
+                control: CGPoint(x: notchRight, y: notchBottom)
+            )
+            path.addLine(to: CGPoint(x: rect.minX, y: notchBottom))
+        } else {
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        }
         path.closeSubpath()
         return path
     }
