@@ -21,7 +21,6 @@ struct DebugSocialMapScenarioView: View {
     @State private var revision = 0
     @State private var bottomList: MapBottomList? = {
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("-debug-dock-friends") { return .friends }
         if arguments.contains("-debug-social-map-open-event") { return .events }
         return nil
     }()
@@ -31,7 +30,7 @@ struct DebugSocialMapScenarioView: View {
     var body: some View {
         if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
             MotionDockView(
-                selection: dockSelection,
+                onExplore: { bottomList = nil },
                 isEventsPresented: areEventsPresented,
                 onToggleEvents: toggleEvents
             ) {
@@ -63,13 +62,6 @@ struct DebugSocialMapScenarioView: View {
                     .background(.regularMaterial)
                 }
         }
-    }
-
-    private var dockSelection: Binding<MotionDockSelection> {
-        Binding(
-            get: { bottomList == .friends ? .friends : .explore },
-            set: { bottomList = $0 == .friends ? .friends : nil }
-        )
     }
 
     private var areEventsPresented: Bool {
@@ -136,7 +128,11 @@ private struct DebugSocialMapScene: View {
         case declined
     }
 
-    @State private var requestState: RequestState = .incoming
+    @State private var requestState: RequestState = Self.hasArgument("delayed-friend-request")
+        ? .declined : .incoming
+    @State private var friendsScrollRequest: ProfileFriendsScrollRequest? =
+        Self.hasArgument("friend-request-notification")
+            ? ProfileFriendsScrollRequest(friendshipID: "scenario-camille") : nil
     @State private var friendPendingRemoval: String?
     @State private var removedFriendIDs: Set<String> = []
 
@@ -180,12 +176,13 @@ private struct DebugSocialMapScene: View {
         if hasArgument("open-event"), let event = makePlans(kind: .events).last {
             return .outing(event.id)
         }
+        if hasArgument("open-profile") || hasArgument("friend-request-notification") { return .ownProfile }
         if hasArgument("open-friend") { return .friend("scenario-amina") }
         return nil
     }
 
     private static func makeFriends(kind: DebugSocialMapScenarioView.SceneKind) -> [String: FriendLocation] {
-        guard kind != .events else { return [:] }
+        guard kind != .events, !hasArgument("friends-empty") else { return [:] }
         let referenceDate = Date()
         return Dictionary(uniqueKeysWithValues: ["Amina", "Jules"].map { name in
             let id = "scenario-\(name.lowercased())"
@@ -250,7 +247,9 @@ private struct DebugSocialMapScene: View {
                 hasLoadError: Self.hasArgument("list-error") || Self.hasArgument("partial-list-error"),
                 isListActive: bottomList == .events && selectedDetail?.profile == nil,
                 onVisibleEventIDsChange: { ids in
-                    if bottomList != .events && ids.isEmpty { didSuspendRosters = true }
+                    if (bottomList != .events || selectedDetail?.profile != nil) && ids.isEmpty {
+                        didSuspendRosters = true
+                    }
                     requestedRosterIDs = ids
                 },
                 onShowOnMap: { id in
@@ -264,8 +263,6 @@ private struct DebugSocialMapScene: View {
                 onEdit: { id in editingEvent = plans[id] },
                 onOpenDirections: { _ in showsDirections = true }
             )
-        } friends: {
-            friendsList
         } map: {
             mapView(presentations: presentations)
         }
@@ -285,12 +282,16 @@ private struct DebugSocialMapScene: View {
                             )
                         }
                     ) { summary, settingsPresented in
-                        Form {
+                        ProfileFriendsForm(
+                            scrollRequest: friendsScrollRequest,
+                            incomingRequestIDs: requestState == .incoming ? ["scenario-camille"] : []
+                        ) {
                             Section {
                                 summary
                                     .listRowInsets(EdgeInsets())
                                     .listRowBackground(Color.clear)
                             }
+                            friendsList
                             Section("Ton code ami") {
                                 HStack {
                                     Text("WANDER23456")
@@ -325,9 +326,16 @@ private struct DebugSocialMapScene: View {
                                 .disabled(friendCode.isEmpty)
                             }
                         }
-                        .contentMargins(.top, 0, for: .scrollContent)
-                        .scrollDismissesKeyboard(.interactively)
-                        .accessibilityIdentifier("own-profile-scroll")
+                        .alert("Retirer cet ami ?", isPresented: Binding(
+                            get: { friendPendingRemoval != nil && selectedDetail == .ownProfile },
+                            set: { if !$0 { friendPendingRemoval = nil } }
+                        )) {
+                            Button("Retirer", role: .destructive) {
+                                if let friendPendingRemoval { removedFriendIDs.insert(friendPendingRemoval) }
+                                friendPendingRemoval = nil
+                            }
+                            Button("Annuler", role: .cancel) { friendPendingRemoval = nil }
+                        }
                         .sheet(isPresented: settingsPresented) {
                             NavigationStack {
                                 Form {
@@ -364,6 +372,12 @@ private struct DebugSocialMapScene: View {
                             .alert("Action de test", isPresented: $profileConfirmation) {
                                 Button("Annuler", role: .cancel) {}
                             }
+                        }
+                        .task {
+                            guard Self.hasArgument("delayed-friend-request") else { return }
+                            try? await Task.sleep(for: .seconds(2))
+                            guard !Task.isCancelled else { return }
+                            requestState = .incoming
                         }
                     }
                 case .friend(let id):
@@ -431,8 +445,8 @@ private struct DebugSocialMapScene: View {
     }
 
     private var friendsList: some View {
-        List {
-            if requestState == .incoming {
+        Group {
+            if requestState == .incoming && !Self.hasArgument("friends-empty") {
                 Section("Demandes reçues") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Camille")
@@ -448,6 +462,7 @@ private struct DebugSocialMapScene: View {
                         }
                     }
                 }
+                .id(ProfileFriendsSection.incomingRequests)
             }
             Section("Mes amis") {
                 if requestState == .accepted { Text("Camille") }
@@ -462,25 +477,23 @@ private struct DebugSocialMapScene: View {
                             }
                     }
                 }
-                ForEach(1...30, id: \.self) { number in
-                    Text("Ami \(number)")
+                if Self.hasArgument("friends-empty") {
+                    Text("Aucun ami pour le moment.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(1...30, id: \.self) { number in
+                        Text("Ami \(number)")
+                    }
                 }
             }
-            Section("En attente") {
-                LabeledContent("Alex", value: "Demande envoyée")
+            .id(ProfileFriendsSection.friends)
+            if !Self.hasArgument("friends-empty") {
+                Section("En attente") {
+                    LabeledContent("Alex", value: "Demande envoyée")
+                }
             }
         }
-        .accessibilityIdentifier("friends-expanded-list")
-        .alert("Retirer cet ami ?", isPresented: Binding(
-            get: { friendPendingRemoval != nil && bottomList == .friends && selectedDetail?.profile == nil },
-            set: { if !$0 { friendPendingRemoval = nil } }
-        )) {
-            Button("Retirer", role: .destructive) {
-                if let friendPendingRemoval { removedFriendIDs.insert(friendPendingRemoval) }
-                friendPendingRemoval = nil
-            }
-            Button("Annuler", role: .cancel) { friendPendingRemoval = nil }
-        }
+
     }
 
     private func presentOwnProfile(focusOnMap: Bool) {

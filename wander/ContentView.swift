@@ -113,6 +113,7 @@ struct ContentView: View {
 
     @State private var bottomList: MapBottomList?
     @State private var friendCodeInput = ""
+    @State private var friendsScrollRequest: ProfileFriendsScrollRequest?
     @State private var isProfileAccountFlowActive = false
     @State private var outingComposerVisible = false
     @State private var outingComposerDetent =
@@ -147,7 +148,7 @@ struct ContentView: View {
     private var mapDockContent: some View {
         return GeometryReader { geometry in
             MotionDockView(
-                selection: dockSelectionBinding,
+                onExplore: showExplore,
                 isEventsPresented: areEventsPresented,
                 onToggleEvents: toggleEvents
             ) {
@@ -280,14 +281,9 @@ struct ContentView: View {
         bottomList = shouldPresent ? .events : nil
     }
 
-    private var dockSelectionBinding: Binding<MotionDockSelection> {
-        Binding(
-            get: { bottomList == .friends ? .friends : .explore },
-            set: { newSelection in
-                guard !isProfileAccountFlowActive else { return }
-                bottomList = newSelection == .friends ? .friends : nil
-            }
-        )
+    private func showExplore() {
+        guard !isProfileAccountFlowActive else { return }
+        bottomList = nil
     }
 
     private var outingObservedContent: some View {
@@ -398,6 +394,10 @@ struct ContentView: View {
                             profileColorHex: $profileColorHex,
                             friendCodeInput: $friendCodeInput,
                             locationTracker: locationTracker,
+                            friends: friendSummaries(locations: friendSyncService.friendLocations),
+                            onShowFriendOnMap: showFriendOnMap,
+                            onViewFriendProfile: presentMapFriendProfile,
+                            friendsScrollRequest: friendsScrollRequest,
                             summary: summary,
                             settingsPresented: settingsPresented,
                             heatMapEnabled: $heatMapEnabled,
@@ -467,14 +467,6 @@ struct ContentView: View {
                     outingComposerVisible = true
                 },
                 onOpenDirections: presentOutingNavigationOptions
-            )
-        } friends: {
-            FriendsPanelView(
-                service: friendSyncService,
-                friends: friendSummaries(locations: friendSyncService.friendLocations),
-                onShowOnMap: showFriendOnMap,
-                onViewProfile: presentMapFriendProfile,
-                isActive: bottomList == .friends && selectedMapDetail?.profile == nil
             )
         } map: {
             ZStack(alignment: .topTrailing) {
@@ -699,6 +691,7 @@ struct ContentView: View {
         guard !isProfileAccountFlowActive else { return }
         // MapKit can echo a programmatic pin selection after the sheet opens.
         guard selectedMapDetail != .ownProfile else { return }
+        friendsScrollRequest = nil
         shouldFocusOwnProfile = focusOnMap
         if !focusOnMap { friendCameraRequest = nil }
         selectedMapDetail = .ownProfile
@@ -1310,8 +1303,8 @@ struct ContentView: View {
             return
         }
 
-        if selectedMapDetail?.profile != nil { selectedMapDetail = nil }
-        bottomList = .friends
+        presentOwnProfile(focusOnMap: false)
+        friendsScrollRequest = ProfileFriendsScrollRequest(friendshipID: route.friendshipID)
         notificationService.consume(route)
     }
 

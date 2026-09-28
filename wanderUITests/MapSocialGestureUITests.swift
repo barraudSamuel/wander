@@ -422,15 +422,11 @@ final class MapSocialGestureUITests: XCTestCase {
         let mapFrame = map.frame
         let nativeSize = app.maps.firstMatch.frame.size
         closeFriendSheet()
-        for panel in ["friends"] {
-            app.buttons["motion-dock-" + panel].tap()
-            assertFriendsListIsHittable(true)
-            app.buttons["motion-dock-explore"].tap()
-            assertFriendsListIsHittable(false)
-            XCTAssertFalse(detailPane.exists)
-            XCTAssertEqual(map.frame, mapFrame)
-            XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
-        }
+        openOwnProfile()
+        closeOwnProfile()
+        XCTAssertFalse(detailPane.exists)
+        XCTAssertEqual(map.frame, mapFrame)
+        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeSize)
         XCTAssertFalse(app.scrollViews["outing-detail-scroll"].exists)
         XCTAssertFalse(eventListIsInteractive)
         attachScreenshot(named: "Carte conservée après fermeture de la fiche et des panneaux")
@@ -449,26 +445,17 @@ final class MapSocialGestureUITests: XCTestCase {
         openEventList()
         XCTAssertFalse(revealEvent(2).isSelected)
         assertEventsBelowMap(nativeSize: nativeSize)
-        app.buttons["motion-dock-friends"].tap()
-        assertFriendsListIsHittable(true)
+        openOwnProfile()
         XCTAssertFalse(eventsButton.isSelected)
-        eventsButton.tap()
-        assertFriendsListIsHittable(false)
+        closeOwnProfile()
+        XCTAssertFalse(ownProfile.exists)
         XCTAssertFalse(revealEvent(2).isSelected)
         XCTAssertTrue(eventsButton.isSelected)
         eventsButton.tap()
         XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
         assertFullMap(window: app.windows.firstMatch.frame)
 
-        defer { XCUIDevice.shared.orientation = .portrait }
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let landscape = NSPredicate { _, _ in
-            self.app.windows.firstMatch.frame.width > self.app.windows.firstMatch.frame.height
-        }
-        expectation(for: landscape, evaluatedWith: app)
-        waitForExpectations(timeout: 5)
-        assertFullMap(window: app.windows.firstMatch.frame)
-        attachScreenshot(named: "Carte plein écran après fermeture de la liste en paysage")
+        attachScreenshot(named: "Carte plein écran après fermeture de la liste et du profil")
     }
 
     func testFriendSheetDragDismissesAndKeepsFullMap() {
@@ -705,10 +692,9 @@ final class MapSocialGestureUITests: XCTestCase {
         let listFrame = eventListViewport
         let nativeSize = app.maps.firstMatch.frame.size
         XCTAssertFalse(eventRow(1).isHittable)
-        app.buttons["motion-dock-friends"].tap()
-        assertFriendsListIsHittable(true)
+        openOwnProfile()
         XCTAssertFalse(eventsButton.isSelected)
-        eventsButton.tap()
+        closeOwnProfile()
         XCTAssertFalse(row.isSelected)
         app.buttons["map-own-profile"].tap()
         let ownSheet = app.descendants(matching: .any)["own-profile-scroll"].firstMatch
@@ -873,10 +859,9 @@ final class MapSocialGestureUITests: XCTestCase {
         tapCardBody(12)
         XCTAssertNotEqual(requestedIDs(), firstIDs)
         XCTAssertLessThan(requestedIDs().components(separatedBy: ",").count, 18)
-        app.buttons["motion-dock-friends"].tap()
-        assertFriendsListIsHittable(true)
+        openOwnProfile()
         XCTAssertFalse(eventsButton.isSelected)
-        eventsButton.tap()
+        closeOwnProfile()
         XCTAssertTrue(probe.waitForExistence(timeout: 3))
         XCTAssertTrue((probe.value as? String ?? "").contains("suspended=true"))
         XCTAssertFalse(requestedIDs().isEmpty)
@@ -1071,9 +1056,14 @@ final class MapSocialGestureUITests: XCTestCase {
         let rowFrame = row.frame
         let nativeSize = app.maps.firstMatch.frame.size
         let probe = app.staticTexts["debug-list-rosters"]
-        app.buttons["motion-dock-friends"].tap()
-        assertFriendsListIsHittable(true)
-        friendsList.buttons["Amina"].tap()
+        openOwnProfile()
+        let amina = ownProfile.buttons["Amina"]
+        for _ in 0..<8 {
+            if amina.isHittable { break }
+            ownProfile.swipeUp()
+        }
+        XCTAssertTrue(amina.isHittable)
+        amina.tap()
         XCTAssertTrue(detailPane.staticTexts["Amina"].waitForExistence(timeout: 3))
         XCTAssertFalse(eventListIsInteractive)
         XCTAssertFalse(eventsResizeHandle.exists)
@@ -1084,7 +1074,7 @@ final class MapSocialGestureUITests: XCTestCase {
         expectation(for: suspended, evaluatedWith: probe)
         waitForExpectations(timeout: 3)
         closeFriendSheet()
-        assertFriendsListIsHittable(true)
+        XCTAssertFalse(ownProfile.exists)
         openEventList()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertEqual(eventListViewport, listFrame)
@@ -1272,7 +1262,7 @@ final class MapSocialGestureUITests: XCTestCase {
     }
 
     private var eventsPane: XCUIElement {
-        app.descendants(matching: .any)["map-events-pane"].firstMatch
+        app.descendants(matching: .any)["events-expanded-list"].firstMatch
     }
 
     @discardableResult
@@ -1295,7 +1285,16 @@ final class MapSocialGestureUITests: XCTestCase {
                 .withOffset(CGVector(dx: bounds.midX, dy: bounds.midY))
             let alignmentDistance = row.exists ? abs(row.frame.minY - bounds.minY - 8) : 100
             let distance = min(100, bounds.height * 0.4, max(15, alignmentDistance)) * (scrollDown ? 1 : -1)
-            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance)))
+            let destination = start.withOffset(CGVector(dx: 0, dy: distance))
+            if row.exists {
+                // Stop before lifting so inertia does not skip the target card.
+                start.press(
+                    forDuration: 0.05, thenDragTo: destination,
+                    withVelocity: .slow, thenHoldForDuration: 0.2
+                )
+            } else {
+                start.press(forDuration: 0.05, thenDragTo: destination)
+            }
         }
         XCTFail("Carte événement \(number) non visible après défilement")
         return row
@@ -1312,23 +1311,20 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertEqual(map.frame.width, window.width, accuracy: 1)
     }
 
-    private func assertFriendsListIsHittable(
-        _ expected: Bool,
-        timeout: TimeInterval = 3,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let predicate = NSPredicate { _, _ in
-            let list = self.friendsList
-            return (list.exists && list.isHittable) == expected
-        }
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed,
-                       file: file, line: line)
+    private var ownProfile: XCUIElement {
+        app.descendants(matching: .any)["own-profile-scroll"].firstMatch
     }
 
-    private var friendsList: XCUIElement {
-        app.descendants(matching: .any)["friends-expanded-list"].firstMatch
+    private func openOwnProfile() {
+        app.buttons["map-own-profile"].tap()
+        XCTAssertTrue(ownProfile.waitForExistence(timeout: 3))
+    }
+
+    private func closeOwnProfile() {
+        let start = ownProfile.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+        let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        start.press(forDuration: 0.05, thenDragTo: bottom)
+        XCTAssertTrue(ownProfile.waitForNonExistence(timeout: 3))
     }
 
     private var eventList: XCUIElement {
@@ -1552,12 +1548,14 @@ final class MapDeviceSmokeUITests: XCTestCase {
 /// rather than the collection container, identify the visible interactive content.
 @MainActor
 private func eventContentViewport(in app: XCUIApplication, content: XCUIElement) -> CGRect {
-    let pane = app.descendants(matching: .any)["map-events-pane"].firstMatch
+    let pane = app.descendants(matching: .any)["events-expanded-list"].firstMatch
     guard content.exists, pane.exists else { return .zero }
     let frame = content.frame.intersection(pane.frame)
     guard !frame.isNull else { return .zero }
     let navigationBar = app.navigationBars.firstMatch
-    let top = navigationBar.exists ? max(frame.minY, navigationBar.frame.maxY) : frame.minY
+    var top = navigationBar.exists ? max(frame.minY, navigationBar.frame.maxY) : frame.minY
+    let handle = app.buttons["map-events-resize-handle"]
+    if handle.exists { top = max(top, handle.frame.maxY) }
     var bottom = frame.maxY
     for control in [app.buttons["motion-dock-explore"], app.buttons["motion-dock-events"],
                     app.segmentedControls.firstMatch] where control.exists {

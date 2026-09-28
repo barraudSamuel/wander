@@ -13,16 +13,16 @@ extension EnvironmentValues {
     }
 }
 
-/// Keeps one map hierarchy beneath the system tab bar while tabs select panels.
+/// Keeps one map hierarchy beneath the system tab bar above the map.
 struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
-    @Binding var selection: MotionDockSelection
+    let onExplore: () -> Void
     let isEventsPresented: Bool
     let onToggleEvents: () -> Void
     @State private var contentInsets = UIEdgeInsets.zero
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(selection: $selection, contentInsets: $contentInsets)
+        Coordinator(onExplore: onExplore, contentInsets: $contentInsets)
     }
 
     func makeUIViewController(context: Context) -> NativeMapTabController {
@@ -32,17 +32,15 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
         controller.onContentInsetsChange = { [weak coordinator = context.coordinator] insets in
             coordinator?.contentInsets.wrappedValue = insets
         }
-        controller.synchronizeSelection(selection)
         controller.synchronizeEvents(isPresented: isEventsPresented)
         return controller
     }
 
     func updateUIViewController(_ controller: NativeMapTabController, context: Context) {
-        context.coordinator.selection = $selection
+        context.coordinator.onExplore = onExplore
         context.coordinator.contentInsets = $contentInsets
         controller.onToggleEvents = onToggleEvents
         controller.updateContent(rootView(context: context))
-        controller.synchronizeSelection(selection)
         controller.synchronizeEvents(isPresented: isEventsPresented)
     }
 
@@ -58,11 +56,11 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
     }
 
     final class Coordinator: NSObject, UITabBarControllerDelegate {
-        var selection: Binding<MotionDockSelection>
+        var onExplore: () -> Void
         var contentInsets: Binding<UIEdgeInsets>
 
-        init(selection: Binding<MotionDockSelection>, contentInsets: Binding<UIEdgeInsets>) {
-            self.selection = selection
+        init(onExplore: @escaping () -> Void, contentInsets: Binding<UIEdgeInsets>) {
+            self.onExplore = onExplore
             self.contentInsets = contentInsets
         }
 
@@ -70,16 +68,7 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
             _ tabBarController: UITabBarController,
             didSelect viewController: UIViewController
         ) {
-            guard let controller = tabBarController.parent as? NativeMapTabController,
-                  let index = tabBarController.viewControllers?.firstIndex(of: viewController),
-                  MotionDockSelection.allCases.indices.contains(index) else { return }
-
-            let tappedSelection = MotionDockSelection.allCases[index]
-            selection.wrappedValue = selection.wrappedValue == tappedSelection
-                ? .explore : tappedSelection
-
-            // Account confirmations may reject a selection change in the binding.
-            controller.synchronizeSelection(selection.wrappedValue)
+            onExplore()
         }
     }
 }
@@ -120,15 +109,13 @@ final class NativeMapTabController: UIViewController {
         // belongs to the full-width content host rather than a selected tab.
         view.keyboardLayoutGuide.usesBottomSafeArea = false
 
-        tabsController.viewControllers = MotionDockSelection.allCases.map { selection in
-            let controller = UIViewController()
-            controller.view.backgroundColor = .clear
-            let image = UIImage(named: selection.assetName)?.withRenderingMode(.alwaysOriginal)
-            controller.tabBarItem = UITabBarItem(title: nil, image: image, selectedImage: image)
-            controller.tabBarItem.accessibilityLabel = selection.title
-            controller.tabBarItem.accessibilityIdentifier = "motion-dock-" + selection.rawValue
-            return controller
-        }
+        let exploreController = UIViewController()
+        exploreController.view.backgroundColor = .clear
+        let image = UIImage(named: "TabIconExplore")?.withRenderingMode(.alwaysOriginal)
+        exploreController.tabBarItem = UITabBarItem(title: nil, image: image, selectedImage: image)
+        exploreController.tabBarItem.accessibilityLabel = "Explorer"
+        exploreController.tabBarItem.accessibilityIdentifier = "motion-dock-explore"
+        tabsController.viewControllers = [exploreController]
         tabsController.tabBar.accessibilityIdentifier = "native-map-tab-bar"
 
         addChild(contentController)
@@ -146,12 +133,11 @@ final class NativeMapTabController: UIViewController {
         navigationContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(navigationContainer)
         let preferredWidth = navigationContainer.widthAnchor.constraint(
-            equalTo: view.safeAreaLayoutGuide.widthAnchor, multiplier: 0.5
+            equalToConstant: 100
         )
         preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             preferredWidth,
-            navigationContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
             navigationContainer.widthAnchor.constraint(
                 lessThanOrEqualTo: view.safeAreaLayoutGuide.widthAnchor, constant: -88
             ),
@@ -274,19 +260,7 @@ final class NativeMapTabController: UIViewController {
         contentController.rootView = content
     }
 
-    func synchronizeSelection(_ selection: MotionDockSelection) {
-        loadViewIfNeeded()
-        guard let index = MotionDockSelection.allCases.firstIndex(of: selection),
-              tabsController.selectedIndex != index else { return }
-        tabsController.selectedIndex = index
-        tabsController.view.setNeedsLayout()
-        if selection == .explore, UIAccessibility.isVoiceOverRunning {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.tabsController.selectedIndex == 0 else { return }
-                UIAccessibility.post(notification: .layoutChanged, argument: self.tabsController.tabBar)
-            }
-        }
-    }
+
 }
 
 /// Report the system's final tab layout without modifying its internal views.

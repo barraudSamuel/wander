@@ -1,34 +1,15 @@
 import SwiftUI
 
-enum MotionDockSelection: String, CaseIterable {
-    case explore
-    case friends
-
-    var title: String {
-        switch self {
-        case .explore: "Explorer"
-        case .friends: "Amis"
-        }
-    }
-
-    var assetName: String {
-        switch self {
-        case .explore: "TabIconExplore"
-        case .friends: "TabIconFriends"
-        }
-    }
-}
-
 /// Keeps one map scene mounted above the native navigation.
 struct MotionDockView<MapContent: View>: View {
-    @Binding var selection: MotionDockSelection
+    let onExplore: () -> Void
     let isEventsPresented: Bool
     let onToggleEvents: () -> Void
     @ViewBuilder let map: () -> MapContent
 
     var body: some View {
         NativeMapTabView(
-            selection: $selection,
+            onExplore: onExplore,
             isEventsPresented: isEventsPresented,
             onToggleEvents: onToggleEvents
         ) {

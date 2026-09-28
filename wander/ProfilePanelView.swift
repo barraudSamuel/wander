@@ -17,6 +17,10 @@ struct ProfilePanelView: View {
     @ObservedObject private var locationPushService = LocationPushService.shared
     @AppStorage("profile.onboardingCompleted") private var onboardingCompleted = false
 
+    let friends: [FriendMapSummary]
+    let onShowFriendOnMap: (FriendMapSummary) -> Void
+    let onViewFriendProfile: (String) -> Void
+    let friendsScrollRequest: ProfileFriendsScrollRequest?
     let summary: AnyView
     @Binding var settingsPresented: Bool
     @Binding var heatMapEnabled: Bool
@@ -28,23 +32,36 @@ struct ProfilePanelView: View {
     @State private var deletionAuthorizationPresented = false
     @State private var accountActionErrorMessage: String?
     @State private var isSigningOut = false
+    @State private var friendPendingRemoval: FriendMapSummary?
+    @State private var processingFriendUserID: String?
 
     var body: some View {
         NavigationStack {
-            Form {
+            ProfileFriendsForm(
+                scrollRequest: friendsScrollRequest,
+                incomingRequestIDs: friendSyncService.incomingRequests.map(\.id)
+            ) {
                 Section {
                     summary
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
 
+                FriendsPanelView(
+                    service: friendSyncService,
+                    friends: friends,
+                    onShowOnMap: onShowFriendOnMap,
+                    onViewProfile: onViewFriendProfile,
+                    processingFriendUserID: $processingFriendUserID,
+                    friendPendingRemoval: $friendPendingRemoval
+                )
+
                 friendSections
             }
-            .contentMargins(.top, 0, for: .scrollContent)
-            .contentMargins(.bottom, 16, for: .scrollContent)
-            .accessibilityIdentifier("own-profile-scroll")
             .toolbar(.hidden, for: .navigationBar)
-            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: friendsScrollRequest) { _, request in
+                if request != nil { settingsPresented = false }
+            }
         }
         .sheet(isPresented: $settingsPresented) {
             settingsSheet
@@ -71,6 +88,26 @@ struct ProfilePanelView: View {
         }
         .onDisappear {
             onAccountFlowStateChanged(false)
+        }
+        .alert(
+            friendPendingRemoval.map { "Retirer \($0.displayName) de tes amis ?" } ?? "Retirer cet ami ?",
+            isPresented: Binding(
+                get: { friendPendingRemoval != nil },
+                set: { if !$0 { friendPendingRemoval = nil } }
+            ),
+            presenting: friendPendingRemoval
+        ) { friend in
+            Button("Retirer", role: .destructive) {
+                processingFriendUserID = friend.userID
+                friendSyncService.removeFriend(userID: friend.userID)
+                if !friendSyncService.isProcessingFriendAction { processingFriendUserID = nil }
+            }
+            Button("Annuler", role: .cancel) {}
+        } message: { _ in
+            Text(
+                "Vous disparaîtrez tous les deux de la liste d’amis de l’autre. "
+                    + "Il faudra envoyer une nouvelle demande pour redevenir amis."
+            )
         }
         .alert("Impossible de terminer l’action", isPresented: friendActionErrorPresented) {
             Button("OK", role: .cancel) {}
@@ -717,5 +754,62 @@ private struct AccountDeletionAuthorizationView: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+// MARK: - Social navigation inside the profile
+
+struct ProfileFriendsScrollRequest: Equatable {
+    let id = UUID()
+    let friendshipID: String
+}
+
+enum ProfileFriendsSection: Hashable {
+    case incomingRequests
+    case friends
+}
+
+/// Keeps a single native form and follows a notified request when its data arrives.
+struct ProfileFriendsForm<Content: View>: View {
+    var scrollRequest: ProfileFriendsScrollRequest?
+    var incomingRequestIDs: [String] = []
+    @ViewBuilder let content: () -> Content
+    @State private var handledRequestID: UUID?
+
+    private struct ScrollTarget: Equatable {
+        let request: ProfileFriendsScrollRequest?
+        let hasNotifiedRequest: Bool
+    }
+
+    private var scrollTarget: ScrollTarget {
+        ScrollTarget(
+            request: scrollRequest,
+            hasNotifiedRequest: scrollRequest.map {
+                incomingRequestIDs.contains($0.friendshipID)
+            } ?? false
+        )
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            Form { content() }
+                .contentMargins(.top, 0, for: .scrollContent)
+                .contentMargins(.bottom, 16, for: .scrollContent)
+                .accessibilityIdentifier("own-profile-scroll")
+                .scrollDismissesKeyboard(.interactively)
+                .task(id: scrollTarget) {
+                    let target = scrollTarget
+                    guard let request = target.request,
+                          handledRequestID != request.id else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    proxy.scrollTo(
+                        target.hasNotifiedRequest
+                            ? ProfileFriendsSection.incomingRequests : .friends,
+                        anchor: .top
+                    )
+                    if target.hasNotifiedRequest { handledRequestID = request.id }
+                }
+        }
     }
 }

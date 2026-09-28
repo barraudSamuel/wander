@@ -2,19 +2,19 @@ import SwiftUI
 
 // MARK: - Friends
 
+/// Native sections embedded in the personal profile form.
 struct FriendsPanelView: View {
     @ObservedObject var service: FriendSyncService
     let friends: [FriendMapSummary]
     let onShowOnMap: (FriendMapSummary) -> Void
     let onViewProfile: (String) -> Void
-    var isActive = true
 
     @State private var processingRequestID: String?
-    @State private var processingFriendUserID: String?
-    @State private var friendPendingRemoval: FriendMapSummary?
+    @Binding var processingFriendUserID: String?
+    @Binding var friendPendingRemoval: FriendMapSummary?
 
     var body: some View {
-        List {
+        Group {
             if !service.incomingRequests.isEmpty {
                 Section("Demandes reçues") {
                     ForEach(service.incomingRequests) { request in
@@ -54,6 +54,7 @@ struct FriendsPanelView: View {
                         .padding(.vertical, 3)
                     }
                 }
+                .id(ProfileFriendsSection.incomingRequests)
             }
 
             Section("Mes amis") {
@@ -86,6 +87,7 @@ struct FriendsPanelView: View {
                     }
                 }
             }
+            .id(ProfileFriendsSection.friends)
 
             if !service.outgoingRequests.isEmpty {
                 Section("En attente") {
@@ -106,30 +108,6 @@ struct FriendsPanelView: View {
                     }
                 }
             }
-        }
-        .accessibilityIdentifier("friends-expanded-list")
-        .alert(
-            removalAlertTitle,
-            isPresented: removalAlertIsPresented,
-            presenting: friendPendingRemoval
-        ) { friend in
-            Button("Retirer", role: .destructive) {
-                remove(friend)
-            }
-            Button("Annuler", role: .cancel) {}
-        } message: { _ in
-            Text(
-                "Vous disparaîtrez tous les deux de la liste d’amis de l’autre. "
-                    + "Il faudra envoyer une nouvelle demande pour redevenir amis."
-            )
-        }
-        .alert(
-            "Impossible de terminer l’action",
-            isPresented: errorIsPresented
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(service.errorMessage ?? "Réessaie dans quelques instants.")
         }
         .onChange(of: service.isProcessingFriendAction) { _, isProcessing in
             if !isProcessing {
@@ -161,39 +139,6 @@ struct FriendsPanelView: View {
         }
     }
 
-    private var errorIsPresented: Binding<Bool> {
-        Binding(
-            get: {
-                isActive && service.errorMessage != nil
-            },
-            set: { isPresented in
-                if !isPresented {
-                    service.clearError()
-                }
-            }
-        )
-    }
-
-    private var removalAlertIsPresented: Binding<Bool> {
-        Binding(
-            get: {
-                isActive && friendPendingRemoval != nil
-            },
-            set: { isPresented in
-                if !isPresented {
-                    friendPendingRemoval = nil
-                }
-            }
-        )
-    }
-
-    private var removalAlertTitle: String {
-        guard let friendPendingRemoval else {
-            return "Retirer cet ami ?"
-        }
-        return "Retirer \(friendPendingRemoval.displayName) de tes amis ?"
-    }
-
     private func process(_ request: FriendRequest, accepting: Bool) {
         processingRequestID = request.id
 
@@ -208,14 +153,6 @@ struct FriendsPanelView: View {
         }
     }
 
-    private func remove(_ friend: FriendMapSummary) {
-        processingFriendUserID = friend.userID
-        service.removeFriend(userID: friend.userID)
-
-        if !service.isProcessingFriendAction {
-            processingFriendUserID = nil
-        }
-    }
 }
 
 private struct FriendRow: View {
@@ -300,5 +237,4 @@ private struct FriendRow: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
-
 }

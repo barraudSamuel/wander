@@ -3,7 +3,6 @@ import UIKit
 
 enum MapBottomList: Equatable {
     case events
-    case friends
 }
 
 private enum ListSeparatorMetrics {
@@ -12,12 +11,11 @@ private enum ListSeparatorMetrics {
     static let overlap = (hitHeight - height) / 2
 }
 
-struct MapDetailSplitView<Events: View, Friends: View, MapContent: View>: View {
+struct MapDetailSplitView<Events: View, MapContent: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
     @ScaledMetric(relativeTo: .body) private var minimumPaneHeight = 140
-    @State private var eventsPosition: Position = .third
-    @State private var friendsPosition: Position = .custom(0.5)
+    @State private var listPosition: Position = .third
     @State private var listDragOrigin: DragOrigin?
     @GestureState private var isListDragging = false
     @State private var isListDragCancelled = false
@@ -26,20 +24,17 @@ struct MapDetailSplitView<Events: View, Friends: View, MapContent: View>: View {
     private let areListsObscured: Bool
     @Binding private var bottomList: MapBottomList?
     private let events: Events
-    private let friends: Friends
     private let mapContent: MapContent
 
     init(
         bottomList: Binding<MapBottomList?>,
         areListsObscured: Bool = false,
         @ViewBuilder events: () -> Events,
-        @ViewBuilder friends: () -> Friends,
         @ViewBuilder map: () -> MapContent
     ) {
         self._bottomList = bottomList
         self.areListsObscured = areListsObscured
         self.events = events()
-        self.friends = friends()
         self.mapContent = map()
     }
 
@@ -66,8 +61,10 @@ struct MapDetailSplitView<Events: View, Friends: View, MapContent: View>: View {
                     listSeparatorHeight: showsListPane ? listSeparatorHeight : 0,
                     windowSize: geometry.size,
                     safeInsets: safeInsets,
-                    lists: lists,
-                    listKind: bottomList,
+                    // Keep the native list viewport stable while a profile hides its pane.
+                    lists: lists.frame(
+                        height: listHeight(availableHeight: listAvailableHeight) + safeInsets.bottom
+                    ),
                     mapContent: mapContent
                 ) { displayedHeight in
                     listResizeHandle(availableHeight: listAvailableHeight, displayedHeight: displayedHeight)
@@ -90,45 +87,23 @@ struct MapDetailSplitView<Events: View, Friends: View, MapContent: View>: View {
         .onChange(of: areListsObscured) { _, _ in
             cancelDrags()
         }
-        .onChange(of: bottomList) { previous, current in
+        .onChange(of: bottomList) { _, current in
             cancelDrags()
             if current == nil {
-                if previous == .friends {
-                    friendsPosition = .custom(0.5)
-                } else {
-                    eventsPosition = .third
-                }
+                listPosition = .third
             }
         }
     }
 
     private var lists: some View {
-        ZStack {
-            events
-                .opacity(bottomList == .events ? 1 : 0)
-                .accessibilityHidden(bottomList != .events || areListsObscured)
-                .allowsHitTesting(bottomList == .events && !areListsObscured)
-            friends
-                .opacity(bottomList == .friends ? 1 : 0)
-                .accessibilityHidden(bottomList != .friends || areListsObscured)
-                .allowsHitTesting(bottomList == .friends && !areListsObscured)
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .contentMargins(.top, 0, for: .scrollContent)
-        .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    private var listPosition: Position {
-        get { bottomList == .friends ? friendsPosition : eventsPosition }
-        nonmutating set {
-            if bottomList == .friends {
-                friendsPosition = newValue
-            } else {
-                eventsPosition = newValue
-            }
-        }
+        events
+            .accessibilityHidden(bottomList == nil || areListsObscured)
+            .allowsHitTesting(bottomList != nil && !areListsObscured)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.bottom, navigationBottomInset, for: .scrollContent)
+            .scrollDismissesKeyboard(.interactively)
     }
 
     // MARK: - Resizing
@@ -156,14 +131,12 @@ struct MapDetailSplitView<Events: View, Friends: View, MapContent: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(bottomList == .friends
-            ? "Taille de la liste des amis" : "Taille de la liste des événements")
+        .accessibilityLabel("Taille de la liste des événements")
         .accessibilityValue(listPosition.accessibilityValue(
             displayedFraction: availableHeight > 0 ? displayedHeight / availableHeight : 0
         ))
         .accessibilityHint("Faites glisser pour redimensionner. Touchez deux fois pour agrandir, puis replier.")
-        .accessibilityIdentifier(bottomList == .friends
-            ? "map-friends-resize-handle" : "map-events-resize-handle")
+        .accessibilityIdentifier("map-events-resize-handle")
         .accessibilityAdjustableAction { direction in
             guard availableHeight > 0 else { return }
             switch direction {
@@ -287,7 +260,6 @@ private struct MapDetailArrangement<Lists: View, MapContent: View, ListHandle: V
     let windowSize: CGSize
     let safeInsets: EdgeInsets
     let lists: Lists
-    let listKind: MapBottomList?
     let mapContent: MapContent
     @ViewBuilder let listHandle: (CGFloat) -> ListHandle
 
@@ -335,9 +307,9 @@ private struct MapDetailArrangement<Lists: View, MapContent: View, ListHandle: V
         }
         .background(.black)
         .overlay(alignment: .bottom) {
-            // Keep both lists mounted while their pane is closed.
+            // Keep the events list mounted while its pane is closed.
             lists
-                .frame(height: max(0, listPaneHeight))
+                .frame(height: max(0, listPaneHeight), alignment: .top)
                 .padding(EdgeInsets(
                     top: 0, leading: safeInsets.leading,
                     bottom: 0, trailing: safeInsets.trailing
@@ -349,8 +321,6 @@ private struct MapDetailArrangement<Lists: View, MapContent: View, ListHandle: V
                     style: .continuous
                 ))
                 .opacity(expansion)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier(listKind == .friends ? "map-friends-pane" : "map-events-pane")
                 .accessibilityHidden(listSeparatorHeight == 0)
                 .allowsHitTesting(listSeparatorHeight > 0)
         }
