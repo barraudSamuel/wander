@@ -7,6 +7,7 @@ struct MapImageButton: View {
     let assetName: String
     let label: String
     var isSelected = false
+    var diameter: CGFloat = MapImageButton.side
     let action: () -> Void
 
     var body: some View {
@@ -15,7 +16,7 @@ struct MapImageButton: View {
                 .renderingMode(.original)
                 .resizable()
                 .scaledToFit()
-                .frame(width: Self.side, height: Self.side)
+                .frame(width: diameter, height: diameter)
                 .clipShape(Circle())
                 .shadow(color: .black.opacity(0.35), radius: 5, x: 0, y: 2)
                 .contentShape(Circle())

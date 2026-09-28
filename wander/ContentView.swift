@@ -148,7 +148,6 @@ struct ContentView: View {
     private var mapDockContent: some View {
         return GeometryReader { geometry in
             MotionDockView(
-                onExplore: showExplore,
                 isEventsPresented: areEventsPresented,
                 onToggleEvents: toggleEvents
             ) {
@@ -279,11 +278,6 @@ struct ContentView: View {
         let shouldPresent = !areEventsPresented
         if selectedMapDetail?.profile != nil { selectedMapDetail = nil }
         bottomList = shouldPresent ? .events : nil
-    }
-
-    private func showExplore() {
-        guard !isProfileAccountFlowActive else { return }
-        bottomList = nil
     }
 
     private var outingObservedContent: some View {

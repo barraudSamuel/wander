@@ -417,7 +417,7 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertEqual(nativeMap.frame.height, initialSize.height, accuracy: 1)
     }
 
-    func testDockPanelsRemainAvailableAfterClosingFriendSheet() {
+    func testProfileRemainsAvailableAfterClosingFriendSheet() {
         launchDetailScenario(["mixed", "open-friend", "fullscreen"])
         let mapFrame = map.frame
         let nativeSize = app.maps.firstMatch.frame.size
@@ -432,9 +432,11 @@ final class MapSocialGestureUITests: XCTestCase {
         attachScreenshot(named: "Carte conservée après fermeture de la fiche et des panneaux")
     }
 
-    func testFullMapRestoresAfterEventsAndDockPanels() {
+    func testFullMapRestoresAfterEventsAndProfile() {
         launchDetailScenario(["fullscreen"])
-        XCTAssertTrue(app.buttons["motion-dock-explore"].isHittable)
+        XCTAssertTrue(eventsButton.isHittable)
+        XCTAssertFalse(app.buttons["motion-dock-explore"].exists)
+        XCTAssertFalse(app.tabBars.firstMatch.exists)
         assertFullMap(window: app.windows.firstMatch.frame)
         let nativeSize = app.maps.firstMatch.frame.size
         openGroupedEvent(index: 0)
@@ -680,7 +682,7 @@ final class MapSocialGestureUITests: XCTestCase {
         attachScreenshot(named: "Liste chronologique ouverte par le bouton événements")
     }
 
-    func testEventListScrollSurvivesFriendAndDockPanels() {
+    func testEventListScrollSurvivesFriendAndOwnProfile() {
         launchDetailScenario(["mixed", "many-events", "fullscreen", "roster-probe"])
         let probe = app.staticTexts["debug-list-rosters"]
         XCTAssertTrue(probe.waitForExistence(timeout: 3))
@@ -710,7 +712,15 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertTrue(eventsButton.isSelected)
         XCTAssertTrue((probe.value as? String ?? "").contains("suspended=true"))
         XCTAssertFalse(requestedIDs().isEmpty)
-        openMixedFriend(eventCount: 18)
+        openOwnProfile()
+        let amina = ownProfile.buttons["Amina"]
+        for _ in 0..<8 {
+            if amina.isHittable { break }
+            ownProfile.swipeUp()
+        }
+        XCTAssertTrue(amina.isHittable)
+        amina.tap()
+        XCTAssertTrue(detailPane.staticTexts["Amina"].waitForExistence(timeout: 3))
         XCTAssertFalse(eventListIsInteractive)
         XCTAssertFalse(eventsButton.isSelected)
         let rostersSuspended = NSPredicate { _, _ in requestedIDs().isEmpty }
@@ -844,7 +854,7 @@ final class MapSocialGestureUITests: XCTestCase {
         }
     }
 
-    func testEventListRequestsRostersOnScrollAndSuspendsOutsideExplorer() {
+    func testEventListRequestsRostersOnScrollAndSuspendsInProfile() {
         launchDetailScenario(["many-events", "guest", "fullscreen", "roster-probe"])
         let probe = app.staticTexts["debug-list-rosters"]
         XCTAssertTrue(probe.waitForExistence(timeout: 3))
@@ -1250,7 +1260,6 @@ final class MapSocialGestureUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Événements"].exists)
         XCTAssertGreaterThanOrEqual(eventListViewport.minY, eventsResizeHandle.frame.maxY - 2)
         XCTAssertTrue(eventListIsInteractive)
-        XCTAssertLessThanOrEqual(eventListViewport.maxY, app.buttons["motion-dock-explore"].frame.minY)
         XCTAssertLessThanOrEqual(eventListViewport.maxY, eventsButton.frame.minY)
         XCTAssertTrue(eventsButton.isSelected)
         XCTAssertEqual(app.maps.firstMatch.frame.width, nativeSize.width, accuracy: 1)
@@ -1476,8 +1485,6 @@ final class MapDeviceSmokeUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["MTL_DEBUG_LAYER"] = "1"
         app.launch()
-        let explore = app.buttons["motion-dock-explore"]
-        if explore.waitForExistence(timeout: 15) { explore.tap() }
         let nativeMap = app.maps.firstMatch
         XCTAssertTrue(nativeMap.waitForExistence(timeout: 15))
         let viewport = app.otherElements["map-visible-viewport"].firstMatch
@@ -1486,7 +1493,14 @@ final class MapDeviceSmokeUITests: XCTestCase {
         let handle = app.buttons["map-events-resize-handle"]
         XCTAssertTrue(viewport.waitForExistence(timeout: 3))
         XCTAssertTrue(eventsButton.waitForExistence(timeout: 3))
+        if handle.exists {
+            eventsButton.tap()
+            XCTAssertTrue(handle.waitForNonExistence(timeout: 3))
+        }
         let window = app.windows.firstMatch.frame
+        XCTAssertFalse(app.buttons["motion-dock-explore"].exists)
+        XCTAssertFalse(app.tabBars.firstMatch.exists)
+        XCTAssertEqual(eventsButton.frame.midX, window.midX, accuracy: 1)
         XCTAssertEqual(viewport.frame.minY, window.minY, accuracy: 1)
         XCTAssertEqual(viewport.frame.maxY, window.maxY, accuracy: 1)
         XCTAssertFalse(eventsButton.isSelected)
@@ -1544,7 +1558,7 @@ final class MapDeviceSmokeUITests: XCTestCase {
     }
 }
 
-/// Native collections extend beneath the navigation bar and dock. Their children,
+/// Native collections extend beneath the event button. Their children,
 /// rather than the collection container, identify the visible interactive content.
 @MainActor
 private func eventContentViewport(in app: XCUIApplication, content: XCUIElement) -> CGRect {
@@ -1557,8 +1571,7 @@ private func eventContentViewport(in app: XCUIApplication, content: XCUIElement)
     let handle = app.buttons["map-events-resize-handle"]
     if handle.exists { top = max(top, handle.frame.maxY) }
     var bottom = frame.maxY
-    for control in [app.buttons["motion-dock-explore"], app.buttons["motion-dock-events"],
-                    app.segmentedControls.firstMatch] where control.exists {
+    for control in [app.buttons["motion-dock-events"], app.segmentedControls.firstMatch] where control.exists {
         bottom = min(bottom, control.frame.minY)
     }
     return CGRect(x: frame.minX, y: top, width: frame.width, height: max(0, bottom - top))

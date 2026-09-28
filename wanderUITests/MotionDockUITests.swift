@@ -11,67 +11,58 @@ final class MotionDockUITests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["-debug-social-map", "-debug-social-map-fullscreen"]
         app.launch()
-        XCTAssertTrue(command("explore").waitForExistence(timeout: 10))
+        XCTAssertTrue(command("events").waitForExistence(timeout: 10))
     }
 
-    func testNativeNavigationContainsExploreAndEventsWithoutFriends() {
-        let tabBar = app.tabBars["native-map-tab-bar"]
-        XCTAssertTrue(tabBar.waitForExistence(timeout: 3))
-        XCTAssertEqual(tabBar.buttons.count, 1)
-        XCTAssertTrue(command("explore").isSelected)
+    func testEventsButtonReplacesNavigationBar() {
+        XCTAssertFalse(app.tabBars.firstMatch.exists)
+        XCTAssertFalse(command("explore").exists)
         XCTAssertTrue(command("events").isHittable)
         XCTAssertFalse(command("friends").exists)
         XCTAssertFalse(command("profile").exists)
         XCTAssertFalse(app.buttons["map-friends-resize-handle"].exists)
         command("events").tap()
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        command("explore").tap()
+        command("events").tap()
         XCTAssertTrue(eventsHandle.waitForNonExistence(timeout: 3))
-        attachScreenshot("Navigation Explorer et Événements")
+        attachScreenshot("Bouton événements seul en bas de la carte")
     }
 
-    func testEventsButtonSitsBesideNativeTabsAndTogglesList() {
-        let tabBar = app.tabBars["native-map-tab-bar"]
+    func testEventsButtonStaysCenteredAcrossRepeatedListToggles() {
         let events = command("events")
         XCTAssertTrue(events.waitForExistence(timeout: 3))
-        XCTAssertEqual(tabBar.buttons.count, 1)
-        XCTAssertFalse(tabBar.buttons["motion-dock-events"].exists)
-        XCTAssertGreaterThanOrEqual(events.frame.minX, tabBar.frame.maxX)
-        XCTAssertGreaterThanOrEqual(events.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(events.frame.height, 44)
-        XCTAssertLessThanOrEqual(events.frame.maxX, app.windows.firstMatch.frame.maxX)
-        XCTAssertEqual(events.frame.midY, command("explore").frame.midY, accuracy: 2,
-                       "Le calendrier doit être centré verticalement sur les onglets.")
-        XCTAssertTrue(events.isHittable)
+        assertEventsCenteredAtBottom()
         XCTAssertFalse(events.isSelected)
         XCTAssertFalse(eventList.isHittable)
         let nativeMapSize = app.maps.firstMatch.frame.size
         let fullMapFrame = mapViewport.frame
-        let exploreFrame = command("explore").frame
         let buttonFrame = events.frame
 
-        events.tap()
-        XCTAssertTrue(eventList.waitForExistence(timeout: 3))
-        XCTAssertTrue(eventList.isHittable)
-        XCTAssertTrue(events.isSelected)
-        XCTAssertTrue(command("explore").isSelected)
-        // The 44 pt hit target overlaps the 20 pt separator by 12 pt.
-        XCTAssertEqual(mapViewport.frame.maxY, eventsHandle.frame.minY + 12, accuracy: 2)
-        XCTAssertLessThan(mapViewport.frame.height, fullMapFrame.height)
-        XCTAssertEqual(eventList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
-        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
-        XCTAssertEqual(events.frame, buttonFrame)
-        assertExploreFrame(exploreFrame)
+        for iteration in 0..<4 {
+            events.tap()
+            XCTAssertTrue(eventList.waitForExistence(timeout: 3))
+            XCTAssertTrue(eventList.isHittable)
+            XCTAssertTrue(events.isSelected)
+            // The 44 pt hit target overlaps the 20 pt separator by 12 pt.
+            XCTAssertEqual(mapViewport.frame.maxY, eventsHandle.frame.minY + 12, accuracy: 2)
+            XCTAssertLessThan(mapViewport.frame.height, fullMapFrame.height)
+            XCTAssertEqual(eventList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
+            XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+            assertEventsFrame(buttonFrame)
 
-        events.tap()
-        XCTAssertTrue(eventsHandle.waitForNonExistence(timeout: 3))
-        XCTAssertFalse(eventList.isHittable)
-        XCTAssertFalse(events.isSelected)
-        XCTAssertEqual(mapViewport.frame, fullMapFrame)
-        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
-        assertEventsFrame(buttonFrame)
-        assertExploreFrame(exploreFrame)
-        attachScreenshot("Bouton événements à droite de la barre native")
+            if iteration == 0 {
+                attachScreenshot("Croix de fermeture des événements ouverts")
+            }
+
+            events.tap()
+            XCTAssertTrue(eventsHandle.waitForNonExistence(timeout: 3))
+            XCTAssertFalse(eventList.isHittable)
+            XCTAssertFalse(events.isSelected)
+            XCTAssertEqual(mapViewport.frame, fullMapFrame)
+            XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+            assertEventsFrame(buttonFrame)
+        }
+        attachScreenshot("Bouton événements centré après ouvertures et fermetures")
     }
 
     func testEventsButtonReturnsFromPanelsAndOpensAfterFriendSheetCloses() {
@@ -91,19 +82,19 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(eventList.waitForExistence(timeout: 3))
         XCTAssertTrue(eventList.isHittable)
         XCTAssertTrue(command("events").isSelected)
-        XCTAssertTrue(command("explore").isSelected)
+        assertEventsCenteredAtBottom()
         XCTAssertFalse(app.buttons["map-detail-resize-handle"].exists)
         XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
     }
 
     func testImageButtonEdgesOpenTheirSheets() {
         let events = command("events")
-        XCTAssertEqual(events.frame.width, 44, accuracy: 1)
-        XCTAssertEqual(events.frame.height, 44, accuracy: 1)
+        XCTAssertEqual(events.frame.width, 56, accuracy: 1)
+        XCTAssertEqual(events.frame.height, 56, accuracy: 1)
         XCTAssertEqual(profileButton.frame.width, 44, accuracy: 1)
         XCTAssertEqual(profileButton.frame.height, 44, accuracy: 1)
 
-        // Touch near either edge of each image, which fills its 44 pt control.
+        // Touch near either edge of each image, which fills its control.
         for edge in [0.08, 0.92] {
             events.coordinate(withNormalizedOffset: CGVector(dx: edge, dy: 0.5)).tap()
             XCTAssertTrue(eventList.waitForExistence(timeout: 3))
@@ -210,7 +201,7 @@ final class MotionDockUITests: XCTestCase {
         attachScreenshot("Bas du profil avec demandes envoyées et ajout d’ami")
     }
 
-    func testBottomOfEventsListClearsNativeDock() {
+    func testBottomOfEventsListClearsEventsButton() {
         app.terminate()
         app.launchArguments += ["-debug-social-map-many-events"]
         app.launch()
@@ -222,24 +213,24 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertEqual(eventList.staticTexts.matching(identifier: "Événements").count, 1)
         XCTAssertFalse(app.staticTexts["events-panel-title"].exists)
         XCTAssertTrue(command("events").isSelected)
-        XCTAssertTrue(command("explore").isSelected)
+        XCTAssertFalse(command("explore").exists)
         XCTAssertFalse(command("friends").exists)
         XCTAssertFalse(ownSheet.exists)
         XCTAssertTrue(eventsHandle.isHittable)
         XCTAssertEqual(eventList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
-        attachScreenshot("Les événements défilent derrière le dock")
+        attachScreenshot("Les événements défilent derrière le bouton")
 
         let lastEvent = app.descendants(matching: .any)["event-card-00000000-0000-4000-8000-000000000018"].firstMatch
-        let tabBar = app.tabBars["native-map-tab-bar"]
+        let events = command("events")
         for _ in 0..<25 {
-            if lastEvent.exists && lastEvent.isHittable && lastEvent.frame.maxY <= tabBar.frame.minY { break }
-            swipeListAboveDock(eventList, tabBar: tabBar)
-            XCTAssertTrue(command("events").isSelected)
+            if lastEvent.exists && lastEvent.isHittable && lastEvent.frame.maxY <= events.frame.minY { break }
+            swipeListAboveEventsButton(eventList)
+            XCTAssertTrue(events.isSelected)
         }
 
         XCTAssertTrue(lastEvent.isHittable)
-        XCTAssertLessThanOrEqual(lastEvent.frame.maxY, tabBar.frame.minY)
-        attachScreenshot("Dernier événement au-dessus du dock")
+        XCTAssertLessThanOrEqual(lastEvent.frame.maxY, events.frame.minY)
+        attachScreenshot("Dernier événement au-dessus du bouton")
     }
 
     func testFriendProfileOpensFromOwnProfileAndRequestsStayDeclined() {
@@ -290,6 +281,8 @@ final class MotionDockUITests: XCTestCase {
     }
 
     func testFriendInvitationsLiveInProfileAndDraftSurvivesClosing() {
+        let eventsFrame = command("events").frame
+        let originalMap = app.maps.firstMatch.frame
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
         let share = ownSheet.buttons["Partager mon code"]
@@ -308,6 +301,13 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(add.isEnabled)
         closeOwnSheet()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        assertEventsCenteredAtBottom()
+        assertEventsFrame(eventsFrame)
+        XCTAssertEqual(app.maps.firstMatch.frame, originalMap)
+        command("events").tap()
+        XCTAssertTrue(eventsHandle.waitForExistence(timeout: 3))
+        command("events").tap()
+        XCTAssertTrue(eventsHandle.waitForNonExistence(timeout: 3))
 
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
@@ -343,20 +343,18 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertEqual(heatMap.value as? String, "1")
     }
 
-    func testCommandsRemainReachableAfterClosingProfile() {
+    func testEventsButtonRemainsCenteredAndReachableAfterClosingProfile() {
+        let eventsFrame = command("events").frame
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
         revealInOwnSheet(ownSheet.buttons["Accepter"])
         closeOwnSheet()
         XCTAssertFalse(command("friends").exists)
-        for name in ["explore", "events"] {
-            let button = command(name)
-            XCTAssertTrue(button.isHittable)
-            XCTAssertLessThanOrEqual(button.frame.maxX, app.windows.firstMatch.frame.maxX)
-            XCTAssertLessThanOrEqual(button.frame.maxY, app.windows.firstMatch.frame.maxY)
-        }
-        XCTAssertEqual(command("events").frame.midY, command("explore").frame.midY, accuracy: 2)
-        attachScreenshot("Navigation après fermeture du profil")
+        XCTAssertFalse(command("explore").exists)
+        XCTAssertFalse(app.tabBars.firstMatch.exists)
+        assertEventsCenteredAtBottom()
+        assertEventsFrame(eventsFrame)
+        attachScreenshot("Bouton événements après fermeture du profil")
     }
 
     private var profileButton: XCUIElement { app.buttons["map-own-profile"] }
@@ -390,8 +388,8 @@ final class MotionDockUITests: XCTestCase {
     }
 
 
-    private func swipeListAboveDock(_ list: XCUIElement, tabBar: XCUIElement) {
-        let startY = min(list.frame.maxY - 30, tabBar.frame.minY - 40)
+    private func swipeListAboveEventsButton(_ list: XCUIElement) {
+        let startY = min(list.frame.maxY - 30, command("events").frame.minY - 40)
         let endY = list.frame.minY + 40
         let window = app.windows.firstMatch
         let start = window.coordinate(withNormalizedOffset: .zero)
@@ -413,9 +411,15 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertEqual(actual.midY, expected.midY, accuracy: 1, file: file, line: line)
     }
 
-    private func assertExploreFrame(_ expected: CGRect) {
-        XCTAssertEqual(command("explore").frame.midX, expected.midX, accuracy: 1)
-        XCTAssertEqual(command("explore").frame.midY, expected.midY, accuracy: 1)
+    private func assertEventsCenteredAtBottom(file: StaticString = #filePath, line: UInt = #line) {
+        let events = command("events")
+        let window = app.windows.firstMatch.frame
+        XCTAssertTrue(events.isHittable, file: file, line: line)
+        XCTAssertEqual(events.frame.width, 56, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(events.frame.height, 56, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(events.frame.midX, window.midX, accuracy: 1, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(events.frame.minY, window.maxY - 120, file: file, line: line)
+        XCTAssertLessThanOrEqual(events.frame.maxY, window.maxY - 8, file: file, line: line)
     }
 
     private func command(_ name: String) -> XCUIElement {

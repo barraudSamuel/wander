@@ -30,7 +30,6 @@ struct DebugSocialMapScenarioView: View {
     var body: some View {
         if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
             MotionDockView(
-                onExplore: { bottomList = nil },
                 isEventsPresented: areEventsPresented,
                 onToggleEvents: toggleEvents
             ) {

@@ -1,15 +1,13 @@
 import SwiftUI
 
-/// Keeps one map scene mounted above the native navigation.
+/// Keeps one map scene mounted beneath the events button.
 struct MotionDockView<MapContent: View>: View {
-    let onExplore: () -> Void
     let isEventsPresented: Bool
     let onToggleEvents: () -> Void
     @ViewBuilder let map: () -> MapContent
 
     var body: some View {
         NativeMapTabView(
-            onExplore: onExplore,
             isEventsPresented: isEventsPresented,
             onToggleEvents: onToggleEvents
         ) {
