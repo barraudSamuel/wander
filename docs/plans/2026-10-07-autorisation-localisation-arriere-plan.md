@@ -1,6 +1,6 @@
 ---
 title: "Refléter l’autorisation réelle de localisation en arrière-plan"
-status: blocked
+status: in_progress
 date: 2026-10-07
 approved_at: 2026-10-07
 owner: Samuel
@@ -62,7 +62,7 @@ https://developer.apple.com/documentation/corelocation/cllocationmanager/request
 - [x] Ajouter et exécuter les sept tests de logique dans un paquet iOS isolé.
 - [x] Simplifier et revoir le diff de cette correction uniquement.
 - [x] Mettre à jour la documentation et consigner les limites de validation.
-- [ ] Compiler l’application complète et exécuter les tests intégrés.
+- [x] Compiler l’application complète et exécuter les tests intégrés.
 - [ ] Valider le rendu et le parcours système dans l’application et sur appareil.
 
 ## Risques et validation
@@ -99,7 +99,7 @@ plans du 28 septembre sur les boutons et icônes événements.
 
 ## Validation effectuée
 
-### Compilation complète : bloquée
+### Première compilation complète : bloquée par H3, puis débloquée
 
 Commande exécutée dans le dépôt :
 
@@ -163,6 +163,26 @@ repose sur la lecture du code et la documentation Apple.
 - Validation restante consignée dans
   [071](../../todos/071-ready-p2-valider-autorisation-arriere-plan.md).
 
-Le plan reste `blocked` sans `completed_at` : le build et la validation intégrée
-font partie des critères d’acceptation. Résoudre H3 nécessite une modification
-de dépendance hors du périmètre approuvé, donc un plan séparé.
+### Validation intégrée après correction de H3
+
+Le [plan H3 distinct approuvé](2026-10-07-corriger-dependance-h3.md) a remplacé
+la dépendance distante par une copie locale de la même révision. La compilation
+Debug de l'application complète réussit. Les sept tests de
+`wanderTests/LocationTrackerTests` passent désormais dans le projet Wander,
+sans extraction dans un paquet temporaire.
+
+Commande finale :
+
+```sh
+xcodebuild -project wander.xcodeproj -scheme wander -configuration Debug -destination 'platform=iOS Simulator,id=C0DADF07-7E14-4D5E-AE4B-B17844A9C454' -parallel-testing-enabled NO -disableAutomaticPackageResolution -resultBundlePath /private/tmp/wander-h3-fix/final-tests.xcresult -only-testing:wanderTests/LocationTrackerTests -only-testing:wanderUITests/MotionDockUITests/testEventsButtonStaysCenteredAcrossRepeatedListToggles test
+```
+
+Résultat : huit tests exécutés et réussis, zéro échec ou test ignoré, sur
+l'iPhone 17 Pro existant, iOS 26.3.1. Le test UI supplémentaire vérifie
+l'ouverture de la carte et de la liste d'événements avec des données locales ;
+il ne valide pas la feuille des permissions ni les dialogues système.
+Journal : `/private/tmp/wander-h3-fix/final-tests.log`.
+
+Le plan revient à `in_progress`, sans `completed_at`. Le blocage de compilation
+est levé ; le rendu des permissions, les retours des Réglages et le parcours
+sur appareil réel restent suivis dans le constat 071.

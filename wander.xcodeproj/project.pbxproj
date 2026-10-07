@@ -438,7 +438,7 @@
 			mainGroup = 37F8D0CC2FE28F0200AA042A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				37F8D0E72FE2AAB700AA042A /* XCRemoteSwiftPackageReference "H3Swift" */,
+				37F8D0E72FE2AAB700AA042A /* XCLocalSwiftPackageReference "Vendor/H3Swift" */,
 				3758ECDD2FEBB9630082CF8C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -691,11 +691,15 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = wander/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Wander;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Wander utilise votre position en arrière-plan pour poursuivre une exploration et permettre à vos amis acceptés d’actualiser votre position lorsque votre partage est actif.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Wander utilise votre position pour révéler votre carte et mettre à jour les fonctions entre amis lorsque l’exploration est active.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -725,11 +729,15 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = wander/wander.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = MDSH9S69B9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = wander/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Wander;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Wander utilise votre position en arrière-plan pour poursuivre une exploration et permettre à vos amis acceptés d’actualiser votre position lorsque votre partage est actif.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Wander utilise votre position pour révéler votre carte et mettre à jour les fonctions entre amis lorsque l’exploration est active.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -1041,6 +1049,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		37F8D0E72FE2AAB700AA042A /* XCLocalSwiftPackageReference "Vendor/H3Swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/H3Swift;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		3758ECDD2FEBB9630082CF8C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -1048,14 +1063,6 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 12.15.0;
-			};
-		};
-		37F8D0E72FE2AAB700AA042A /* XCRemoteSwiftPackageReference "H3Swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/libardoram/H3Swift.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -1078,7 +1085,7 @@
 		};
 		37F8D0E82FE2AAB700AA042A /* H3 */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 37F8D0E72FE2AAB700AA042A /* XCRemoteSwiftPackageReference "H3Swift" */;
+			package = 37F8D0E72FE2AAB700AA042A /* XCLocalSwiftPackageReference "Vendor/H3Swift" */;
 			productName = H3;
 		};
 		B20000000000000000000001 /* FirebaseFunctions */ = {
