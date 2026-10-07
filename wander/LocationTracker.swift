@@ -17,6 +17,38 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         case lowPower
     }
 
+    /// A foreground permission request may only lead to Always after an
+    /// explicit background-tracking action in this session.
+    struct BackgroundAuthorizationRequest {
+        enum Action: Equatable {
+            case whenInUse
+            case always
+        }
+
+        private var awaitingForegroundPermission = false
+
+        mutating func begin(with status: CLAuthorizationStatus) -> Action? {
+            awaitingForegroundPermission = status == .notDetermined
+            switch status {
+            case .notDetermined: return .whenInUse
+            case .authorizedWhenInUse: return .always
+            default: return nil
+            }
+        }
+
+        mutating func receive(_ status: CLAuthorizationStatus) -> Action? {
+            guard awaitingForegroundPermission, status != .notDetermined else {
+                return nil
+            }
+            awaitingForegroundPermission = false
+            return status == .authorizedWhenInUse ? .always : nil
+        }
+
+        mutating func cancel() {
+            awaitingForegroundPermission = false
+        }
+    }
+
     /// A normalized location fix used by the spot-presence state machine.
     private struct SpotSample {
         let coordinate: CLLocationCoordinate2D
@@ -136,6 +168,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     /// Tracks whether the user tapped Start while the permission was still undetermined.
     /// We use this to automatically begin tracking once the permission is granted.
     private var shouldStartAfterPermission = false
+    private var backgroundAuthorizationRequest = BackgroundAuthorizationRequest()
 
     override init() {
         self.authorizationStatus = locationManager.authorizationStatus
@@ -267,20 +300,36 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         locationManager.allowsBackgroundLocationUpdates = isEnabled
 
         guard isEnabled else {
+            backgroundAuthorizationRequest.cancel()
             locationManager.stopMonitoringSignificantLocationChanges()
             locationManager.stopMonitoringVisits()
             return
         }
 
-        if authorizationStatus == .authorizedWhenInUse {
-            locationManager.requestAlwaysAuthorization()
-        } else if authorizationStatus == .notDetermined {
-            requestPermissionIfNeeded()
-        }
+        refreshAuthorizationStatus()
+        performAuthorizationRequest(
+            backgroundAuthorizationRequest.begin(with: authorizationStatus)
+        )
 
         if trackingEnabled, isTracking {
             applyTrackingMode(.foreground)
         }
+    }
+
+    private func performAuthorizationRequest(_ action: BackgroundAuthorizationRequest.Action?) {
+        switch action {
+        case .whenInUse:
+            requestPermissionIfNeeded()
+        case .always:
+            locationManager.requestAlwaysAuthorization()
+        case nil:
+            break
+        }
+    }
+
+    /// Refresh even while tracking is paused, including when returning from Settings.
+    func refreshAuthorizationStatus() {
+        authorizationStatus = locationManager.authorizationStatus
     }
 
     // MARK: - Tracking control
@@ -324,6 +373,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     func stopTracking() {
         shouldStartAfterPermission = false
+        backgroundAuthorizationRequest.cancel()
         UserDefaults.standard.set(false, forKey: trackingEnabledKey)
         trackingEnabled = false
         isTracking = false
@@ -801,10 +851,13 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         guard manager === locationManager else { return }
-        let newStatus = manager.authorizationStatus
 
         Task { @MainActor in
+            let newStatus = self.locationManager.authorizationStatus
             self.authorizationStatus = newStatus
+            self.performAuthorizationRequest(
+                self.backgroundAuthorizationRequest.receive(newStatus)
+            )
 
             if newStatus != .authorizedWhenInUse
                 && newStatus != .authorizedAlways {
@@ -818,6 +871,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 self.isTracking = false
                 self.lastError = "L’accès à la localisation a été refusé ou restreint."
             } else if newStatus == .authorizedWhenInUse || newStatus == .authorizedAlways {
+                self.lastError = nil
                 if self.shouldStartAfterPermission {
                     self.shouldStartAfterPermission = false
                     self.startTracking()

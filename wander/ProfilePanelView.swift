@@ -168,6 +168,8 @@ struct ProfilePanelView: View {
                 Section {
                     Toggle("Enregistrer mes déplacements", isOn: trackingBinding)
 
+                    LabeledContent("Autorisation iOS", value: locationAuthorizationDescription)
+
                     if locationTracker.authorizationStatus == .authorizedWhenInUse
                         || locationTracker.authorizationStatus == .authorizedAlways {
                         Toggle(
@@ -176,14 +178,29 @@ struct ProfilePanelView: View {
                         )
                     }
 
-                    if locationTracker.authorizationStatus == .denied
-                        || locationTracker.authorizationStatus == .restricted {
+                    if locationTracker.authorizationStatus == .denied {
                         Label(
                             "Autorise la localisation dans Réglages pour reprendre l’exploration.",
                             systemImage: "location.slash"
                         )
                         .foregroundStyle(.secondary)
+                    } else if locationTracker.authorizationStatus == .restricted {
+                        Label(
+                            "La localisation est restreinte sur cet iPhone.",
+                            systemImage: "location.slash"
+                        )
+                        .foregroundStyle(.secondary)
+                    } else if needsAlwaysAuthorization {
+                        Label(
+                            "Autorisation Toujours nécessaire. Dans les réglages de Wander, ouvre Position puis sélectionne Toujours.",
+                            systemImage: "location"
+                        )
+                        .foregroundStyle(.secondary)
+                    }
 
+                    if needsAlwaysAuthorization
+                        || locationTracker.authorizationStatus == .denied
+                        || locationTracker.authorizationStatus == .restricted {
                         Button {
                             openSettings()
                         } label: {
@@ -533,6 +550,22 @@ struct ProfilePanelView: View {
                 locationTracker.setBackgroundTrackingEnabled(isEnabled)
             }
         )
+    }
+
+    private var needsAlwaysAuthorization: Bool {
+        locationTracker.backgroundTrackingEnabled
+            && locationTracker.authorizationStatus == .authorizedWhenInUse
+    }
+
+    private var locationAuthorizationDescription: String {
+        switch locationTracker.authorizationStatus {
+        case .notDetermined: return "Non demandée"
+        case .restricted: return "Restreinte"
+        case .denied: return "Refusée"
+        case .authorizedWhenInUse: return "Lorsque l’app est active"
+        case .authorizedAlways: return "Toujours"
+        @unknown default: return "Inconnue"
+        }
     }
 
     private var notificationsBinding: Binding<Bool> {

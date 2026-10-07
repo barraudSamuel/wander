@@ -347,6 +347,7 @@ struct ContentView: View {
             switch newPhase {
             case .active:
                 friendSyncService.resumeGhostModeSynchronization()
+                locationTracker.refreshAuthorizationStatus()
                 locationTracker.resumeTrackingIfNeeded()
                 synchronizeLocationPushRegistration()
                 openPendingNotificationRouteIfPossible()
