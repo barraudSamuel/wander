@@ -304,21 +304,34 @@ struct MapEventsPanelView: View {
         if outing.isCurrentUser {
             eventAction("Modifier", systemImage: "pencil") { onEdit(outing.plan.id) }
         } else {
-            eventAction("Participer", systemImage: "checkmark") { onSetAttendance(outing.plan.id, true) }
-                .buttonStyle(.borderedProminent)
-                .disabled(!MapEventListPresentation.canRespond(to: outing))
-            eventAction("Refuser", systemImage: "xmark") { onSetAttendance(outing.plan.id, false) }
-                .disabled(!MapEventListPresentation.canRespond(to: outing))
+            eventAction("Participer", systemImage: "checkmark", isSelected: outing.participationState == .attending) {
+                onSetAttendance(outing.plan.id, true)
+            }
+            .disabled(!MapEventListPresentation.canRespond(to: outing))
+            eventAction("Refuser", systemImage: "xmark", isSelected: outing.participationState == .declined) {
+                onSetAttendance(outing.plan.id, false)
+            }
+            .disabled(!MapEventListPresentation.canRespond(to: outing))
         }
         eventAction("Itinéraire", systemImage: "map") { onOpenDirections(outing.plan.id) }
     }
 
-    private func eventAction(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    @ViewBuilder
+    private func eventAction(
+        _ title: String, systemImage: String, isSelected: Bool = false, action: @escaping () -> Void
+    ) -> some View {
+        let button = Button(action: action) {
             Label(title, systemImage: systemImage)
                 .labelStyle(.iconOnly)
                 .frame(width: 28, height: 32)
         }
         .accessibilityLabel(title)
+
+        if isSelected {
+            button.buttonStyle(.borderedProminent)
+                .accessibilityAddTraits(.isSelected)
+        } else {
+            button.accessibilityRemoveTraits(.isSelected)
+        }
     }
 }

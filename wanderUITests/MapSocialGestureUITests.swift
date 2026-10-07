@@ -543,12 +543,31 @@ final class MapSocialGestureUITests: XCTestCase {
         launchDetailScenario(["guest", "stress", "fullscreen"])
         openEventList()
         let mapFrame = map.frame
-        for shouldAttend in [true, false, true] {
+        let card = revealEvent(1)
+        attachScreenshot(named: "Boutons de réponse sans choix enregistré")
+        for title in ["Participer", "Refuser"] {
+            let button = card.buttons[title].firstMatch
+            XCTAssertFalse(button.isSelected)
+            XCTAssertTrue(button.isEnabled)
+        }
+        for (index, shouldAttend) in [true, false, true].enumerated() {
             revealEventAction(shouldAttend ? "Participer" : "Refuser", event: 1).tap()
             XCTAssertTrue(eventRow(1).label.contains(shouldAttend ? "Vous participez" : "Vous ne participez pas"))
+            XCTAssertEqual(card.buttons["Participer"].firstMatch.isSelected, shouldAttend)
+            XCTAssertEqual(card.buttons["Refuser"].firstMatch.isSelected, !shouldAttend)
+            XCTAssertTrue(card.buttons[shouldAttend ? "Refuser" : "Participer"].firstMatch.isEnabled)
             XCTAssertTrue(eventListIsInteractive)
             XCTAssertEqual(map.frame, mapFrame)
+            attachScreenshot(named: "Réponse \(index + 1) : \(shouldAttend ? "participation" : "refus")")
         }
+        eventsButton.tap()
+        XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+        openEventList()
+        let reopenedCard = revealEvent(1)
+        XCTAssertTrue(reopenedCard.buttons["Participer"].firstMatch.isSelected)
+        XCTAssertFalse(reopenedCard.buttons["Refuser"].firstMatch.isSelected)
+        XCTAssertTrue(reopenedCard.buttons["Refuser"].firstMatch.isEnabled)
+        XCTAssertEqual(map.frame, mapFrame)
         XCTAssertFalse(resizeHandle.exists)
     }
 
@@ -886,10 +905,18 @@ final class MapSocialGestureUITests: XCTestCase {
         let initialListFrame = eventListViewport
         revealEventAction("Participer", event: 1).tap()
         XCTAssertTrue(eventRow(1).label.contains("Vous participez"))
+        XCTAssertTrue(eventRow(1).buttons["Participer"].firstMatch.isSelected)
+        XCTAssertFalse(eventRow(1).buttons["Refuser"].firstMatch.isSelected)
         XCTAssertTrue(revealEvent(2).label.contains("Vous participez"))
+        XCTAssertTrue(eventRow(2).buttons["Participer"].firstMatch.isSelected)
+        XCTAssertFalse(eventRow(2).buttons["Refuser"].firstMatch.isSelected)
         revealEventAction("Refuser", event: 1).tap()
         XCTAssertTrue(eventRow(1).label.contains("Vous ne participez pas"))
+        XCTAssertFalse(eventRow(1).buttons["Participer"].firstMatch.isSelected)
+        XCTAssertTrue(eventRow(1).buttons["Refuser"].firstMatch.isSelected)
         XCTAssertTrue(revealEvent(2).label.contains("Vous participez"))
+        XCTAssertTrue(eventRow(2).buttons["Participer"].firstMatch.isSelected)
+        XCTAssertFalse(eventRow(2).buttons["Refuser"].firstMatch.isSelected)
         XCTAssertEqual(eventListViewport, initialListFrame)
         let owned = revealEvent(3)
         XCTAssertFalse(owned.buttons["Participer"].exists)
@@ -900,9 +927,17 @@ final class MapSocialGestureUITests: XCTestCase {
 
     func testEventListUnknownOrUpdatingResponseDisablesResponseActions() {
         for option in ["loading", "unavailable", "updating"] {
-            launchDetailScenario(["guest", "fullscreen", option])
-            for title in ["Participer", "Refuser"] {
-                XCTAssertFalse(revealEventAction(title, event: 1).isEnabled)
+            launchDetailScenario(["guest", "social-list", "fullscreen", option])
+            for number in [1, 2] {
+                let card = revealEvent(number)
+                for title in ["Participer", "Refuser"] {
+                    let button = card.buttons[title].firstMatch
+                    let context = "\(option), événement \(number), \(title)"
+                    XCTAssertFalse(button.isEnabled, context)
+                    XCTAssertEqual(
+                        button.isSelected, number == 2 && option == "updating" && title == "Participer", context
+                    )
+                }
             }
             XCTAssertTrue(revealEventAction("Itinéraire", event: 1).isEnabled)
         }
