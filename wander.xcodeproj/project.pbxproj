@@ -18,13 +18,13 @@
 		A10000000000000000000005 /* wander/SharedFirebaseAuthConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */; };
 		A10000000000000000000006 /* wander/SharedPlaceImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* wander/SharedPlaceImport.swift */; };
 		A10000000000000000000007 /* wander/GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* wander/GoogleService-Info.plist */; };
-		A10000000000000000000008 /* WanderShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* WanderShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A10000000000000000000008 /* WanderShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* WanderShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B10000000000000000000001 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = B20000000000000000000001 /* FirebaseFunctions */; };
 		B10000000000000000000002 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE52FEBBC300082CF8C /* FirebaseAuth */; };
 		B10000000000000000000003 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 3758ECE32FEBBC270082CF8C /* FirebaseFirestore */; };
 		B10000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* wander/SharedFirebaseAuthConfiguration.swift */; };
 		B10000000000000000000005 /* wander/GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* wander/GoogleService-Info.plist */; };
-		B10000000000000000000006 /* WanderLocationPushExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* WanderLocationPushExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B10000000000000000000006 /* WanderLocationPushExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* WanderLocationPushExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B10000000000000000000007 /* wander/LocationPushSharedConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* wander/LocationPushSharedConfiguration.swift */; };
 /* End PBXBuildFile section */
 
@@ -60,16 +60,16 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		A70000000000000000000003 /* Embed App Extensions */ = {
+		A70000000000000000000003 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				A10000000000000000000008 /* WanderShareExtension.appex in Embed App Extensions */,
-				B10000000000000000000006 /* WanderLocationPushExtension.appex in Embed App Extensions */,
+				A10000000000000000000008 /* WanderShareExtension.appex in Embed Foundation Extensions */,
+				B10000000000000000000006 /* WanderLocationPushExtension.appex in Embed Foundation Extensions */,
 			);
-			name = "Embed App Extensions";
+			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -253,7 +253,7 @@
 				37F8D0D12FE28F0200AA042A /* Sources */,
 				37F8D0D22FE28F0200AA042A /* Frameworks */,
 				37F8D0D32FE28F0200AA042A /* Resources */,
-				A70000000000000000000003 /* Embed App Extensions */,
+				A70000000000000000000003 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
@@ -378,7 +378,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2630;
-				LastUpgradeCheck = 2630;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					37F8D0D42FE28F0200AA042A = {
 						CreatedOnToolsVersion = 26.3;
@@ -622,6 +622,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -679,6 +680,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
