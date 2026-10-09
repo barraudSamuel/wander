@@ -6,6 +6,8 @@
 	<array>
 		<string>nmap</string>
 	</array>
+	<key>MBXAccessToken</key>
+	<string>$(MAPBOX_ACCESS_TOKEN)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

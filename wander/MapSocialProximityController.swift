@@ -3,24 +3,26 @@
 //  wander
 //
 
-import MapKit
+import CoreLocation
+import MapboxMaps
 import UIKit
 
 /// Owns the native lifecycle of social groups, including temporary member focus.
-/// MapKit callbacks return here so rendering never becomes a second source of truth.
+/// Mapbox callbacks return here so rendering never becomes a second source of truth.
 @MainActor
 final class MapSocialProximityController {
+    private let annotationStore: MapAnnotationStore
     private let presentation: (MapSocialProximityGroupAnnotation) -> MapSocialClusterPresentation
-    private let setFocusAppearance: (Bool, MKAnnotationView) -> Void
+    private let setFocusAppearance: (Bool, MapAnnotationView) -> Void
     private let onDeselectMember: (MapSocialClusterMemberID) -> Void
-    private let visibleBounds: @MainActor (MKMapView) -> CGRect
+    private let visibleBounds: @MainActor (MapboxMaps.MapView) -> CGRect
     private let onRequestOwnProfile: (() -> Void)?
     private let onRequestFriendProfile: ((String) -> Void)?
     private var state = MapSocialProximityState()
-    private var sources: [MapSocialClusterMemberID: any MKAnnotation] = [:]
+    private var sources: [MapSocialClusterMemberID: MapAnnotation] = [:]
     private var memberIDsByAnnotation: [ObjectIdentifier: MapSocialClusterMemberID] = [:]
     private var groupsByID: [String: MapSocialProximityGroupAnnotation] = [:]
-    private var managedAnnotations: [ObjectIdentifier: any MKAnnotation] = [:]
+    private var managedAnnotations: [ObjectIdentifier: MapAnnotation] = [:]
     private var lastAppliedRevision: Int?
     private var expandedGroupID: String?
     private weak var expandedView: MapSocialClusterAnnotationView?
@@ -31,15 +33,17 @@ final class MapSocialProximityController {
     private var isFittingExpandedGroup = false
 
     init(
+        annotationStore: MapAnnotationStore,
         presentation: @escaping (MapSocialProximityGroupAnnotation) -> MapSocialClusterPresentation,
-        setFocusAppearance: @escaping (Bool, MKAnnotationView) -> Void,
+        setFocusAppearance: @escaping (Bool, MapAnnotationView) -> Void,
         onDeselectMember: @escaping (MapSocialClusterMemberID) -> Void = { _ in },
         onRequestOwnProfile: (() -> Void)? = nil,
         onRequestFriendProfile: ((String) -> Void)? = nil,
-        visibleBounds: @escaping @MainActor (MKMapView) -> CGRect = {
+        visibleBounds: @escaping @MainActor (MapboxMaps.MapView) -> CGRect = {
             $0.bounds.inset(by: $0.safeAreaInsets)
         }
     ) {
+        self.annotationStore = annotationStore
         self.presentation = presentation
         self.setFocusAppearance = setFocusAppearance
         self.onDeselectMember = onDeselectMember
@@ -55,16 +59,16 @@ final class MapSocialProximityController {
     // MARK: - Sources and rendering
 
     func update(
-        sources nextSources: [MapSocialClusterMemberID: any MKAnnotation],
-        on mapView: MKMapView
+        sources nextSources: [MapSocialClusterMemberID: MapAnnotation],
+        on mapView: MapboxMaps.MapView
     ) {
         let previousFocus = focusedAnnotation
         let previousMemberID = state.focusedMemberID
-        let nextObjectIDs = nextSources.mapValues { ObjectIdentifier($0 as AnyObject) }
-        let previousObjectIDs = sources.mapValues { ObjectIdentifier($0 as AnyObject) }
+        let nextObjectIDs = nextSources.mapValues { ObjectIdentifier($0) }
+        let previousObjectIDs = sources.mapValues { ObjectIdentifier($0) }
         sources = nextSources
         memberIDsByAnnotation = Dictionary(uniqueKeysWithValues: sources.map {
-            (ObjectIdentifier($0.value as AnyObject), $0.key)
+            (ObjectIdentifier($0.value), $0.key)
         })
         state.update(sources: sources.map {
             MapSocialProximityState.Source(id: $0.key, coordinate: $0.value.coordinate)
@@ -76,10 +80,10 @@ final class MapSocialProximityController {
         if let previousFocus, !isFocused(previousFocus) {
             selectionGeneration &+= 1
             pendingSelection = state.focusedMemberID
-            if let view = mapView.view(for: previousFocus) {
+            if let view = annotationStore.view(for: previousFocus) {
                 setFocusAppearance(false, view)
             }
-            mapView.deselectAnnotation(previousFocus, animated: false)
+            annotationStore.deselectAnnotation(previousFocus, animated: false)
         }
         if let previousMemberID, previousMemberID != state.focusedMemberID {
             onDeselectMember(previousMemberID)
@@ -87,15 +91,15 @@ final class MapSocialProximityController {
         if previousObjectIDs != nextObjectIDs {
             lastAppliedRevision = nil
         }
-        synchronize(on: mapView)
+        synchronize()
         refreshViews(on: mapView)
         viewportDidChange(on: mapView)
         selectPendingAnnotationIfVisible(on: mapView)
     }
 
-    func isFocused(_ annotation: any MKAnnotation) -> Bool {
+    func isFocused(_ annotation: MapAnnotation) -> Bool {
         guard let focusedAnnotation else { return false }
-        return (focusedAnnotation as AnyObject) === (annotation as AnyObject)
+        return focusedAnnotation === annotation
     }
 
     var hasActivePresentation: Bool {
@@ -105,19 +109,19 @@ final class MapSocialProximityController {
     /// Invalidates queued presentation work after a selection or teardown.
     var presentationRevision: Int { selectionGeneration }
 
-    private var focusedAnnotation: (any MKAnnotation)? {
+    private var focusedAnnotation: (MapAnnotation)? {
         state.focusedMemberID.flatMap { sources[$0] }
     }
 
-    private func memberID(for annotation: any MKAnnotation) -> MapSocialClusterMemberID? {
-        memberIDsByAnnotation[ObjectIdentifier(annotation as AnyObject)]
+    private func memberID(for annotation: MapAnnotation) -> MapSocialClusterMemberID? {
+        memberIDsByAnnotation[ObjectIdentifier(annotation)]
     }
 
-    private func synchronize(on mapView: MKMapView) {
+    private func synchronize() {
         guard lastAppliedRevision != state.revision else { return }
-        // Publish ownership before MapKit can synchronously call its delegate.
+        // Publish ownership before adding views can synchronously trigger selection.
         lastAppliedRevision = state.revision
-        var desired: [any MKAnnotation] = []
+        var desired: [MapAnnotation] = []
         var nextGroups: [String: MapSocialProximityGroupAnnotation] = [:]
         for group in state.groups {
             let members = group.memberIDs.compactMap { sources[$0] }
@@ -142,25 +146,26 @@ final class MapSocialProximityController {
             desired.append(focusedAnnotation)
         }
         let desiredByID = Dictionary(uniqueKeysWithValues: desired.map {
-            (ObjectIdentifier($0 as AnyObject), $0)
+            (ObjectIdentifier($0), $0)
         })
         let removed = managedAnnotations.filter { desiredByID[$0.key] == nil }.map(\.value)
         groupsByID = nextGroups
         managedAnnotations = desiredByID
         if !removed.isEmpty {
-            mapView.removeAnnotations(removed)
+            annotationStore.removeAnnotations(removed)
         }
-        let attachedIDs = Set(mapView.annotations.map { ObjectIdentifier($0 as AnyObject) })
-        let added = desired.filter { !attachedIDs.contains(ObjectIdentifier($0 as AnyObject)) }
+        let attachedIDs = Set(annotationStore.annotations.map { ObjectIdentifier($0) })
+        let added = desired.filter { !attachedIDs.contains(ObjectIdentifier($0)) }
         if !added.isEmpty {
-            mapView.addAnnotations(added)
+            annotationStore.addAnnotations(added)
         }
+        annotationStore.synchronizeCoordinates()
     }
 
-    func refreshViews(on mapView: MKMapView) {
+    func refreshViews(on mapView: MapboxMaps.MapView) {
         for annotation in sources.values {
-            if let view = mapView.view(for: annotation) {
-                view.isAccessibilityElement = view.cluster == nil
+            if let view = annotationStore.view(for: annotation) {
+                view.isAccessibilityElement = true
                 setFocusAppearance(isFocused(annotation), view)
             }
         }
@@ -168,7 +173,7 @@ final class MapSocialProximityController {
             collapseExpandedGroup(on: mapView, animated: false)
         }
         for group in groupsByID.values {
-            guard let view = mapView.view(for: group) as? MapSocialClusterAnnotationView else {
+            guard let view = annotationStore.view(for: group) as? MapSocialClusterAnnotationView else {
                 continue
             }
             configure(view, for: group, on: mapView)
@@ -178,7 +183,7 @@ final class MapSocialProximityController {
     func configure(
         _ view: MapSocialClusterAnnotationView,
         for group: MapSocialProximityGroupAnnotation,
-        on mapView: MKMapView
+        on mapView: MapboxMaps.MapView
     ) {
         if let bounds = expandedGroupBounds(on: mapView) {
             view.setExpandedViewportSize(bounds.size)
@@ -209,12 +214,12 @@ final class MapSocialProximityController {
     /// The returned member routes the product action; groups are handled internally.
     @discardableResult
     func activate(
-        _ annotation: any MKAnnotation,
-        view: MKAnnotationView,
-        on mapView: MKMapView
+        _ annotation: MapAnnotation,
+        view: MapAnnotationView,
+        on mapView: MapboxMaps.MapView
     ) -> MapSocialClusterMemberID? {
-        guard managedAnnotations[ObjectIdentifier(annotation as AnyObject)] != nil,
-              mapView.view(for: annotation) === view else { return nil }
+        guard managedAnnotations[ObjectIdentifier(annotation)] != nil,
+              annotationStore.view(for: annotation) === view else { return nil }
         if let group = annotation as? MapSocialProximityGroupAnnotation {
             expand(group, on: mapView)
             return nil
@@ -230,9 +235,7 @@ final class MapSocialProximityController {
             pendingSelection = nil
             changeFocus(to: memberID, on: mapView)
         }
-        if mapView.userTrackingMode != .none {
-            mapView.setUserTrackingMode(.none, animated: false)
-        }
+        mapView.viewport.idle()
         let usesProfileCamera: Bool
         switch memberID {
         case .friend: usesProfileCamera = onRequestFriendProfile != nil
@@ -240,19 +243,19 @@ final class MapSocialProximityController {
         case .outing: usesProfileCamera = false
         }
         if shouldRecenter && !usesProfileCamera {
-            mapView.setCenter(annotation.coordinate, animated: !UIAccessibility.isReduceMotionEnabled)
+            moveCamera(CameraOptions(center: annotation.coordinate), on: mapView)
         }
         return memberID
     }
 
-    func didDeselect(_ annotation: any MKAnnotation, on mapView: MKMapView) {
+    func didDeselect(_ annotation: MapAnnotation, on mapView: MapboxMaps.MapView) {
         let generation = selectionGeneration
-        // MapKit may deselect A just before selecting B. Let that handoff finish
+        // Selection can deselect A just before selecting B. Let that handoff finish
         // before restoring a group that would remove B's visible annotation.
         DispatchQueue.main.async { [weak self, weak mapView] in
             guard let self, let mapView,
                   self.selectionGeneration == generation,
-                  !self.isSelected(annotation, on: mapView) else { return }
+                  !self.isSelected(annotation) else { return }
             if let group = annotation as? MapSocialProximityGroupAnnotation {
                 guard self.groupsByID[group.identifier] === group,
                       self.expandedGroupID == group.identifier else { return }
@@ -263,15 +266,15 @@ final class MapSocialProximityController {
         }
     }
 
-    func isSilentPendingSelection(_ annotation: any MKAnnotation) -> Bool {
+    func isSilentPendingSelection(_ annotation: MapAnnotation) -> Bool {
         guard let memberID = memberID(for: annotation) else { return false }
         return pendingSelection == memberID && pendingSelectionIsSilent
     }
 
-    func select(_ memberID: MapSocialClusterMemberID, on mapView: MKMapView, silently: Bool = false) {
+    func select(_ memberID: MapSocialClusterMemberID, on mapView: MapboxMaps.MapView, silently: Bool = false) {
         guard let annotation = sources[memberID],
               CLLocationCoordinate2DIsValid(annotation.coordinate) else { return }
-        if isFocused(annotation), isSelected(annotation, on: mapView) {
+        if isFocused(annotation), isSelected(annotation) {
             return
         }
         pendingSelectionIsSilent = silently
@@ -284,10 +287,10 @@ final class MapSocialProximityController {
         selectPendingAnnotationIfVisible(on: mapView)
     }
 
-    func center(on memberID: MapSocialClusterMemberID, on mapView: MKMapView) {
+    func center(on memberID: MapSocialClusterMemberID, on mapView: MapboxMaps.MapView) {
         guard let annotation = sources[memberID],
               CLLocationCoordinate2DIsValid(annotation.coordinate) else { return }
-        mapView.setUserTrackingMode(.none, animated: false)
+        mapView.viewport.idle()
         select(memberID, on: mapView)
         if case .currentUser = memberID, let onRequestOwnProfile {
             onRequestOwnProfile()
@@ -299,13 +302,21 @@ final class MapSocialProximityController {
             onRequestFriendProfile(userID)
             return
         }
-        mapView.setRegion(
-            MKCoordinateRegion(center: annotation.coordinate, latitudinalMeters: 800, longitudinalMeters: 800),
-            animated: !UIAccessibility.isReduceMotionEnabled
+        moveCamera(
+            MapUserCameraController.focusedCamera(at: annotation.coordinate, on: mapView),
+            on: mapView
         )
     }
 
-    func collapse(on mapView: MKMapView) {
+    private func moveCamera(_ camera: CameraOptions, on mapView: MapboxMaps.MapView) {
+        if UIAccessibility.isReduceMotionEnabled {
+            mapView.mapboxMap.setCamera(to: camera)
+        } else {
+            mapView.camera.ease(to: camera, duration: 0.3)
+        }
+    }
+
+    func collapse(on mapView: MapboxMaps.MapView) {
         selectionGeneration &+= 1
         pendingSelection = nil
         scheduledSelectionGeneration = nil
@@ -313,23 +324,23 @@ final class MapSocialProximityController {
         changeFocus(to: nil, on: mapView)
     }
 
-    private func changeFocus(to memberID: MapSocialClusterMemberID?, on mapView: MKMapView) {
+    private func changeFocus(to memberID: MapSocialClusterMemberID?, on mapView: MapboxMaps.MapView) {
         if memberID != nil {
             collapseExpandedGroup(on: mapView, animated: false)
         }
         let previousMemberID = state.focusedMemberID
         let previousAnnotation = focusedAnnotation
         guard state.focus(memberID) else { return }
-        // Publish the final focus before MapKit can deliver deselection callbacks.
+        // Publish the final focus before removal delivers deselection callbacks.
         // Rebuilding an intermediate unfocused group would detach the next member.
         if let previousAnnotation {
-            if let view = mapView.view(for: previousAnnotation) {
+            if let view = annotationStore.view(for: previousAnnotation) {
                 setFocusAppearance(false, view)
             }
-            mapView.deselectAnnotation(previousAnnotation, animated: false)
+            annotationStore.deselectAnnotation(previousAnnotation, animated: false)
         }
-        synchronize(on: mapView)
-        if let focusedAnnotation, let view = mapView.view(for: focusedAnnotation) {
+        synchronize()
+        if let focusedAnnotation, let view = annotationStore.view(for: focusedAnnotation) {
             setFocusAppearance(true, view)
         }
         if let previousMemberID {
@@ -337,11 +348,11 @@ final class MapSocialProximityController {
         }
     }
 
-    private func isSelected(_ annotation: any MKAnnotation, on mapView: MKMapView) -> Bool {
-        mapView.selectedAnnotations.contains { ($0 as AnyObject) === (annotation as AnyObject) }
+    private func isSelected(_ annotation: MapAnnotation) -> Bool {
+        annotationStore.selectedAnnotations.contains { ($0) === (annotation) }
     }
 
-    private func selectPendingAnnotationIfVisible(on mapView: MKMapView) {
+    private func selectPendingAnnotationIfVisible(on mapView: MapboxMaps.MapView) {
         guard let memberID = pendingSelection else { return }
         guard let annotation = sources[memberID],
               CLLocationCoordinate2DIsValid(annotation.coordinate) else {
@@ -354,25 +365,25 @@ final class MapSocialProximityController {
             // already have a view and produce no didAdd callback at all.
             guard pendingSelection == memberID else { return }
         }
-        guard let view = mapView.view(for: annotation), view.cluster == nil else { return }
+        guard annotationStore.view(for: annotation) != nil else { return }
         let generation = selectionGeneration
         guard scheduledSelectionGeneration != generation else { return }
         scheduledSelectionGeneration = generation
         DispatchQueue.main.async { [weak self, weak mapView] in
-            guard let self, let mapView,
+            guard let self, mapView != nil,
                   self.selectionGeneration == generation,
                   self.pendingSelection == memberID,
                   self.isFocused(annotation) else { return }
             self.scheduledSelectionGeneration = nil
-            if self.isSelected(annotation, on: mapView) {
+            if self.isSelected(annotation) {
                 self.pendingSelection = nil
                 return
             }
-            mapView.selectAnnotation(annotation, animated: true)
+            self.annotationStore.selectAnnotation(annotation, animated: true)
         }
     }
 
-    private func expand(_ group: MapSocialProximityGroupAnnotation, on mapView: MKMapView) {
+    private func expand(_ group: MapSocialProximityGroupAnnotation, on mapView: MapboxMaps.MapView) {
         guard groupsByID[group.identifier] === group,
               group.memberAnnotations.count > 1 else { return }
         guard expandedGroupID != group.identifier else { return }
@@ -383,7 +394,7 @@ final class MapSocialProximityController {
         changeFocus(to: nil, on: mapView)
         // Restoring a focused member can change the group's native representative.
         guard let group = groupsByID[group.identifier],
-              let view = mapView.view(for: group) as? MapSocialClusterAnnotationView else { return }
+              let view = annotationStore.view(for: group) as? MapSocialClusterAnnotationView else { return }
         configure(view, for: group, on: mapView)
         expandedGroupID = group.identifier
         expandedView = view
@@ -391,22 +402,22 @@ final class MapSocialProximityController {
         viewportDidChange(on: mapView)
     }
 
-    /// A clipping-window change does not emit MapKit camera callbacks.
+    /// A clipping-window change does not emit Mapbox camera callbacks.
     /// Keep the existing group and selection while exposing its list and anchor.
-    func viewportDidChange(on mapView: MKMapView) {
+    func viewportDidChange(on mapView: MapboxMaps.MapView) {
         guard !isFittingExpandedGroup,
               let groupID = expandedGroupID,
               let group = groupsByID[groupID],
               let view = expandedView,
               let annotation = view.annotation,
-              (annotation as AnyObject) === group,
+              (annotation) === group,
               view.isExpanded,
               let bounds = expandedGroupBounds(on: mapView) else { return }
         isFittingExpandedGroup = true
         defer { isFittingExpandedGroup = false }
 
         view.setExpandedViewportSize(bounds.size)
-        let anchor = mapView.convert(group.coordinate, toPointTo: mapView)
+        let anchor = mapView.mapboxMap.point(for: group.coordinate)
         guard anchor.x.isFinite, anchor.y.isFinite else { return }
         let listFrame = view.projectedExpandedFrame(at: anchor)
         let frame = CGRect(
@@ -421,22 +432,18 @@ final class MapSocialProximityController {
         )
         guard abs(translation.x) > 0.5 || abs(translation.y) > 0.5 else { return }
 
-        // MapKit centers inside its safe area, which can differ from bounds.midY.
-        let projectedCenter = mapView.convert(mapView.centerCoordinate, toPointTo: mapView)
+        let projectedCenter = mapView.mapboxMap.point(for: mapView.mapboxMap.cameraState.center)
         guard projectedCenter.x.isFinite, projectedCenter.y.isFinite else { return }
-        let center = mapView.convert(
-            CGPoint(
-                x: projectedCenter.x - translation.x,
-                y: projectedCenter.y - translation.y
-            ),
-            toCoordinateFrom: mapView
-        )
+        let center = mapView.mapboxMap.coordinate(for: CGPoint(
+            x: projectedCenter.x - translation.x,
+            y: projectedCenter.y - translation.y
+        ))
         guard CLLocationCoordinate2DIsValid(center) else { return }
         // A viewport drag can call this every frame. Do not queue camera animations.
-        mapView.setCenter(center, animated: false)
+        mapView.mapboxMap.setCamera(to: CameraOptions(center: center))
     }
 
-    private func expandedGroupBounds(on mapView: MKMapView) -> CGRect? {
+    private func expandedGroupBounds(on mapView: MapboxMaps.MapView) -> CGRect? {
         let bounds = visibleBounds(mapView)
         guard bounds.minX.isFinite, bounds.minY.isFinite,
               bounds.width.isFinite, bounds.height.isFinite,
@@ -444,21 +451,21 @@ final class MapSocialProximityController {
         return bounds.insetBy(dx: 12, dy: 12)
     }
 
-    private func collapseExpandedGroup(on mapView: MKMapView, animated: Bool) {
+    private func collapseExpandedGroup(on mapView: MapboxMaps.MapView, animated: Bool) {
         guard expandedGroupID != nil || expandedView != nil else { return }
         let group = expandedView?.annotation as? MapSocialProximityGroupAnnotation
         let view = expandedView
         expandedGroupID = nil
         expandedView = nil
         view?.setExpanded(false, animated: animated)
-        if let group, isSelected(group, on: mapView) {
-            mapView.deselectAnnotation(group, animated: false)
+        if let group, isSelected(group) {
+            annotationStore.deselectAnnotation(group, animated: false)
         }
     }
 
     // MARK: - Native lifecycle callbacks
 
-    func visibleRegionDidChange(on mapView: MKMapView, userInitiated: Bool = false) {
+    func visibleRegionDidChange(on mapView: MapboxMaps.MapView, userInitiated: Bool = false) {
         if userInitiated {
             collapse(on: mapView)
         }
@@ -466,17 +473,17 @@ final class MapSocialProximityController {
         selectPendingAnnotationIfVisible(on: mapView)
     }
 
-    func regionWillChange(on mapView: MKMapView, userInitiated: Bool = false) {
+    func regionWillChange(on mapView: MapboxMaps.MapView, userInitiated: Bool = false) {
         if userInitiated {
             collapse(on: mapView)
         }
     }
 
-    func regionDidChange(on mapView: MKMapView) {
+    func regionDidChange(on mapView: MapboxMaps.MapView) {
         visibleRegionDidChange(on: mapView)
     }
 
-    func didAddViews(on mapView: MKMapView) {
+    func didAddViews(on mapView: MapboxMaps.MapView) {
         DispatchQueue.main.async { [weak self, weak mapView] in
             guard let self, let mapView else { return }
             self.refreshViews(on: mapView)

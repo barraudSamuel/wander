@@ -4,35 +4,29 @@
 //
 
 import CoreLocation
-import MapKit
 
-/// A stable, app-owned annotation representing social items at the same place.
-///
-/// MapKit owns `MKClusterAnnotation` instances, so geographic groups use this
-/// annotation instead of trying to manufacture native visual clusters.
-final class MapSocialProximityGroupAnnotation: NSObject, MKAnnotation {
+/// A stable annotation representing social items at the same place.
+final class MapSocialProximityGroupAnnotation: MapAnnotation {
     let identifier: String
 
-    @objc dynamic private(set) var coordinate: CLLocationCoordinate2D
-    private(set) var memberAnnotations: [any MKAnnotation]
+    private(set) var memberAnnotations: [MapAnnotation]
 
     init(
         identifier: String = UUID().uuidString,
-        memberAnnotations: [any MKAnnotation]
+        memberAnnotations: [MapAnnotation]
     ) {
         self.identifier = identifier
         self.memberAnnotations = memberAnnotations
-        coordinate = Self.centerCoordinate(of: memberAnnotations)
-        super.init()
+        super.init(coordinate: Self.centerCoordinate(of: memberAnnotations))
     }
 
-    func update(memberAnnotations: [any MKAnnotation]) {
+    func update(memberAnnotations: [MapAnnotation]) {
         self.memberAnnotations = memberAnnotations
         coordinate = Self.centerCoordinate(of: memberAnnotations)
     }
 
     private static func centerCoordinate(
-        of annotations: [any MKAnnotation]
+        of annotations: [MapAnnotation]
     ) -> CLLocationCoordinate2D {
         guard !annotations.isEmpty else {
             return kCLLocationCoordinate2DInvalid

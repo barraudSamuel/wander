@@ -1,7 +1,9 @@
 ---
 id: "003"
 title: "Synchroniser les métadonnées détaillées d'exploration"
-status: ready
+status: done
+resolved: 2026-10-09
+resolution: obsolete
 priority: P2
 source: review
 created: 2026-08-09
@@ -12,10 +14,12 @@ tags: [todo, firebase, exploration, migration]
 
 ## Finding
 
-Firestore conserve actuellement uniquement l'identifiant H3 et `sharedAt`.
-Un nouvel appareil retrouve donc les zones et leur date approximative, mais pas
-la durée, le nombre de visites ni les dates exactes de première et dernière
-découverte utilisées par la heat map locale.
+Ce besoin est abandonné avec la suppression de la heatmap approuvée le
+9 octobre 2026. Il ne correspond pas à une synchronisation implémentée.
+
+Au moment du constat, Firestore conservait uniquement l'identifiant H3 et
+`sharedAt`. Un nouvel appareil retrouvait les zones et leur date approximative,
+mais pas les durées et compteurs utilisés par la heatmap locale.
 
 ## Evidence
 
@@ -24,17 +28,13 @@ découverte utilisées par la heat map locale.
 - `wander/DiscoveredCellStore.swift` initialise les cases uniquement distantes
   avec les valeurs par défaut de `DiscoveredCell`.
 
-## Acceptance criteria
-
-- [ ] Définir un schéma Firestore versionné pour `firstSeenAt`, `lastSeenAt`,
-  `duration` et `visitCount`, avec une stratégie de migration des documents
-  existants.
-- [ ] Définir des règles de fusion qui empêchent le double comptage entre
-  appareils et préservent les valeurs les plus récentes.
-- [ ] Vérifier la restauration de la heat map sur un second appareil.
-- [ ] Le build et les tests de réconciliation passent.
-
 ## Resolution notes
 
-À planifier séparément : la restauration actuelle garantit volontairement les
-zones découvertes, pas la fidélité de leurs statistiques.
+Le modèle actif ne conserve plus `duration` ni `visitCount`. Les dates locales
+de découverte restent préservées, et Firestore continue de restaurer les zones
+avec `sharedAt` comme date de secours. Aucun nouveau schéma Firestore ni règle
+de fusion des compteurs n'est nécessaire.
+
+La migration et ses validations sont suivies dans
+[le plan de suppression](../docs/plans/2026-10-09-supprimer-heatmap.md).
+Le chemin de ce constat est conservé pour les liens des plans historiques.

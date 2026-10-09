@@ -94,10 +94,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private let explorationEngine = ExplorationEngine()
     private let cellStore = DiscoveredCellStore()
     private var previousAcceptedLocation: CLLocation?
-    private var previousAcceptedCellID: String?
-    private var pendingHeatMapUpdates: [String: CellHeatMapUpdate] = [:]
-    private var heatMapFlushTimer: Timer?
-    private let heatMapFlushInterval: TimeInterval = 30
 
     // Persistence key for the user's tracking intention.
     private let trackingEnabledKey = "trackingEnabled"
@@ -146,8 +142,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var discoveredCells: [DiscoveredCell] = []
     @Published private(set) var currentH3CellID: String?
     @Published private(set) var currentSpotEnteredAt: Date?
-    @Published var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
-    @Published private(set) var heatMapRevision = 0
 
     var discoveredCellIDs: Set<String> {
         cellStore.cellIDs
@@ -200,11 +194,10 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     func configure(with context: ModelContext) {
         cellStore.configure(with: context)
         discoveredCells = cellStore.cells
-        rebuildHeatMapData()
     }
 
     /// Restores the owner's Firestore exploration into the SwiftData cache.
-    /// Existing local cells keep their richer heat-map metadata.
+    /// Existing local cells keep their discovery dates.
     @discardableResult
     func restoreDiscoveredCells(_ remoteCells: [RemoteDiscoveredCell]) -> Bool {
         do {
@@ -213,7 +206,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 resolution: explorationEngine.resolution
             )
             discoveredCells = cellStore.cells
-            rebuildHeatMapData()
             explorationRestoreError = nil
             return true
         } catch {
@@ -221,35 +213,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
                 "Impossible de restaurer ta carte sur cet appareil. Réessaie."
             return false
         }
-    }
-
-    // MARK: - Heat map persistence
-
-    private func scheduleHeatMapFlush() {
-        heatMapFlushTimer?.invalidate()
-        heatMapFlushTimer = Timer.scheduledTimer(withTimeInterval: heatMapFlushInterval, repeats: false) { [weak self] _ in
-            self?.flushHeatMapUpdates()
-        }
-    }
-
-    private func flushHeatMapUpdates() {
-        guard !pendingHeatMapUpdates.isEmpty else { return }
-        let updates = Array(pendingHeatMapUpdates.values)
-        pendingHeatMapUpdates.removeAll()
-        cellStore.applyHeatMapUpdates(updates, resolution: explorationEngine.resolution, seenAt: Date())
-        discoveredCells = cellStore.cells
-        rebuildHeatMapData()
-    }
-
-    private func rebuildHeatMapData() {
-        var data: [String: (duration: TimeInterval, visitCount: Int)] = [:]
-        for cell in discoveredCells {
-            if cell.duration > 0 || cell.visitCount > 1 {
-                data[cell.id] = (cell.duration, cell.visitCount)
-            }
-        }
-        heatMapCellData = data
-        heatMapRevision &+= 1
     }
 
     // MARK: - Debug info
@@ -378,8 +341,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         trackingEnabled = false
         isTracking = false
         clearCurrentPresence()
-        heatMapFlushTimer?.invalidate()
-        flushHeatMapUpdates()
         locationManager.stopUpdatingLocation()
         locationManager.stopMonitoringSignificantLocationChanges()
         locationManager.stopMonitoringVisits()
@@ -433,10 +394,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         stopTracking()
         setBackgroundTrackingEnabled(false)
 
-        heatMapFlushTimer?.invalidate()
-        heatMapFlushTimer = nil
-        pendingHeatMapUpdates.removeAll()
-
         try cellStore.deleteAll()
 
         UserDefaults.standard.removeObject(forKey: trackingEnabledKey)
@@ -444,14 +401,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
         lastLocation = nil
         previousAcceptedLocation = nil
-        previousAcceptedCellID = nil
         newlyDiscoveredCellIDs = []
         discoveredCells = []
-        let hadHeatMapData = !heatMapCellData.isEmpty
-        heatMapCellData = [:]
-        if hadHeatMapData {
-            heatMapRevision &+= 1
-        }
         locationsReceived = 0
         visitsReceived = 0
         lastSegmentDistance = nil
@@ -1024,64 +975,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         )
 
         newlyDiscoveredCellIDs = newIDs
-
-        if let previous = previous, let cellID = cellID {
-            let timeDelta = location.timestamp.timeIntervalSince(previous.timestamp)
-            if timeDelta > 0, timeDelta <= explorationEngine.maxGapToConnect {
-                let attributedCellID: String
-                let isNewCell: Bool
-
-                if let previousCell = previousAcceptedCellID, previousCell != cellID {
-                    attributedCellID = previousCell
-                    isNewCell = true
-                } else {
-                    attributedCellID = cellID
-                    isNewCell = previousAcceptedCellID == nil
-                }
-
-                var update = pendingHeatMapUpdates[attributedCellID] ?? CellHeatMapUpdate(
-                    cellID: attributedCellID,
-                    duration: 0,
-                    visitIncrement: 0
-                )
-                update = CellHeatMapUpdate(
-                    cellID: attributedCellID,
-                    duration: update.duration + timeDelta,
-                    visitIncrement: update.visitIncrement
-                )
-                pendingHeatMapUpdates[attributedCellID] = update
-
-                if isNewCell, let _ = previousAcceptedCellID {
-                    var newUpdate = pendingHeatMapUpdates[cellID] ?? CellHeatMapUpdate(
-                        cellID: cellID,
-                        duration: 0,
-                        visitIncrement: 0
-                    )
-                    newUpdate = CellHeatMapUpdate(
-                        cellID: cellID,
-                        duration: newUpdate.duration,
-                        visitIncrement: newUpdate.visitIncrement + 1
-                    )
-                    pendingHeatMapUpdates[cellID] = newUpdate
-                }
-
-                scheduleHeatMapFlush()
-            }
-        } else if let cellID = cellID, previousAcceptedCellID == nil {
-            var update = pendingHeatMapUpdates[cellID] ?? CellHeatMapUpdate(
-                cellID: cellID,
-                duration: 0,
-                visitIncrement: 0
-            )
-            update = CellHeatMapUpdate(
-                cellID: cellID,
-                duration: update.duration,
-                visitIncrement: update.visitIncrement + 1
-            )
-            pendingHeatMapUpdates[cellID] = update
-        }
-
-        previousAcceptedCellID = cellID
 
         if let previous = previous {
             let distance = location.distance(from: previous)

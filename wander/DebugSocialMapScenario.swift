@@ -1,5 +1,6 @@
 #if DEBUG && targetEnvironment(simulator)
 import CoreLocation
+import H3
 import SwiftUI
 import UIKit
 
@@ -98,8 +99,17 @@ private struct DebugSocialMapScene: View {
     private static let coordinate = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
     private static let ownerID = "scenario-owner"
     private static let arguments = Set(ProcessInfo.processInfo.arguments)
+    private static let fogScenarioCellIDs: Set<String> = {
+        let center = H3Index(
+            coordinate: H3Coordinate(lat: coordinate.latitude, lng: coordinate.longitude),
+            resolution: 10
+        )
+        return Set(center.kRing(k: 4).map(\.description))
+            .subtracting(center.kRing(k: 1).map(\.description))
+    }()
 
     private let friends: [String: FriendLocation]
+    @State private var showsFogScenarioExploration = Self.hasArgument("fog")
     @State private var requestedRosterIDs: Set<String> = []
     @State private var selectedFriendIDs: [String] = []
     @State private var didSuspendRosters = false
@@ -109,6 +119,8 @@ private struct DebugSocialMapScene: View {
     @Binding private var bottomList: MapBottomList?
     @Binding private var friendCode: String
     @State private var editingEvent: OutingPlan?
+    @State private var createdEventCount = 0
+    @State private var pendingCreatedEventCoordinate: CLLocationCoordinate2D?
     @State private var centerOnUser = false
     @State private var resetOrientation = false
     @State private var centerOnFriend: String?
@@ -122,7 +134,6 @@ private struct DebugSocialMapScene: View {
     @State private var friendCameraRequest: MapFriendCameraRequest?
     @State private var profileName = "Moi"
     @State private var avatarID = ProfileAvatar.cyclopsHorns.rawValue
-    @State private var heatMapEnabled = false
     @State private var ghostModeEnabled = false
     @State private var profileConfirmation = false
     private enum RequestState {
@@ -349,10 +360,6 @@ private struct DebugSocialMapScene: View {
                         .sheet(isPresented: settingsPresented) {
                             NavigationStack {
                                 Form {
-                                    Section("Affichage de la carte") {
-                                        Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
-                                            .accessibilityIdentifier("profile-heat-map")
-                                    }
                                     Section("Identité") {
                                         TextField("Pseudo", text: $profileName)
                                             .submitLabel(.done)
@@ -547,19 +554,19 @@ private struct DebugSocialMapScene: View {
     private func mapView(presentations: [String: MapOutingPlan]) -> some View {
         MapWithFogView(
             locationTracker: locationTracker,
-            discoveredCellIDs: [], cityBoundaryCoordinates: [],
+            discoveredCellIDs: showsFogScenarioExploration ? Self.fogScenarioCellIDs : [],
+            cityBoundaryCoordinates: [],
             friendLocations: friends, freshFriendLocationUserIDs: Set(friends.keys),
             outingPlans: presentations,
             userDisplayName: profileName, userAvatarID: avatarID,
             userProfileColorHex: "#3478F6",
             centerOnUser: $centerOnUser, resetMapOrientation: $resetOrientation,
             centerOnFriendUserID: $centerOnFriend, centerOnOutingPlanEventID: $centerOnEvent,
+            pendingOutingCoordinate: pendingCreatedEventCoordinate,
             isEventCreationEnabled: editingEvent == nil,
             selectedOutingPlanEventID: selectedDetail?.outingEventID,
             selectedMapProfile: selectedDetail?.profile,
             friendCameraRequest: friendCameraRequest,
-            showsSystemUserLocation: false,
-            showsHeatMap: heatMapEnabled,
             onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
             onSelectFriend: {
                 if Self.hasArgument("nearby-friends") { selectedFriendIDs.append($0) }
@@ -569,6 +576,12 @@ private struct DebugSocialMapScene: View {
                 bottomList = .events
                 selectedDetail = .outing($0)
                 eventScrollRequest = MapEventScrollRequest(eventID: $0)
+            },
+            onCreateEvent: { coordinate in
+                guard Self.hasArgument("create-event"),
+                      CLLocationCoordinate2DIsValid(coordinate) else { return }
+                createdEventCount += 1
+                pendingCreatedEventCoordinate = coordinate
             }
         )
         .overlay(alignment: .topTrailing) {
@@ -581,17 +594,39 @@ private struct DebugSocialMapScene: View {
             .modifier(MapContentSafeArea(edges: [.top, .trailing]))
         }
         .overlay(alignment: .topLeading) {
-            if Self.hasArgument("nearby-friends") {
-                Text("Sélections : \(selectedFriendIDs.count)")
-                    .font(.caption)
-                    .accessibilityIdentifier("debug-friend-selections")
-                    .accessibilityValue("count=\(selectedFriendIDs.count);history=" + selectedFriendIDs.joined(separator: ","))
-                    .allowsHitTesting(false)
-            } else if Self.hasArgument("roster-probe") {
-                Text("Groupes : \(requestedRosterIDs.count)")
-                    .font(.caption)
-                    .accessibilityIdentifier("debug-list-rosters")
-                    .accessibilityValue(requestedRosterIDs.sorted().joined(separator: ",") + ";suspended=\(didSuspendRosters)")
+            VStack(alignment: .leading, spacing: 8) {
+                if Self.hasArgument("create-event") {
+                    Text("Créations : \(createdEventCount)")
+                        .font(.caption)
+                        .accessibilityIdentifier("debug-map-created-events")
+                        .accessibilityValue(String(createdEventCount))
+                        .allowsHitTesting(false)
+                        .padding(.top, 8)
+                        .padding(.leading, 16)
+                        .modifier(MapContentSafeArea(edges: [.top, .leading]))
+                }
+                if Self.hasArgument("nearby-friends") {
+                    Text("Sélections : \(selectedFriendIDs.count)")
+                        .font(.caption)
+                        .accessibilityIdentifier("debug-friend-selections")
+                        .accessibilityValue("count=\(selectedFriendIDs.count);history=" + selectedFriendIDs.joined(separator: ","))
+                        .allowsHitTesting(false)
+                } else if Self.hasArgument("roster-probe") {
+                    Text("Groupes : \(requestedRosterIDs.count)")
+                        .font(.caption)
+                        .accessibilityIdentifier("debug-list-rosters")
+                        .accessibilityValue(requestedRosterIDs.sorted().joined(separator: ",") + ";suspended=\(didSuspendRosters)")
+                }
+                if Self.hasArgument("fog") {
+                    Button(showsFogScenarioExploration ? "Masquer les zones explorées" : "Afficher les zones explorées") {
+                        showsFogScenarioExploration.toggle()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("debug-map-fog-toggle")
+                    .padding(.top, 8)
+                    .padding(.leading, 16)
+                    .modifier(MapContentSafeArea(edges: [.top, .leading]))
+                }
             }
         }
     }

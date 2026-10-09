@@ -1,12 +1,14 @@
-import MapKit
+import MapboxMaps
+import QuartzCore
 import SwiftUI
+import UIKit
 
 private struct MapRenderSizeKey: EnvironmentKey {
     static let defaultValue: CGSize? = nil
 }
 
 private struct MapContentInsetsKey: EnvironmentKey {
-    static let defaultValue = EdgeInsets()
+    static let defaultValue = SwiftUI.EdgeInsets()
 }
 
 extension EnvironmentValues {
@@ -15,16 +17,16 @@ extension EnvironmentValues {
         set { self[MapRenderSizeKey.self] = newValue }
     }
 
-    var mapContentInsets: EdgeInsets {
+    var mapContentInsets: SwiftUI.EdgeInsets {
         get { self[MapContentInsetsKey.self] }
         set { self[MapContentInsetsKey.self] = newValue }
     }
 }
 
-/// Crops a stable MapKit drawable while the surrounding detail pane resizes.
+/// Crops a stable Mapbox drawable while the surrounding detail pane resizes.
 /// Keeping the map and viewport centers aligned preserves native camera gestures.
 final class MapViewportView: UIView {
-    let mapView: MKMapView
+    let mapView: MapboxMaps.MapView
     var renderSize: CGSize? {
         didSet {
             if renderSize != oldValue { setNeedsLayout() }
@@ -38,8 +40,31 @@ final class MapViewportView: UIView {
     private(set) var visibleMapRect = CGRect.zero
     private(set) var visibleSafeMapRect = CGRect.zero
     var onViewportChange: (() -> Void)?
+    var tracksSheetPresentation = false {
+        didSet {
+            guard tracksSheetPresentation != oldValue else { return }
+            if tracksSheetPresentation { startSheetTracking() }
+            refreshPresentedSheet()
+        }
+    }
+    private(set) var ornamentSafeMapRect = CGRect.zero
+    private var sheetDisplayLink: CADisplayLink?
 
-    init(mapView: MKMapView, renderSize: CGSize?, contentInsets: UIEdgeInsets = .zero) {
+    private final class DisplayLinkTarget: NSObject {
+        weak var viewport: MapViewportView?
+
+        init(viewport: MapViewportView) { self.viewport = viewport }
+
+        @objc func frame(_ link: CADisplayLink) {
+            guard let viewport else {
+                link.invalidate()
+                return
+            }
+            viewport.refreshPresentedSheet()
+        }
+    }
+
+    init(mapView: MapboxMaps.MapView, renderSize: CGSize?, contentInsets: UIEdgeInsets = .zero) {
         self.mapView = mapView
         self.renderSize = renderSize
         self.contentInsets = contentInsets
@@ -50,6 +75,15 @@ final class MapViewportView: UIView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            stopSheetTracking()
+        } else if tracksSheetPresentation {
+            startSheetTracking()
+        }
+    }
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
@@ -62,8 +96,7 @@ final class MapViewportView: UIView {
         guard size.width.isFinite, size.height.isFinite,
               size.width > 0, size.height > 0 else { return }
 
-        // Do not assign frame during pane animations: MapKit resizes its Metal
-        // drawable from setFrame, even when only the visible window should change.
+        // Keep the drawable size stable while detail panes change the visible window.
         if mapView.bounds.size != size {
             mapView.bounds.size = size
         }
@@ -78,18 +111,77 @@ final class MapViewportView: UIView {
         )
         let safe = convert(bounds.inset(by: insets), to: mapView)
             .intersection(visible)
-        guard visible != visibleMapRect || safe != visibleSafeMapRect else { return }
+        let changed = visible != visibleMapRect || safe != visibleSafeMapRect
         visibleMapRect = visible
         visibleSafeMapRect = safe
 
-        // MapKit positions its compass and attribution inside layout margins.
-        // These insets move its controls without changing the rendering bounds.
-        mapView.layoutMargins = UIEdgeInsets(
-            top: max(0, safe.minY - mapView.bounds.minY),
-            left: max(0, safe.minX - mapView.bounds.minX),
-            bottom: max(0, mapView.bounds.maxY - safe.maxY),
-            right: max(0, mapView.bounds.maxX - safe.maxX)
-        )
-        onViewportChange?()
+        refreshPresentedSheet()
+        if changed { onViewportChange?() }
+    }
+
+    func updateOrnaments(occludedBelow sheetTop: CGFloat? = nil) {
+        let safe = visibleSafeMapRect
+        guard !safe.isEmpty, !safe.isInfinite else { return }
+        let bottomEdge = sheetTop.map { min(safe.maxY, max(safe.minY, $0)) } ?? safe.maxY
+        ornamentSafeMapRect = CGRect(x: safe.minX, y: safe.minY,
+                                     width: safe.width, height: bottomEdge - safe.minY)
+        // A sheet changes only ornament placement, never map gestures or camera framing.
+        let mapSafe = mapView.safeAreaInsets
+        let left = max(0, safe.minX - mapView.bounds.minX - mapSafe.left) + 8
+        // A large sheet can leave less room than the buttons need. Keep them
+        // inside the map safe area; the sheet covers them until space reopens.
+        let controlHeight = max(32, max(mapView.ornaments.logoView.bounds.height,
+                                        mapView.ornaments.attributionButton.bounds.height))
+        let controlsBottom = max(bottomEdge, min(safe.maxY, safe.minY + controlHeight + 16))
+        let bottom = max(0, mapView.bounds.maxY - controlsBottom - mapSafe.bottom) + 8
+        let right = max(0, mapView.bounds.maxX - safe.maxX - mapSafe.right) + 8
+        var ornaments = mapView.ornaments.options
+        ornaments.compass.visibility = .hidden
+        ornaments.scaleBar.visibility = .hidden
+        ornaments.logo.position = .bottomLeft
+        ornaments.logo.margins = CGPoint(x: left, y: bottom)
+        ornaments.attributionButton.position = .bottomRight
+        ornaments.attributionButton.margins = CGPoint(x: right + MapImageButton.side + 16, y: bottom)
+        if mapView.ornaments.options != ornaments {
+            mapView.ornaments.options = ornaments
+        }
+    }
+
+    private func startSheetTracking() {
+        guard sheetDisplayLink == nil, window != nil else { return }
+        let link = CADisplayLink(target: DisplayLinkTarget(viewport: self),
+                                 selector: #selector(DisplayLinkTarget.frame(_:)))
+        sheetDisplayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    func stopTrackingSheetPresentation() {
+        stopSheetTracking()
+        tracksSheetPresentation = false
+    }
+
+    private func stopSheetTracking() {
+        sheetDisplayLink?.invalidate()
+        sheetDisplayLink = nil
+    }
+
+    private func refreshPresentedSheet() {
+        var sheetTop: CGFloat?
+        if tracksSheetPresentation || sheetDisplayLink != nil {
+            var controller = window?.rootViewController
+            while let presented = controller?.presentedViewController {
+                if let sheet = presented.presentationController as? UISheetPresentationController,
+                   let container = sheet.containerView {
+                    let frame = mapView.convert(sheet.frameOfPresentedViewInContainerView, from: container)
+                    if frame.intersects(visibleMapRect), frame.minY.isFinite {
+                        sheetTop = min(sheetTop ?? frame.minY, frame.minY)
+                    }
+                }
+                controller = presented
+            }
+        }
+        updateOrnaments(occludedBelow: sheetTop)
+        // Continue through the dismissal animation after SwiftUI clears selection.
+        if !tracksSheetPresentation, sheetTop == nil { stopSheetTracking() }
     }
 }

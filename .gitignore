@@ -62,3 +62,6 @@ wander-1954f-firebase-adminsdk-fbsvc-479a7caa8f.json
 *.ipa
 *.dSYM.zip
 *.dSYM
+
+# Mapbox developer configuration
+Config/Mapbox.local.xcconfig

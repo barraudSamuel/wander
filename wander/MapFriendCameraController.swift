@@ -1,4 +1,6 @@
-import MapKit
+import MapboxMaps
+import QuartzCore
+import UIKit
 
 /// Identifies a map profile independently of the account settings panel.
 enum MapProfileSelection: Hashable, Identifiable {
@@ -31,34 +33,39 @@ struct MapFriendCameraRequest: Equatable {
 /// Performs one focus per request, without following sheet resizing.
 @MainActor
 final class MapFriendCameraController {
+    // Avoid synthesized isolated deinit on older Swift runtimes (swiftlang/swift#88036).
+    // Animation cleanup remains in cancel() on the main actor.
+    nonisolated deinit {}
+
     struct Session {
-        private let initialCamera: MKMapCamera
+        private let initialCamera: CameraState
         private let focusCoordinate: CLLocationCoordinate2D
         private let target: CLLocationCoordinate2D
 
-        init?(camera: MKMapCamera, focusCoordinate: CLLocationCoordinate2D,
+        init?(camera: CameraState, focusCoordinate: CLLocationCoordinate2D,
               target: CLLocationCoordinate2D) {
-            guard CLLocationCoordinate2DIsValid(camera.centerCoordinate),
+            guard CLLocationCoordinate2DIsValid(camera.center),
                   CLLocationCoordinate2DIsValid(focusCoordinate),
                   CLLocationCoordinate2DIsValid(target),
-                  camera.centerCoordinateDistance.isFinite,
-                  camera.centerCoordinateDistance > 0,
-                  camera.heading.isFinite, camera.pitch.isFinite else { return nil }
-            initialCamera = camera.copy() as! MKMapCamera
+                  camera.zoom.isFinite, camera.bearing.isFinite, camera.pitch.isFinite else { return nil }
+            initialCamera = camera
             self.focusCoordinate = focusCoordinate
             self.target = target
         }
 
-        func camera(at progress: Double) -> MKMapCamera {
-            let camera = initialCamera.copy() as! MKMapCamera
+        func camera(at progress: Double) -> CameraOptions {
+            var camera = CameraOptions(
+                center: initialCamera.center, padding: initialCamera.padding,
+                zoom: initialCamera.zoom, bearing: initialCamera.bearing, pitch: initialCamera.pitch
+            )
             guard progress.isFinite, progress > 0 else { return camera }
             let focus = MapEdgeZoomController.anchoredCenter(
                 initial: focusCoordinate, anchor: target, scale: 1 - min(1, progress)
             )
             // Translate the point underneath the visible area's center to the friend.
-            // This uses MapKit's projection, including the current heading and pitch.
-            camera.centerCoordinate = MapEdgeZoomController.anchoredCenter(
-                initial: initialCamera.centerCoordinate, anchor: focus,
+            // The focus coordinate comes from Mapbox at the current bearing and pitch.
+            camera.center = MapEdgeZoomController.anchoredCenter(
+                initial: initialCamera.center, anchor: focus,
                 scale: 1, offsetOrigin: focusCoordinate
             )
             return camera
@@ -101,13 +108,14 @@ final class MapFriendCameraController {
         }
         guard let point = Self.focusPoint(in: viewport.visibleSafeMapRect, sheetTop: sheetTop),
               let session = Session(
-                camera: mapView.camera,
-                focusCoordinate: mapView.convert(point, toCoordinateFrom: mapView),
+                camera: mapView.mapboxMap.cameraState,
+                focusCoordinate: mapView.mapboxMap.coordinate(for: point),
                 target: coordinate
               ) else { return }
 
+        mapView.camera.cancelAnimations()
         if UIAccessibility.isReduceMotionEnabled {
-            mapView.setCamera(session.camera(at: 1), animated: false)
+            mapView.mapboxMap.setCamera(to: session.camera(at: 1))
             return
         }
         self.viewport = viewport
@@ -135,14 +143,14 @@ final class MapFriendCameraController {
         }
         let progress = max(0, min(1, (timestamp - startedAt) / Self.duration))
         let eased = progress * progress * (3 - 2 * progress)
-        mapView.setCamera(session.camera(at: eased), animated: false)
+        mapView.mapboxMap.setCamera(to: session.camera(at: eased))
         if progress >= 1 { cancel() }
     }
 
     static func focusPoint(in safeRect: CGRect, sheetTop: CGFloat? = nil) -> CGPoint? {
         guard safeRect.origin.x.isFinite, safeRect.origin.y.isFinite,
               safeRect.width.isFinite, safeRect.height.isFinite,
-              !safeRect.isEmpty else { return nil }
+              !safeRect.isEmpty, !safeRect.isInfinite else { return nil }
         guard safeRect.width >= 96, safeRect.height >= 96 else { return nil }
         guard let sheetTop else { return CGPoint(x: safeRect.midX, y: safeRect.midY) }
         guard sheetTop.isFinite else { return nil }

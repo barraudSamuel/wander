@@ -3,7 +3,6 @@
 //  wander
 //
 
-import MapKit
 import UIKit
 
 struct MapSocialClusterPersonPresentation: Equatable {
@@ -53,7 +52,7 @@ private extension MapSocialClusterPresentation {
     }
 }
 
-final class MapSocialClusterAnnotationView: MKAnnotationView {
+final class MapSocialClusterAnnotationView: MapAnnotationView {
     static let reuseIdentifier = "MapSocialClusterAnnotation"
 
     private static let compactItemSize: CGFloat = 34
@@ -84,7 +83,7 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     private(set) var isExpanded = false
 
     override init(
-        annotation: (any MKAnnotation)?,
+        annotation: MapAnnotation?,
         reuseIdentifier: String?
     ) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
@@ -287,6 +286,7 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
         let previousControlSize = expandedControlSize
         expandedViewportSize = boundedSize
         guard expandedControlSize != previousControlSize else { return }
+        applyGeometry(forExpandedState: isExpanded)
         setNeedsLayout()
         layoutIfNeeded()
     }
@@ -339,10 +339,6 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     private func configureView() {
         backgroundColor = .clear
         clipsToBounds = false
-        canShowCallout = false
-        clusteringIdentifier = nil
-        collisionMode = .rectangle
-        displayPriority = .required
         isAccessibilityElement = true
         accessibilityTraits = .button
 
@@ -507,13 +503,12 @@ final class MapSocialClusterAnnotationView: MKAnnotationView {
     }
 
     private func applyGeometry(forExpandedState expanded: Bool) {
-        let size = compactControlSize
+        let size = expanded ? expandedControlSize : compactControlSize
         bounds = CGRect(origin: .zero, size: size)
-        centerOffset = CGPoint(
-            x: 0,
-            y: -size.height / 2 - Self.anchorGap
+        centerOffset = CGSize(
+            width: 0,
+            height: -size.height / 2 - Self.anchorGap
         )
-        displayPriority = .required
         setNeedsLayout()
     }
 
@@ -719,7 +714,7 @@ private final class MapSocialClusterRowControl: UIControl, UIGestureRecognizerDe
 
         addTarget(self, action: #selector(activate), for: .touchUpInside)
 
-        // Resolve the row's tap before MapKit handles the same touch as a tap
+        // Resolve the row's tap before Mapbox handles the same touch as a tap
         // on its annotation. Activating the row can remove that annotation.
         let tap = UITapGestureRecognizer(target: self, action: #selector(activate))
         tap.cancelsTouchesInView = true

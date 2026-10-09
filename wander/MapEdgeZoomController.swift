@@ -1,6 +1,8 @@
-import MapKit
+import MapboxMaps
+import QuartzCore
+import UIKit
 
-/// Owns one-finger zooming without changing MapKit's built-in gesture delegates.
+/// Owns one-finger zooming without changing Mapbox's built-in gesture delegates.
 @MainActor
 final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
     enum Edge {
@@ -16,40 +18,42 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
 
     /// Value snapshots prevent a moving friend or regrouping from changing the pivot.
     struct ZoomSession {
-        private let initialCamera: MKMapCamera
+        private let initialCamera: CameraState
         let anchor: CLLocationCoordinate2D?
         private let focusCoordinate: CLLocationCoordinate2D
 
-        init(camera: MKMapCamera, target: Target?, focusCoordinate: CLLocationCoordinate2D? = nil) {
-            initialCamera = camera.copy() as! MKMapCamera
+        init(camera: CameraState, target: Target?, focusCoordinate: CLLocationCoordinate2D? = nil) {
+            initialCamera = camera
             anchor = target?.coordinate
-            self.focusCoordinate = focusCoordinate ?? camera.centerCoordinate
+            self.focusCoordinate = focusCoordinate ?? camera.center
         }
 
-        func camera(at distance: CLLocationDistance, focusProgress: Double = 1) -> MKMapCamera {
-            let camera = initialCamera.copy() as! MKMapCamera
-            guard distance.isFinite, distance > 0,
-                  initialCamera.centerCoordinateDistance > 0 else { return camera }
+        func camera(at zoom: CGFloat, focusProgress: Double = 1) -> CameraOptions {
+            var camera = CameraOptions(
+                center: initialCamera.center, padding: initialCamera.padding,
+                zoom: initialCamera.zoom, bearing: initialCamera.bearing, pitch: initialCamera.pitch
+            )
+            guard zoom.isFinite, initialCamera.zoom.isFinite else { return camera }
             if let anchor {
                 let progress = max(0, min(1, focusProgress))
                 let origin = MapEdgeZoomController.anchoredCenter(
                     initial: anchor, anchor: focusCoordinate, scale: 1 - progress
                 )
-                camera.centerCoordinate = MapEdgeZoomController.anchoredCenter(
-                    initial: initialCamera.centerCoordinate,
+                camera.center = MapEdgeZoomController.anchoredCenter(
+                    initial: initialCamera.center,
                     anchor: anchor,
-                    scale: distance / initialCamera.centerCoordinateDistance,
+                    scale: pow(2, Double(initialCamera.zoom - zoom)),
                     offsetOrigin: origin
                 )
             }
-            camera.centerCoordinateDistance = distance
+            camera.zoom = zoom
             return camera
         }
     }
 
     private weak var viewport: MapViewportView?
     private let onBegin: () -> Void
-    private let targets: (MKMapView) -> [Target]
+    private let targets: (MapboxMaps.MapView) -> [Target]
     private let onFocus: @MainActor () -> Void
     private let feedback = MapEdgeZoomFeedbackView()
     private let pan = UIPanGestureRecognizer()
@@ -67,7 +71,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
 
     init(
         viewport: MapViewportView,
-        targets: @escaping (MKMapView) -> [Target] = { _ in [] },
+        targets: @escaping (MapboxMaps.MapView) -> [Target] = { _ in [] },
         onFocus: @escaping @MainActor () -> Void = {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         },
@@ -157,24 +161,26 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
     ) -> CLLocationCoordinate2D {
         guard CLLocationCoordinate2DIsValid(initial), CLLocationCoordinate2DIsValid(anchor),
               scale.isFinite, scale >= 0 else { return initial }
+        if let offsetOrigin, !CLLocationCoordinate2DIsValid(offsetOrigin) { return initial }
         if scale == 0 { return anchor }
         if scale == 1 && offsetOrigin == nil { return initial }
-        let center = MKMapPoint(initial)
-        let pivot = MKMapPoint(anchor)
-        let origin = MKMapPoint(offsetOrigin ?? anchor)
-        guard center.x.isFinite, center.y.isFinite, pivot.x.isFinite, pivot.y.isFinite,
-              origin.x.isFinite, origin.y.isFinite else {
-            return initial
+        let latitudeLimit = 85.0511287798066
+        func project(_ coordinate: CLLocationCoordinate2D) -> (x: Double, y: Double) {
+            let latitude = max(-latitudeLimit, min(latitudeLimit, coordinate.latitude)) * .pi / 180
+            return ((coordinate.longitude + 180) / 360, (1 - asinh(tan(latitude)) / .pi) / 2)
         }
-        let world = MKMapRect.world
+        let center = project(initial)
+        let pivot = project(anchor)
+        let origin = project(offsetOrigin ?? anchor)
         // Use the nearest world copy so a target across ±180° never crosses the globe.
-        var deltaX = (center.x - origin.x).truncatingRemainder(dividingBy: world.width)
-        if deltaX > world.width / 2 { deltaX -= world.width }
-        if deltaX < -world.width / 2 { deltaX += world.width }
-        var x = (pivot.x + deltaX * scale).truncatingRemainder(dividingBy: world.width)
-        if x < 0 { x += world.width }
-        let y = max(world.minY, min(world.maxY, pivot.y + (center.y - origin.y) * scale))
-        return MKMapPoint(x: x, y: y).coordinate
+        var deltaX = (center.x - origin.x).truncatingRemainder(dividingBy: 1)
+        if deltaX > 0.5 { deltaX -= 1 }
+        if deltaX < -0.5 { deltaX += 1 }
+        var x = (pivot.x + deltaX * scale).truncatingRemainder(dividingBy: 1)
+        if x < 0 { x += 1 }
+        let y = max(0, min(1, pivot.y + (center.y - origin.y) * scale))
+        return CLLocationCoordinate2D(latitude: atan(sinh(.pi * (1 - 2 * y))) * 180 / .pi,
+                                      longitude: x * 360 - 180)
     }
 
     static func acceleratedTranslation(_ translationY: CGFloat, velocityY: CGFloat) -> CGFloat {
@@ -186,26 +192,25 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         return translationY * gain
     }
 
-    static func distance(
-        from distance: CLLocationDistance,
+    static func zoom(
+        from zoom: CGFloat,
         translationY: CGFloat,
-        minimum: CLLocationDistance = 80,
-        maximum: CLLocationDistance = 30_000_000
-    ) -> CLLocationDistance {
-        guard distance.isFinite, distance > 0, translationY.isFinite else { return distance }
-        // MapKit returns -1 for each default limit, even when the range is non-nil.
-        let lowerBound = minimum == MKMapCameraZoomDefault ? 80 : minimum
-        let upperBound = maximum == MKMapCameraZoomDefault ? 30_000_000 : maximum
-        // Each 150 weighted points doubles or halves the distance, at every zoom level.
-        let exponent = max(-20, min(20, Double(translationY) / 150))
-        return max(lowerBound, min(upperBound, distance * pow(2, exponent)))
+        minimum: CGFloat = 0,
+        maximum: CGFloat = 22
+    ) -> CGFloat {
+        guard zoom.isFinite, translationY.isFinite else { return zoom }
+        // Each 150 weighted points changes one zoom level, halving or doubling the scale.
+        return max(minimum, min(maximum, zoom - translationY / 150))
     }
 
-    static func excludesTouch(on view: UIView?, mapView: MKMapView) -> Bool {
+    static func excludesTouch(on view: UIView?, mapView: MapboxMaps.MapView) -> Bool {
         var candidate = view
         while let current = candidate, current !== mapView {
-            if current is UIControl || current is MKAnnotationView
-                || current is MKCompassButton || current is MKScaleView
+            if current is UIControl || current is MapAnnotationView
+                || current === mapView.ornaments.compassView
+                || current === mapView.ornaments.scaleBarView
+                || current === mapView.ornaments.logoView
+                || current === mapView.ornaments.attributionButton
                 || current.accessibilityTraits.contains(.button) {
                 return true
             }
@@ -267,32 +272,33 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    func begin(on mapView: MKMapView) {
+    func begin(on mapView: MapboxMaps.MapView) {
         stopFocusAnimation()
         finishesAfterFocus = false
-        session = ZoomSession(camera: mapView.camera, target: nil)
+        session = ZoomSession(camera: mapView.mapboxMap.cameraState, target: nil)
         isZoomingIn = nil
         previousTranslationY = 0
         pendingTranslationY = 0
+        mapView.camera.cancelAnimations()
         onBegin()
     }
 
-    private func startZoomPhase(on mapView: MKMapView, zoomingIn: Bool, at timestamp: CFTimeInterval) {
+    private func startZoomPhase(on mapView: MapboxMaps.MapView, zoomingIn: Bool, at timestamp: CFTimeInterval) {
         stopFocusAnimation()
         // Drop any unrendered movement from the previous direction and keep the displayed camera.
         pendingTranslationY = 0
         isZoomingIn = zoomingIn
         guard zoomingIn else {
-            session = ZoomSession(camera: mapView.camera, target: nil)
+            session = ZoomSession(camera: mapView.mapboxMap.cameraState, target: nil)
             return
         }
         let bounds = viewport?.visibleSafeMapRect ?? .zero
         let target = Self.nearestTarget(in: targets(mapView), visibleBounds: bounds)
         let focusPoint = CGPoint(x: bounds.midX, y: bounds.midY)
         session = ZoomSession(
-            camera: mapView.camera,
+            camera: mapView.mapboxMap.cameraState,
             target: target,
-            focusCoordinate: mapView.convert(focusPoint, toCoordinateFrom: mapView)
+            focusCoordinate: mapView.mapboxMap.coordinate(for: focusPoint)
         )
         focusStartedAt = timestamp
         if target != nil {
@@ -344,7 +350,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         focusDisplayLink = nil
     }
 
-    private func update(on mapView: MKMapView) {
+    private func update(on mapView: MapboxMaps.MapView) {
         guard session != nil, let edge else { return }
         move(on: mapView, translationY: pan.translation(in: mapView).y, velocityY: pan.velocity(in: mapView).y)
         mapView.bringSubviewToFront(feedback)
@@ -352,7 +358,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
     }
 
     func move(
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         translationY: CGFloat,
         velocityY: CGFloat,
         at timestamp: CFTimeInterval = CACurrentMediaTime()
@@ -373,16 +379,17 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         if focusDisplayLink == nil { applyCamera(on: mapView, focusProgress: 1) }
     }
 
-    private func applyCamera(on mapView: MKMapView, focusProgress: Double) {
+    private func applyCamera(on mapView: MapboxMaps.MapView, focusProgress: Double) {
         guard let session else { return }
-        let distance = Self.distance(
-            from: mapView.camera.centerCoordinateDistance,
+        let bounds = mapView.mapboxMap.cameraBounds
+        let zoom = Self.zoom(
+            from: mapView.mapboxMap.cameraState.zoom,
             translationY: pendingTranslationY,
-            minimum: mapView.cameraZoomRange?.minCenterCoordinateDistance ?? 80,
-            maximum: mapView.cameraZoomRange?.maxCenterCoordinateDistance ?? 30_000_000
+            minimum: bounds.minZoom,
+            maximum: bounds.maxZoom
         )
         pendingTranslationY = 0
-        mapView.setCamera(session.camera(at: distance, focusProgress: focusProgress), animated: false)
+        mapView.mapboxMap.setCamera(to: session.camera(at: zoom, focusProgress: focusProgress))
     }
 
     private func finish() {

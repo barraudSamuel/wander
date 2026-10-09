@@ -1,0 +1,8 @@
+[ 4322695ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://pages.map.naver.com/favicon.ico:0
+[ 6099574ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://map.naver.com/p/api/roadEvents/summary?grades=0,1,2,3,4:0
+[ 6099576ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://map.naver.com/p/api/ads/brand-marker:0
+[ 6148828ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://map.pstatic.net/evtp/poi/event/version:0
+[ 6170804ms] [ERROR] Failed to load resource: net::ERR_INTERNET_DISCONNECTED @ https://cmdo.map.naver.com/v1/maps-web-sdk/props:0
+[ 6397673ms] [ERROR] Failed to load resource: net::ERR_INTERNET_DISCONNECTED @ https://map.naver.com/p/api/roadEvents/summary?grades=0,1,2,3,4:0
+[ 8197672ms] [ERROR] Failed to load resource: net::ERR_INTERNET_DISCONNECTED @ https://map.naver.com/p/api/roadEvents/summary?grades=0,1,2,3,4:0
+[ 8201714ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://pages.map.naver.com/favicon.ico:0

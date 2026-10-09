@@ -1,0 +1,3 @@
+// The public token is supplied locally or by the build environment.
+MAPBOX_ACCESS_TOKEN =
+#include? "Mapbox.local.xcconfig"

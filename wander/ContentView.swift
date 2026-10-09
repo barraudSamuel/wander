@@ -126,7 +126,6 @@ struct ContentView: View {
     @State private var selectedMapDetail: MapDetailSelection?
     @State private var eventScrollRequest: MapEventScrollRequest?
     @State private var visibleRosterEventIDs: Set<String> = []
-    @State private var heatMapEnabled = false
     @State private var cityProgress: CityProgress?
     @State private var friendNavigationSelection: FriendSelection?
     @State private var selectedOutingNavigationEventID: String?
@@ -395,7 +394,6 @@ struct ContentView: View {
                             friendsScrollRequest: friendsScrollRequest,
                             summary: summary,
                             settingsPresented: settingsPresented,
-                            heatMapEnabled: $heatMapEnabled,
                             onProfileColorSelected: { selectedColorHex in
                                 friendSyncService.updateProfileColor(
                                     selectedColorHex, userInitiated: true
@@ -487,9 +485,6 @@ struct ContentView: View {
                     selectedOutingPlanEventID: selectedOutingPlanEventID,
                     selectedMapProfile: selectedMapDetail?.profile,
                     friendCameraRequest: friendCameraRequest,
-                    showsHeatMap: heatMapEnabled,
-                    heatMapCellData: locationTracker.heatMapCellData,
-                    heatMapRevision: locationTracker.heatMapRevision,
                     onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
                     onSelectFriend: presentMapFriendProfile,
                     onSelectOutingPlan: selectOuting,

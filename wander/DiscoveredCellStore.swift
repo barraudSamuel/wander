@@ -12,12 +12,6 @@ import Foundation
 import Combine
 import SwiftData
 
-struct CellHeatMapUpdate {
-    let cellID: String
-    let duration: TimeInterval
-    let visitIncrement: Int
-}
-
 struct RemoteDiscoveredCell: Identifiable, Equatable {
     let id: String
     let sharedAt: Date?
@@ -99,39 +93,6 @@ final class DiscoveredCellStore: ObservableObject {
         try? context.save()
         publishCells(adding: insertedCells)
         return insertedCells.count
-    }
-
-    /// Accumulates duration and visit count updates into matching cells.
-    /// Cells that don't exist yet are created in the same persistence pass.
-    func applyHeatMapUpdates(_ updates: [CellHeatMapUpdate], resolution: Int, seenAt: Date) {
-        guard let context = modelContext, !updates.isEmpty else { return }
-
-        var insertedCells: [DiscoveredCell] = []
-        insertedCells.reserveCapacity(updates.count)
-
-        for update in updates {
-            let cell: DiscoveredCell
-            if let existing = cellsByID[update.cellID] {
-                cell = existing
-            } else {
-                cell = DiscoveredCell(
-                    id: update.cellID,
-                    resolution: resolution,
-                    firstSeenAt: seenAt,
-                    lastSeenAt: seenAt
-                )
-                context.insert(cell)
-                cellsByID[update.cellID] = cell
-                cellIDs.insert(update.cellID)
-                insertedCells.append(cell)
-            }
-
-            cell.duration += update.duration
-            cell.visitCount += update.visitIncrement
-        }
-
-        try? context.save()
-        publishCells(adding: insertedCells)
     }
 
     /// Adds remotely discovered cells without changing metadata already

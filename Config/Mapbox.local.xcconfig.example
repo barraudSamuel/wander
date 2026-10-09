@@ -1,0 +1,2 @@
+// Copy to Mapbox.local.xcconfig and paste your own public pk. token.
+MAPBOX_ACCESS_TOKEN =

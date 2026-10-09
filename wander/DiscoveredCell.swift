@@ -10,12 +10,11 @@ import SwiftData
 
 @Model
 final class DiscoveredCell {
-    @Attribute(.unique) var id: String
+    // V3 must have a different checksum from V1, which has the same fields.
+    @Attribute(.unique, hashModifier: "WanderSchemaV3") var id: String
     var resolution: Int
     var firstSeenAt: Date
     var lastSeenAt: Date
-    var duration: TimeInterval = 0
-    var visitCount: Int = 1
 
     init(id: String, resolution: Int, firstSeenAt: Date, lastSeenAt: Date) {
         self.id = id

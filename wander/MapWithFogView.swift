@@ -2,14 +2,12 @@
 //  MapWithFogView.swift
 //  wander
 //
-//  UIViewRepresentable bridge around MKMapView that renders a uniform fog of war.
-//  A world-sized overlay fills the visible map with semi-transparent grey, and
-//  every discovered H3 cell is punched through so Apple Maps shows where the
-//  user has been.
+//  SwiftUI bridge around Mapbox with the exploration fog and social annotations.
 //
 
 import SwiftUI
 import MapKit
+import MapboxMaps
 import CoreLocation
 import UIKit.UIGestureRecognizerSubclass
 
@@ -85,7 +83,7 @@ final class PassiveMapTapObserver: UIGestureRecognizer {
 
         if stayedWithinTapTolerance {
             // This observer reports taps without recognizing a UIKit gesture.
-            // Keep receiving touches while MapKit resolves the same event sequence.
+            // Keep receiving touches while Mapbox resolves the same event sequence.
             onTapEnded?(point)
         } else {
             state = .failed
@@ -243,13 +241,13 @@ struct MapOutingAttendee: Identifiable, Equatable {
     var id: String { userID }
 }
 
-final class UserLocationAnnotation: MKPointAnnotation {}
+final class UserLocationAnnotation: MapAnnotation {}
 
-final class FriendLocationAnnotation: MKPointAnnotation {
+final class FriendLocationAnnotation: MapAnnotation {
     var userID = ""
 }
 
-fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
+fileprivate final class OutingPlanAnnotation: MapAnnotation {
     var eventID = ""
     var profileColorHex = ""
     var isCurrentUser = false
@@ -261,9 +259,39 @@ fileprivate final class OutingPlanAnnotation: MKPointAnnotation {
     }
 }
 
-fileprivate final class DraftOutingAnnotation: MKPointAnnotation {}
+fileprivate final class DraftOutingAnnotation: MapAnnotation {}
 
-private final class OutingPlanAnnotationView: MKAnnotationView {
+private final class DraftOutingAnnotationView: MapAnnotationView {
+    override init(annotation: MapAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        configureView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureView()
+    }
+
+    private func configureView() {
+        bounds = CGRect(x: 0, y: 0, width: 44, height: 52)
+        centerOffset = CGSize(width: 0, height: -26)
+        let image = UIImageView(image: UIImage(
+            systemName: "mappin.circle.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 36, weight: .medium)
+        ))
+        image.tintColor = .systemRed
+        image.contentMode = .scaleAspectFit
+        image.frame = bounds
+        image.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(image)
+        isAccessibilityElement = true
+        accessibilityLabel = "Lieu du nouvel événement"
+        accessibilityHint = "Ce pin indique le lieu qui sera publié."
+        accessibilityTraits = .image
+    }
+}
+
+private final class OutingPlanAnnotationView: MapAnnotationView {
     static let reuseIdentifier = "OutingPlanAnnotation"
     static let controlSize: CGFloat = 48
     static let visualSize: CGFloat = 40
@@ -272,7 +300,7 @@ private final class OutingPlanAnnotationView: MKAnnotationView {
     private let badgeView = OutingCategoryBadgeView()
     private var isSocialClusterFocused = false
 
-    override init(annotation: (any MKAnnotation)?, reuseIdentifier: String?) {
+    override init(annotation: MapAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         configureView()
     }
@@ -334,13 +362,11 @@ private final class OutingPlanAnnotationView: MKAnnotationView {
                 height: Self.controlSize
             )
         )
-        centerOffset = Self.annotationCenterOffset
+        centerOffset = CGSize(
+            width: Self.annotationCenterOffset.x, height: Self.annotationCenterOffset.y
+        )
         backgroundColor = .clear
         clipsToBounds = false
-        canShowCallout = false
-        clusteringIdentifier = nil
-        collisionMode = .circle
-        displayPriority = .required
         isAccessibilityElement = true
         accessibilityTraits = .button
         addSubview(badgeView)
@@ -354,9 +380,9 @@ private final class OutingPlanAnnotationView: MKAnnotationView {
     }
 
     private func applySocialClusterPresentation() {
-        centerOffset = Self.annotationCenterOffset
-        clusteringIdentifier = nil
-        displayPriority = .required
+        centerOffset = CGSize(
+            width: Self.annotationCenterOffset.x, height: Self.annotationCenterOffset.y
+        )
     }
 
     static func projectedFrame(at anchorPoint: CGPoint) -> CGRect {
@@ -510,7 +536,7 @@ private final class CircularPresenceTextView: UIView {
     }
 }
 
-final class UserLocationAnnotationView: MKAnnotationView {
+final class UserLocationAnnotationView: MapAnnotationView {
     static let reuseIdentifier = "UserLocationAnnotation"
     static let friendReuseIdentifier = "FriendLocationAnnotation"
 
@@ -528,7 +554,7 @@ final class UserLocationAnnotationView: MKAnnotationView {
     private var configuredIsRefreshingLocation = false
     private var isSocialClusterFocused = false
     private var presenceRefreshTimer: Timer?
-    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+    override init(annotation: MapAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         configureView()
     }
@@ -698,13 +724,8 @@ final class UserLocationAnnotationView: MKAnnotationView {
             )
         )
         centerOffset = .zero
-        calloutOffset = .zero
         backgroundColor = .clear
         clipsToBounds = false
-        canShowCallout = false
-        collisionMode = .circle
-        clusteringIdentifier = nil
-        displayPriority = .required
         isAccessibilityElement = true
 
         circularPresenceTextView.isHidden = true
@@ -736,8 +757,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
 
     private func applySocialClusterPresentation() {
         centerOffset = .zero
-        clusteringIdentifier = nil
-        displayPriority = .required
     }
 
     private static func locationText(sampledAt: Date?) -> String? {
@@ -832,90 +851,6 @@ final class UserLocationAnnotationView: MKAnnotationView {
     }()
 }
 
-struct FogCellPolygon {
-    let coordinates: [CLLocationCoordinate2D]
-    let mapRect: MKMapRect
-}
-
-final class FogOfWarOverlay: NSObject, MKOverlay {
-    let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
-    let boundingMapRect = MKMapRect.world
-    let cellPolygons: [FogCellPolygon]
-
-    init(cellIDs: Set<String>, explorationEngine: ExplorationEngine) {
-        self.cellPolygons = cellIDs.sorted().compactMap { cellID in
-            let coords = explorationEngine.boundaryCoordinates(for: cellID)
-            guard coords.count >= 3 else { return nil }
-            return FogCellPolygon(
-                coordinates: coords,
-                mapRect: Self.mapRect(for: coords)
-            )
-        }
-        super.init()
-    }
-
-    private static func mapRect(for coordinates: [CLLocationCoordinate2D]) -> MKMapRect {
-        coordinates.reduce(MKMapRect.null) { partialResult, coordinate in
-            let point = MKMapPoint(coordinate)
-            let pointRect = MKMapRect(
-                x: point.x,
-                y: point.y,
-                width: 1,
-                height: 1
-            )
-            return partialResult.union(pointRect)
-        }
-    }
-}
-
-final class FogOfWarOverlayRenderer: MKOverlayRenderer {
-    private let fogColor: UIColor
-
-    init(overlay: FogOfWarOverlay, fogColor: UIColor) {
-        self.fogColor = fogColor
-        super.init(overlay: overlay)
-    }
-
-    override func canDraw(_ mapRect: MKMapRect, zoomScale: MKZoomScale) -> Bool {
-        true
-    }
-
-    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
-        guard let overlay = overlay as? FogOfWarOverlay,
-              zoomScale > 0 else { return }
-
-        context.saveGState()
-        defer { context.restoreGState() }
-
-        context.setBlendMode(.normal)
-        context.setFillColor(fogColor.cgColor)
-        let drawRect = rect(for: mapRect)
-        context.fill(drawRect)
-
-        let revealedPath = CGMutablePath()
-
-        for cell in overlay.cellPolygons
-            where cell.mapRect.intersects(mapRect) {
-            for (index, coordinate) in cell.coordinates.enumerated() {
-                let point = self.point(for: MKMapPoint(coordinate))
-                if index == 0 {
-                    revealedPath.move(to: point)
-                } else {
-                    revealedPath.addLine(to: point)
-                }
-            }
-            revealedPath.closeSubpath()
-        }
-
-        guard !revealedPath.isEmpty else { return }
-
-        context.clip(to: drawRect)
-        context.setBlendMode(.clear)
-        context.addPath(revealedPath)
-        context.fillPath()
-    }
-}
-
 struct MapWithFogView: UIViewRepresentable {
     @Environment(\.mapRenderSize) private var mapRenderSize
     @Environment(\.mapContentInsets) private var mapContentInsets
@@ -974,12 +909,6 @@ struct MapWithFogView: UIViewRepresentable {
     /// One-shot framing from prepared sheet geometry, or when closing the profile.
     var friendCameraRequest: MapFriendCameraRequest?
 
-    var showsSystemUserLocation = true
-    var showsHeatMap = false
-    var heatMapCellData: [String: (duration: TimeInterval, visitCount: Int)] = [:]
-    /// Monotonic token that must change whenever heat-map values change.
-    var heatMapRevision: Int = 0
-
     /// Opens the personal map profile.
     var onSelectOwnProfile: () -> Void = {}
 
@@ -989,22 +918,25 @@ struct MapWithFogView: UIViewRepresentable {
     /// Presents the information for the selected outing.
     var onSelectOutingPlan: (String) -> Void = { _ in }
 
-    /// Hides the detail card when MapKit clears that outing's selection.
+    /// Hides the detail card when that outing is deselected.
     var onDeselectOutingPlan: (String) -> Void = { _ in }
 
     /// Creates a new event from a long press on an empty point of the map.
     var onCreateEvent: (CLLocationCoordinate2D) -> Void = { _ in }
 
     func makeUIView(context: Context) -> MapViewportView {
-        let mapView = MKMapView()
-        mapView.delegate = context.coordinator
-        mapView.preferredConfiguration = MKStandardMapConfiguration(
-            elevationStyle: .flat,
-            emphasisStyle: .muted
-        )
-        mapView.showsUserLocation = showsSystemUserLocation
-        mapView.showsCompass = true
-        mapView.userTrackingMode = .none
+        let mapView = MapboxConfiguration.makeMapView()
+        if let mapRenderSize,
+           mapRenderSize.width.isFinite, mapRenderSize.height.isFinite,
+           mapRenderSize.width > 0, mapRenderSize.height > 0 {
+            mapView.frame = CGRect(origin: .zero, size: mapRenderSize)
+            mapView.layoutIfNeeded()
+        }
+        context.coordinator.install(on: mapView)
+        // LocationTracker owns GPS updates and permission prompts.
+        mapView.location.options.puckType = nil
+        mapView.ornaments.options.compass.visibility = .visible
+        mapView.accessibilityIdentifier = "exploration-map-canvas"
         mapView.accessibilityLabel = "Carte d’exploration"
         mapView.accessibilityHint =
             "Maintenez un doigt sur un endroit vide pour créer un événement."
@@ -1017,22 +949,13 @@ struct MapWithFogView: UIViewRepresentable {
             on: mapView
         )
 
-        // Failsafe initial view over Ho Chi Minh City before the boundary loads.
-        mapView.region = MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 10.76, longitude: 106.66),
-            span: MKCoordinateSpan(latitudeDelta: 0.35, longitudeDelta: 0.35)
-        )
-
-        updateFogOverlay(
-            on: mapView,
-            context: context,
-            visibleDiscoveredCellIDs: visibleDiscoveredCellIDs
-        )
+        context.coordinator.fogRenderer.update(cellIDs: visibleDiscoveredCellIDs)
         let viewport = MapViewportView(
             mapView: mapView,
             renderSize: mapRenderSize,
             contentInsets: viewportContentInsets
         )
+        viewport.tracksSheetPresentation = selectedMapProfile != nil || !isEventCreationEnabled
         let coordinator = context.coordinator
         coordinator.viewport = viewport
         coordinator.edgeZoom = MapEdgeZoomController(
@@ -1051,6 +974,7 @@ struct MapWithFogView: UIViewRepresentable {
             coordinator.friendCamera.cancel()
             coordinator.socialProximityController.viewportDidChange(on: mapView)
             coordinator.refreshMapOffscreenIndicators(on: mapView)
+            coordinator.applyPendingCameraUpdate()
         }
         return viewport
     }
@@ -1058,6 +982,7 @@ struct MapWithFogView: UIViewRepresentable {
     func updateUIView(_ viewport: MapViewportView, context: Context) {
         viewport.renderSize = mapRenderSize
         viewport.contentInsets = viewportContentInsets
+        viewport.tracksSheetPresentation = selectedMapProfile != nil || !isEventCreationEnabled
         let uiView = viewport.mapView
         context.coordinator.onSelectOwnProfile = onSelectOwnProfile
         context.coordinator.onSelectFriend = onSelectFriend
@@ -1071,24 +996,7 @@ struct MapWithFogView: UIViewRepresentable {
             ? "Maintenez un doigt sur un endroit vide pour créer un événement."
             : "Le lieu du nouvel événement est indiqué par un pin."
 
-        let visibleCellIDs = visibleDiscoveredCellIDs
-        let boundaryChanged = context.coordinator.lastBoundaryLength != cityBoundaryCoordinates.count
-        let discoveredChanged = context.coordinator.lastDiscoveredIDs != visibleCellIDs
-        let heatMapVisibilityChanged = context.coordinator.lastShowsHeatMap != showsHeatMap
-        let heatMapDataChanged =
-            context.coordinator.lastHeatMapRevision != heatMapRevision
-
-        if boundaryChanged || discoveredChanged {
-            updateFogOverlay(
-                on: uiView,
-                context: context,
-                visibleDiscoveredCellIDs: visibleCellIDs
-            )
-        }
-
-        if heatMapVisibilityChanged || heatMapDataChanged {
-            updateHeatMapOverlay(on: uiView, context: context)
-        }
+        context.coordinator.fogRenderer.update(cellIDs: visibleDiscoveredCellIDs)
 
         updateFriendAnnotations(on: uiView, context: context)
         updateUserLocationAnnotation(on: uiView, context: context)
@@ -1097,29 +1005,43 @@ struct MapWithFogView: UIViewRepresentable {
         updateDraftOutingAnnotation(on: uiView, context: context)
         context.coordinator.refreshMapOffscreenIndicators(on: uiView)
         synchronizeDetailSelection(on: uiView, context: context)
-        context.coordinator.lastShowsHeatMap = showsHeatMap
+
+        scheduleCameraUpdate(in: viewport, coordinator: context.coordinator)
+    }
+
+    func scheduleCameraUpdate(in viewport: MapViewportView, coordinator: Coordinator) {
+        coordinator.pendingCameraUpdate = { [weak viewport, weak coordinator] in
+            guard let viewport, let coordinator else { return true }
+            return updateCamera(in: viewport, coordinator: coordinator)
+        }
+        coordinator.applyPendingCameraUpdate()
+    }
+
+    private func updateCamera(in viewport: MapViewportView, coordinator: Coordinator) -> Bool {
+        let uiView = viewport.mapView
+        guard MapUserCameraController.hasUsableBounds(on: uiView) else { return false }
+        uiView.layoutIfNeeded()
 
         // A loaded city boundary is only a temporary starting region. Always
         // let the first valid user location take precedence, then leave later
         // camera movement under the user's control.
         if let coordinate = locationTracker.lastLocation?.coordinate,
-           !context.coordinator.didCenterOnUser {
-            context.coordinator.didCenterOnUser = true
-            context.coordinator.didSetInitialRegion = true
-            if !centerOnUser {
-                setFocusedRegion(on: uiView, center: coordinate, animated: true)
-            }
-        } else if !context.coordinator.didSetInitialRegion,
+           CLLocationCoordinate2DIsValid(coordinate),
+           !coordinator.didCenterOnUser {
+            // The initial view can have a size before Mapbox's animation runner has a window.
+            setFocusedRegion(on: uiView, center: coordinate, animated: false)
+            coordinator.didCenterOnUser = true
+            coordinator.didSetInitialRegion = true
+        } else if !coordinator.didSetInitialRegion,
                   cityBoundaryCoordinates.count >= 3 {
-            context.coordinator.didSetInitialRegion = true
-            let region = coordinateRegion(for: cityBoundaryCoordinates)
-            uiView.setRegion(region, animated: true)
+            guard fitCityBoundary(on: uiView) else { return false }
+            coordinator.didSetInitialRegion = true
         }
 
         if centerOnUser,
            let coordinate = locationTracker.lastLocation?.coordinate,
-           !context.coordinator.isConsumingRecenterRequest {
-            let coordinator = context.coordinator
+           CLLocationCoordinate2DIsValid(coordinate),
+           !coordinator.isConsumingRecenterRequest {
             coordinator.friendCamera.cancel()
             coordinator.isConsumingRecenterRequest = true
             DispatchQueue.main.async {
@@ -1130,34 +1052,34 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         if resetMapOrientation {
-            context.coordinator.friendCamera.cancel()
+            coordinator.friendCamera.cancel()
             DispatchQueue.main.async { resetMapOrientation = false }
             resetCameraOrientation(on: uiView)
         }
 
         if let friendUserID = centerOnFriendUserID {
-            context.coordinator.friendCamera.cancel()
+            coordinator.friendCamera.cancel()
             DispatchQueue.main.async { centerOnFriendUserID = nil }
             centerMap(
                 onFriend: friendUserID,
                 on: uiView,
                 friendLocations: friendLocations,
-                context: context
+                coordinator: coordinator
             )
         }
 
         if let outingEventID = centerOnOutingPlanEventID {
-            context.coordinator.friendCamera.cancel()
+            coordinator.friendCamera.cancel()
             DispatchQueue.main.async { centerOnOutingPlanEventID = nil }
             centerMap(
                 onOutingPlan: outingEventID,
                 on: uiView,
-                context: context
+                coordinator: coordinator
             )
         }
 
         if let coordinate = locationTracker.lastLocation?.coordinate {
-            context.coordinator.userCamera.updateLocation(coordinate, on: uiView)
+            coordinator.userCamera.updateLocation(coordinate, on: uiView)
         }
 
         if let request = friendCameraRequest {
@@ -1171,7 +1093,7 @@ struct MapWithFogView: UIViewRepresentable {
             let matchesSelection = request.sheetTopInWindow != nil
                 ? selectedMapProfile == request.target
                 : selectedMapProfile == nil && selectedOutingPlanEventID == nil
-            context.coordinator.applyFriendCameraRequest(
+            coordinator.applyFriendCameraRequest(
                 request,
                 coordinate: coordinate,
                 viewport: viewport,
@@ -1180,6 +1102,7 @@ struct MapWithFogView: UIViewRepresentable {
                     && centerOnFriendUserID == nil && centerOnOutingPlanEventID == nil
             )
         }
+        return true
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1193,7 +1116,9 @@ struct MapWithFogView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ viewport: MapViewportView, coordinator: Coordinator) {
+        viewport.stopTrackingSheetPresentation()
         viewport.onViewportChange = nil
+        coordinator.pendingCameraUpdate = nil
         coordinator.edgeZoom?.uninstall()
         coordinator.edgeZoom = nil
         let uiView = viewport.mapView
@@ -1203,6 +1128,11 @@ struct MapWithFogView: UIViewRepresentable {
         coordinator.friendCamera.cancel()
         coordinator.userCamera.stopFollowing()
         coordinator.socialProximityController.tearDown()
+        coordinator.annotationStore.removeAll()
+        coordinator.mapSubscriptions.removeAll()
+        coordinator.fogRenderer.tearDown()
+        coordinator.fogRenderer = nil
+        uiView.gestures.delegate = nil
     }
 
     private var viewportContentInsets: UIEdgeInsets {
@@ -1220,7 +1150,7 @@ struct MapWithFogView: UIViewRepresentable {
 
     // MARK: - User location
 
-    private func updateUserLocationAnnotation(on mapView: MKMapView, context: Context) {
+    private func updateUserLocationAnnotation(on mapView: MapboxMaps.MapView, context: Context) {
         let coordinator = context.coordinator
         let trimmedDisplayName = userDisplayName.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -1247,9 +1177,9 @@ struct MapWithFogView: UIViewRepresentable {
 
         let nextUserCoordinate = locationTracker.lastLocation?.coordinate
 
-        guard let coordinate = nextUserCoordinate else {
+        guard let coordinate = nextUserCoordinate,
+              CLLocationCoordinate2DIsValid(coordinate) else {
             coordinator.userLocationAnnotation = nil
-            mapView.view(for: mapView.userLocation)?.isHidden = false
             return
         }
 
@@ -1267,13 +1197,12 @@ struct MapWithFogView: UIViewRepresentable {
         annotation.title = resolvedDisplayName
         annotation.subtitle = nil
 
-        mapView.view(for: mapView.userLocation)?.isHidden = true
     }
 
     // MARK: - Friend annotations
 
     private func updateFriendAnnotations(
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         context: Context
     ) {
         let coordinator = context.coordinator
@@ -1319,7 +1248,7 @@ struct MapWithFogView: UIViewRepresentable {
 
                 existing.title = friendLocation.displayName
                 existing.subtitle = nil
-                if let annotationView = mapView.view(for: existing) {
+                if let annotationView = coordinator.annotationStore.view(for: existing) {
                     coordinator.configureFriendAnnotationView(
                         annotationView,
                         avatarID: friendLocation.avatarID,
@@ -1343,7 +1272,7 @@ struct MapWithFogView: UIViewRepresentable {
     // MARK: - Planned outing annotations
 
     private func updateOutingPlanAnnotations(
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         context: Context
     ) {
         let coordinator = context.coordinator
@@ -1390,7 +1319,7 @@ struct MapWithFogView: UIViewRepresentable {
                 : []
 
             if !isNewAnnotation,
-               let annotationView = mapView.view(for: annotation)
+               let annotationView = coordinator.annotationStore.view(for: annotation)
                 as? OutingPlanAnnotationView {
                 annotationView.configure(with: annotation)
             }
@@ -1398,7 +1327,7 @@ struct MapWithFogView: UIViewRepresentable {
     }
 
     private func updateDraftOutingAnnotation(
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         context: Context
     ) {
         let coordinator = context.coordinator
@@ -1406,7 +1335,7 @@ struct MapWithFogView: UIViewRepresentable {
         guard let pendingOutingCoordinate,
               CLLocationCoordinate2DIsValid(pendingOutingCoordinate) else {
             if let annotation = coordinator.draftOutingAnnotation {
-                mapView.removeAnnotation(annotation)
+                coordinator.annotationStore.removeAnnotation(annotation)
                 coordinator.draftOutingAnnotation = nil
             }
             coordinator.lastFocusedDraftCoordinate = nil
@@ -1427,9 +1356,10 @@ struct MapWithFogView: UIViewRepresentable {
             annotation.coordinate = pendingOutingCoordinate
             annotation.title = "Lieu du nouvel événement"
             coordinator.draftOutingAnnotation = annotation
-            mapView.addAnnotation(annotation)
+            coordinator.annotationStore.addAnnotation(annotation)
         }
 
+        coordinator.annotationStore.synchronizeCoordinates()
         let draftCoordinate = MapUserCoordinate(pendingOutingCoordinate)
         guard coordinator.lastFocusedDraftCoordinate != draftCoordinate else {
             return
@@ -1448,7 +1378,7 @@ struct MapWithFogView: UIViewRepresentable {
 
     private func focusDraftOuting(
         at coordinate: CLLocationCoordinate2D,
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         visibleBounds: CGRect
     ) -> Bool {
         guard visibleBounds.width > 0, visibleBounds.height > 0 else {
@@ -1465,91 +1395,52 @@ struct MapWithFogView: UIViewRepresentable {
             y: topInset + (exposedBottom - topInset) / 2
         )
 
-        let targetCoordinate = mapView.convert(
-            targetPoint,
-            toCoordinateFrom: mapView
+        let targetCoordinate = mapView.mapboxMap.coordinate(for: targetPoint)
+        let translatedCenter = MapEdgeZoomController.anchoredCenter(
+            initial: mapView.mapboxMap.cameraState.center,
+            anchor: coordinate,
+            scale: 1,
+            offsetOrigin: targetCoordinate
         )
-        let currentCenter = MKMapPoint(mapView.centerCoordinate)
-        let currentTarget = MKMapPoint(targetCoordinate)
-        let draftPoint = MKMapPoint(coordinate)
-        let translatedCenter = MKMapPoint(
-            x: currentCenter.x + draftPoint.x - currentTarget.x,
-            y: currentCenter.y + draftPoint.y - currentTarget.y
-        )
-
-        mapView.setCenter(
-            translatedCenter.coordinate,
-            animated: true
-        )
+        mapView.camera.ease(to: CameraOptions(center: translatedCenter), duration: 0.35)
         return true
     }
 
-    // MARK: - Fog overlay
-
-    private func updateFogOverlay(
-        on mapView: MKMapView,
-        context: Context,
-        visibleDiscoveredCellIDs: Set<String>
-    ) {
-        let coordinator = context.coordinator
-
-        let overlay = FogOfWarOverlay(
-            cellIDs: visibleDiscoveredCellIDs,
-            explorationEngine: coordinator.explorationEngine
-        )
-
-        coordinator.fogOverlay = overlay
-        coordinator.lastDiscoveredIDs = visibleDiscoveredCellIDs
-        coordinator.lastBoundaryLength = cityBoundaryCoordinates.count
-        applyManagedOverlayOrder(on: mapView, context: context)
-    }
-
-    private func coordinateRegion(for coordinates: [CLLocationCoordinate2D]) -> MKCoordinateRegion {
-        guard let first = coordinates.first else {
-            return MKCoordinateRegion()
-        }
-
-        var minLat = first.latitude
-        var maxLat = first.latitude
-        var minLon = first.longitude
-        var maxLon = first.longitude
-
-        for coordinate in coordinates.dropFirst() {
-            minLat = min(minLat, coordinate.latitude)
-            maxLat = max(maxLat, coordinate.latitude)
-            minLon = min(minLon, coordinate.longitude)
-            maxLon = max(maxLon, coordinate.longitude)
-        }
-
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
-        )
-        let span = MKCoordinateSpan(
-            latitudeDelta: max((maxLat - minLat) * 1.4, 0.01),
-            longitudeDelta: max((maxLon - minLon) * 1.4, 0.01)
-        )
-        return MKCoordinateRegion(center: center, span: span)
+    private func fitCityBoundary(on mapView: MapboxMaps.MapView) -> Bool {
+        let inset = max(24, min(mapView.bounds.width, mapView.bounds.height) * 0.15)
+        guard let camera = try? mapView.mapboxMap.camera(
+            for: cityBoundaryCoordinates,
+            camera: CameraOptions(bearing: 0, pitch: 0),
+            coordinatesPadding: UIEdgeInsets(
+                top: inset, left: inset, bottom: inset, right: inset
+            ),
+            maxZoom: 15,
+            offset: nil
+        ) else { return false }
+        guard camera.center != nil, camera.zoom != nil else { return false }
+        mapView.mapboxMap.setCamera(to: camera)
+        return true
     }
 
     private func setFocusedRegion(
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         center: CLLocationCoordinate2D,
         animated: Bool
     ) {
-        let region = MapUserCameraController.focusedRegion(at: center)
-        mapView.setRegion(region, animated: animated)
+        let camera = MapUserCameraController.focusedCamera(at: center, on: mapView)
+        if animated {
+            mapView.camera.ease(to: camera, duration: 0.35)
+        } else {
+            mapView.mapboxMap.setCamera(to: camera)
+        }
     }
 
-    private func resetCameraOrientation(on mapView: MKMapView) {
-        let camera = mapView.camera.copy() as! MKMapCamera
-        camera.heading = 0
-        camera.pitch = 0
-        mapView.setCamera(camera, animated: true)
+    private func resetCameraOrientation(on mapView: MapboxMaps.MapView) {
+        mapView.camera.ease(to: CameraOptions(bearing: 0, pitch: 0), duration: 0.35)
     }
 
     private func synchronizeDetailSelection(
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         context: Context
     ) {
         let requested: MapSocialClusterMemberID?
@@ -1570,16 +1461,16 @@ struct MapWithFogView: UIViewRepresentable {
 
     private func centerMap(
         onFriend userID: String,
-        on mapView: MKMapView,
+        on mapView: MapboxMaps.MapView,
         friendLocations: [String: FriendLocation],
-        context: Context
+        coordinator: Coordinator
     ) {
-        context.coordinator.userCamera.stopFollowing()
+        coordinator.userCamera.stopFollowing()
 
         if let coordinate = friendLocations[userID]?.coordinate {
             guard CLLocationCoordinate2DIsValid(coordinate) else { return }
-            context.coordinator.clearImmediateSocialSelection()
-            context.coordinator.socialProximityController.center(
+            coordinator.clearImmediateSocialSelection()
+            coordinator.socialProximityController.center(
                 on: .friend(userID),
                 on: mapView
             )
@@ -1588,133 +1479,41 @@ struct MapWithFogView: UIViewRepresentable {
 
     private func centerMap(
         onOutingPlan eventID: String,
-        on mapView: MKMapView,
-        context: Context
+        on mapView: MapboxMaps.MapView,
+        coordinator: Coordinator
     ) {
-        guard let annotation = context.coordinator
+        guard let annotation = coordinator
             .outingPlanAnnotations[eventID] else {
             return
         }
 
-        context.coordinator.userCamera.stopFollowing()
-        context.coordinator.clearImmediateSocialSelection()
+        coordinator.userCamera.stopFollowing()
+        coordinator.clearImmediateSocialSelection()
         setFocusedRegion(
             on: mapView,
             center: annotation.coordinate,
             animated: true
         )
-        context.coordinator.socialProximityController.select(
+        coordinator.socialProximityController.select(
             .outing(eventID),
             on: mapView,
             silently: true
         )
     }
 
-    // MARK: - Heat map overlay
-
-    private func updateHeatMapOverlay(on mapView: MKMapView, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.lastHeatMapRevision = heatMapRevision
-
-        guard showsHeatMap else {
-            coordinator.heatMapOverlay = nil
-            applyManagedOverlayOrder(on: mapView, context: context)
-            return
-        }
-
-        guard !heatMapCellData.isEmpty else {
-            coordinator.heatMapOverlay = nil
-            applyManagedOverlayOrder(on: mapView, context: context)
-            return
-        }
-
-        let overlay = HeatMapOverlay(
-            cellData: heatMapCellData,
-            explorationEngine: coordinator.explorationEngine
-        )
-
-        coordinator.heatMapOverlay =
-            overlay.cellPolygons.isEmpty ? nil : overlay
-
-        applyManagedOverlayOrder(on: mapView, context: context)
-    }
-
-    /// Keeps the visual stack deterministic regardless of which filter changed
-    /// most recently: fog first, then the local heat map.
-    private func applyManagedOverlayOrder(
-        on mapView: MKMapView,
-        context: Context
-    ) {
-        let coordinator = context.coordinator
-        var desiredManagedOverlays: [MKOverlay] = []
-        if let fogOverlay = coordinator.fogOverlay {
-            desiredManagedOverlays.append(fogOverlay)
-        }
-        if let heatMapOverlay = coordinator.heatMapOverlay {
-            desiredManagedOverlays.append(heatMapOverlay)
-        }
-        let desiredIdentifiers = Set(desiredManagedOverlays.map {
-            ObjectIdentifier($0 as AnyObject)
-        })
-        let attachedManagedOverlays = mapView.overlays.filter {
-            $0 is FogOfWarOverlay
-                || $0 is HeatMapOverlay
-        }
-        let staleOverlays = attachedManagedOverlays.filter {
-            !desiredIdentifiers.contains(ObjectIdentifier($0 as AnyObject))
-        }
-        if !staleOverlays.isEmpty {
-            mapView.removeOverlays(staleOverlays)
-        }
-
-        // Keep renderers for unchanged overlays alive. A fog update should not
-        // recreate the heat-map and every friend renderer (and vice versa).
-        var attachedIdentifiers = Set(mapView.overlays.map {
-            ObjectIdentifier($0 as AnyObject)
-        })
-
-        for (index, overlay) in desiredManagedOverlays.enumerated() {
-            let identifier = ObjectIdentifier(overlay as AnyObject)
-            guard !attachedIdentifiers.contains(identifier) else { continue }
-
-            let followingOverlay = desiredManagedOverlays
-                .dropFirst(index + 1)
-                .first {
-                    attachedIdentifiers.contains(ObjectIdentifier($0 as AnyObject))
-                }
-            let precedingOverlay = desiredManagedOverlays[..<index]
-                .reversed()
-                .first {
-                    attachedIdentifiers.contains(ObjectIdentifier($0 as AnyObject))
-                }
-
-            if let followingOverlay {
-                mapView.insertOverlay(overlay, below: followingOverlay)
-            } else if let precedingOverlay {
-                mapView.insertOverlay(overlay, above: precedingOverlay)
-            } else {
-                mapView.addOverlay(overlay, level: .aboveRoads)
-            }
-            attachedIdentifiers.insert(identifier)
-        }
-    }
-
     // MARK: - Coordinator
 
-    final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate, GestureManagerDelegate {
         weak var viewport: MapViewportView?
         var edgeZoom: MapEdgeZoomController?
-        let explorationEngine = ExplorationEngine()
         let fogColor: UIColor
-        var fogOverlay: FogOfWarOverlay?
-        var heatMapOverlay: HeatMapOverlay?
-        var lastDiscoveredIDs: Set<String> = []
-        var lastBoundaryLength: Int = 0
-        var lastShowsHeatMap = false
-        var lastHeatMapRevision = 0
+        private(set) var annotationStore: MapAnnotationStore!
+        var fogRenderer: MapboxFogRenderer!
+        fileprivate var mapSubscriptions: Set<AnyCancelable> = []
         var didSetInitialRegion = false
         var didCenterOnUser = false
         var isConsumingRecenterRequest = false
+        fileprivate var pendingCameraUpdate: (() -> Bool)?
         let userCamera = MapUserCameraController()
         var userLocationAnnotation: UserLocationAnnotation?
         private var userDisplayName = ""
@@ -1739,13 +1538,13 @@ struct MapWithFogView: UIViewRepresentable {
         private weak var longPressRecognizer: UILongPressGestureRecognizer?
         private weak var immediateSocialAnnotationRecognizer:
             PassiveMapTapObserver?
-        private weak var pressedSocialAnnotationView: MKAnnotationView?
+        private weak var pressedSocialAnnotationView: MapAnnotationView?
         private var pressedSocialAnnotationOriginalAlpha: CGFloat?
         private var pressedSocialAnnotationWasSelected = false
         private var isPressingMapBackground = false
         private var socialPressGeneration: UInt64 = 0
         private struct ImmediateSocialSelection {
-            let annotation: any MKAnnotation
+            let annotation: MapAnnotation
             var isCommitted = false
         }
         private var immediateSocialSelection: ImmediateSocialSelection?
@@ -1757,6 +1556,7 @@ struct MapWithFogView: UIViewRepresentable {
         private var outingOffscreenIndicatorViews:
             [String: OutingOffscreenIndicatorView] = [:]
         fileprivate lazy var socialProximityController = MapSocialProximityController(
+            annotationStore: annotationStore,
             presentation: { [weak self] group in
                 self?.socialClusterPresentation(for: group)
                     ?? MapSocialClusterPresentation(people: [], outings: [])
@@ -1814,7 +1614,70 @@ struct MapWithFogView: UIViewRepresentable {
             self.onCreateEvent = onCreateEvent
         }
 
-        func installLongPressRecognizer(on mapView: MKMapView) {
+        func applyPendingCameraUpdate() {
+            guard let update = pendingCameraUpdate else { return }
+            pendingCameraUpdate = nil
+            if !update() { pendingCameraUpdate = update }
+        }
+
+        func install(on mapView: MapboxMaps.MapView) {
+            annotationStore = MapAnnotationStore(mapView: mapView)
+            annotationStore.makeView = { [weak self, weak mapView] annotation in
+                guard let self, let mapView else { return nil }
+                return self.mapView(mapView, viewFor: annotation)
+            }
+            annotationStore.onSelect = { [weak self, weak mapView] view in
+                guard let self, let mapView else { return }
+                self.mapView(mapView, didSelect: view)
+            }
+            annotationStore.onDeselect = { [weak self, weak mapView] view in
+                guard let self, let mapView else { return }
+                self.mapView(mapView, didDeselect: view)
+            }
+            annotationStore.onDidAdd = { [weak self, weak mapView] views in
+                guard let self, let mapView else { return }
+                self.mapView(mapView, didAdd: views)
+            }
+            fogRenderer = MapboxFogRenderer(mapView: mapView, fogColor: fogColor)
+            mapView.gestures.delegate = self
+            mapView.mapboxMap.onCameraChanged.observe { [weak self, weak mapView] _ in
+                guard let self, let mapView else { return }
+                self.cameraDidChange(on: mapView)
+            }.store(in: &mapSubscriptions)
+            mapView.mapboxMap.onMapIdle.observe { [weak self, weak mapView] _ in
+                guard let self, let mapView else { return }
+                self.cameraDidFinish(on: mapView)
+            }.store(in: &mapSubscriptions)
+        }
+
+        func gestureManager(_ gestureManager: GestureManager, didBegin gestureType: GestureType) {
+            guard gestureType != .singleTap, let mapView = viewport?.mapView else { return }
+            clearImmediateSocialSelection()
+            friendCamera.cancel()
+            userCamera.stopFollowing()
+            socialProximityController.regionWillChange(
+                on: mapView, userInitiated: socialProximityController.hasActivePresentation
+            )
+        }
+
+        func gestureManager(
+            _ gestureManager: GestureManager,
+            didEnd gestureType: GestureType,
+            willAnimate: Bool
+        ) {
+            guard !willAnimate, let mapView = viewport?.mapView else { return }
+            cameraDidFinish(on: mapView)
+        }
+
+        func gestureManager(
+            _ gestureManager: GestureManager,
+            didEndAnimatingFor gestureType: GestureType
+        ) {
+            guard let mapView = viewport?.mapView else { return }
+            cameraDidFinish(on: mapView)
+        }
+
+        func installLongPressRecognizer(on mapView: MapboxMaps.MapView) {
             guard longPressRecognizer == nil else { return }
 
             let recognizer = UILongPressGestureRecognizer(
@@ -1830,7 +1693,7 @@ struct MapWithFogView: UIViewRepresentable {
             longPressRecognizer = recognizer
         }
 
-        func removeLongPressRecognizer(from mapView: MKMapView) {
+        func removeLongPressRecognizer(from mapView: MapboxMaps.MapView) {
             guard let longPressRecognizer else { return }
             mapView.removeGestureRecognizer(longPressRecognizer)
             self.longPressRecognizer = nil
@@ -1840,7 +1703,7 @@ struct MapWithFogView: UIViewRepresentable {
             longPressRecognizer?.isEnabled = isEnabled
         }
 
-        func installImmediateSocialAnnotationRecognizer(on mapView: MKMapView) {
+        func installImmediateSocialAnnotationRecognizer(on mapView: MapboxMaps.MapView) {
             guard immediateSocialAnnotationRecognizer == nil else { return }
 
             let recognizer = PassiveMapTapObserver(maximumMovement: 10)
@@ -1861,7 +1724,7 @@ struct MapWithFogView: UIViewRepresentable {
             immediateSocialAnnotationRecognizer = recognizer
         }
 
-        func removeImmediateSocialAnnotationRecognizer(from mapView: MKMapView) {
+        func removeImmediateSocialAnnotationRecognizer(from mapView: MapboxMaps.MapView) {
             guard let immediateSocialAnnotationRecognizer else { return }
             restorePressedSocialAnnotationAppearance(animated: false)
             clearImmediateSocialSelection()
@@ -1869,8 +1732,8 @@ struct MapWithFogView: UIViewRepresentable {
             self.immediateSocialAnnotationRecognizer = nil
         }
 
-        func synchronizeSocialProximityAnnotations(on mapView: MKMapView) {
-            var sources: [MapSocialClusterMemberID: any MKAnnotation] = [:]
+        func synchronizeSocialProximityAnnotations(on mapView: MapboxMaps.MapView) {
+            var sources: [MapSocialClusterMemberID: MapAnnotation] = [:]
             for (userID, annotation) in friendAnnotations {
                 sources[.friend(userID)] = annotation
             }
@@ -1885,12 +1748,12 @@ struct MapWithFogView: UIViewRepresentable {
 
         func synchronizeDetailSelection(
             _ requested: MapSocialClusterMemberID?,
-            on mapView: MKMapView,
+            on mapView: MapboxMaps.MapView,
             silently: Bool = false
         ) {
             guard requested != lastRequestedDetailSelection else { return }
             // Keep protection when SwiftUI echoes this tap; a different product
-            // selection explicitly takes ownership before MapKit receives it.
+            // selection explicitly takes ownership before Mapbox receives it.
             let touchedMember: MapSocialClusterMemberID?
             switch immediateSocialSelection?.annotation {
             case let friend as FriendLocationAnnotation: touchedMember = .friend(friend.userID)
@@ -1912,21 +1775,20 @@ struct MapWithFogView: UIViewRepresentable {
             }
         }
 
-        func edgeZoomTargets(on mapView: MKMapView) -> [MapEdgeZoomController.Target] {
-            mapView.annotations.compactMap { annotation in
+        func edgeZoomTargets(on mapView: MapboxMaps.MapView) -> [MapEdgeZoomController.Target] {
+            annotationStore.annotations.compactMap { annotation in
                 guard let id = Self.edgeZoomTargetID(for: annotation),
-                      let view = mapView.view(for: annotation),
-                      view.isDescendant(of: mapView), !view.isHidden, view.alpha > 0.01,
-                      view.cluster == nil else { return nil }
+                      let view = annotationStore.view(for: annotation),
+                      view.isDescendant(of: mapView), !view.isHidden, view.alpha > 0.01 else { return nil }
                 return MapEdgeZoomController.Target(
                     id: id,
                     coordinate: annotation.coordinate,
-                    screenPoint: mapView.convert(annotation.coordinate, toPointTo: mapView)
+                    screenPoint: mapView.mapboxMap.point(for: annotation.coordinate)
                 )
             }
         }
 
-        static func edgeZoomTargetID(for annotation: any MKAnnotation) -> String? {
+        static func edgeZoomTargetID(for annotation: MapAnnotation) -> String? {
             if annotation is UserLocationAnnotation {
                 return "current-user"
             }
@@ -1971,7 +1833,7 @@ struct MapWithFogView: UIViewRepresentable {
                         MapSocialClusterPersonPresentation(
                             id: friend.userID,
                             displayName: info?.displayName
-                                ?? friend.title.flatMap { $0 }
+                                ?? friend.title
                                 ?? "Explorer",
                             avatarID: friendAvatarIDByUserID[friend.userID]
                                 ?? ProfileAvatar.generatedID(
@@ -1992,7 +1854,7 @@ struct MapWithFogView: UIViewRepresentable {
                     outings.append(
                         MapSocialClusterOutingPresentation(
                             id: outing.eventID,
-                            placeName: outing.title.flatMap { $0 }
+                            placeName: outing.title
                                 ?? "Lieu sans nom",
                             category: outing.category,
                             profileColorHex: outing.profileColorHex,
@@ -2028,7 +1890,7 @@ struct MapWithFogView: UIViewRepresentable {
             )
         }
 
-        func installMapOffscreenIndicatorContainer(on mapView: MKMapView) {
+        func installMapOffscreenIndicatorContainer(on mapView: MapboxMaps.MapView) {
             guard mapOffscreenIndicatorContainer == nil else { return }
 
             let container = MapOffscreenIndicatorContainerView(
@@ -2048,12 +1910,12 @@ struct MapWithFogView: UIViewRepresentable {
             mapOffscreenIndicatorContainer = nil
         }
 
-        func visibleSafeBounds(on mapView: MKMapView) -> CGRect {
+        func visibleSafeBounds(on mapView: MapboxMaps.MapView) -> CGRect {
             viewport?.visibleSafeMapRect
                 ?? mapView.bounds.inset(by: mapView.safeAreaInsets)
         }
 
-        func refreshMapOffscreenIndicators(on mapView: MKMapView) {
+        func refreshMapOffscreenIndicators(on mapView: MapboxMaps.MapView) {
             guard let container = mapOffscreenIndicatorContainer else {
                 return
             }
@@ -2200,7 +2062,7 @@ struct MapWithFogView: UIViewRepresentable {
         private func friendOffscreenIndicatorView(
             for userID: String,
             in container: MapOffscreenIndicatorContainerView,
-            mapView: MKMapView
+            mapView: MapboxMaps.MapView
         ) -> FriendOffscreenIndicatorView {
             if let existing = friendOffscreenIndicatorViews[userID] {
                 return existing
@@ -2221,7 +2083,7 @@ struct MapWithFogView: UIViewRepresentable {
         private func outingOffscreenIndicatorView(
             for eventID: String,
             in container: MapOffscreenIndicatorContainerView,
-            mapView: MKMapView
+            mapView: MapboxMaps.MapView
         ) -> OutingOffscreenIndicatorView {
             if let existing = outingOffscreenIndicatorViews[eventID] {
                 return existing
@@ -2274,10 +2136,11 @@ struct MapWithFogView: UIViewRepresentable {
 
         private func projectedPoint(
             for coordinate: CLLocationCoordinate2D,
-            on mapView: MKMapView
+            on mapView: MapboxMaps.MapView
         ) -> CGPoint? {
-            let point = mapView.convert(coordinate, toPointTo: mapView)
-            if point.x.isFinite, point.y.isFinite {
+            let point = mapView.mapboxMap.point(for: coordinate)
+            // Mapbox uses this finite sentinel when the coordinate is offscreen.
+            if point.x.isFinite, point.y.isFinite, point != CGPoint(x: -1, y: -1) {
                 return point
             }
 
@@ -2289,9 +2152,9 @@ struct MapWithFogView: UIViewRepresentable {
 
         private func fallbackProjectedPoint(
             for coordinate: CLLocationCoordinate2D,
-            on mapView: MKMapView
+            on mapView: MapboxMaps.MapView
         ) -> CGPoint? {
-            let centerCoordinate = mapView.centerCoordinate
+            let centerCoordinate = mapView.mapboxMap.cameraState.center
             guard CLLocationCoordinate2DIsValid(centerCoordinate),
                   CLLocationCoordinate2DIsValid(coordinate) else {
                 return nil
@@ -2308,7 +2171,7 @@ struct MapWithFogView: UIViewRepresentable {
                 - sin(startLatitude) * cos(endLatitude) * cos(longitudeDelta)
             let bearing: Double = atan2(y, x) * 180 / Double.pi
             let relativeBearing: Double = (
-                bearing - mapView.camera.heading
+                bearing - mapView.mapboxMap.cameraState.bearing
             ) * Double.pi / 180
             let visibleBounds = visibleSafeBounds(on: mapView)
             let distance = max(visibleBounds.width, visibleBounds.height) * 2
@@ -2354,7 +2217,7 @@ struct MapWithFogView: UIViewRepresentable {
                 // Controls and group rows also start a new interaction, even
                 // though this observer will not handle their touches.
                 clearImmediateSocialSelection()
-                // Assistive activation uses MapKit's native selection path.
+                // Assistive activation uses the annotation view’s activation handler.
                 guard !UIAccessibility.isVoiceOverRunning,
                       !UIAccessibility.isSwitchControlRunning else { return false }
                 return immediateSocialPressTarget(from: touch.view) != nil
@@ -2381,7 +2244,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private enum ImmediateSocialPressTarget {
-            case annotation(MKAnnotationView)
+            case annotation(MapAnnotationView)
             case mapBackground
         }
 
@@ -2394,7 +2257,7 @@ struct MapWithFogView: UIViewRepresentable {
                 if view is UIControl {
                     return nil
                 }
-                if let annotationView = view as? MKAnnotationView {
+                if let annotationView = view as? MapAnnotationView {
                     return supportsImmediateActivation(annotationView)
                         ? .annotation(annotationView)
                         : nil
@@ -2412,7 +2275,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func supportsImmediateActivation(
-            _ annotationView: MKAnnotationView
+            _ annotationView: MapAnnotationView
         ) -> Bool {
             if annotationView.annotation is UserLocationAnnotation
                 || annotationView.annotation is FriendLocationAnnotation
@@ -2430,7 +2293,7 @@ struct MapWithFogView: UIViewRepresentable {
 
         private func beginImmediateSocialPress(
             at point: CGPoint,
-            on mapView: MKMapView
+            on mapView: MapboxMaps.MapView
         ) {
             socialPressGeneration &+= 1
             clearImmediateSocialSelection()
@@ -2463,12 +2326,11 @@ struct MapWithFogView: UIViewRepresentable {
 
         private func endImmediateSocialPress(
             at mapPoint: CGPoint,
-            on mapView: MKMapView
+            on mapView: MapboxMaps.MapView
         ) {
             if isPressingMapBackground {
                 isPressingMapBackground = false
-                // MapKit can reselect the previous annotation while finishing
-                // this same touch event. Apply the user's dismissal afterward.
+                // Apply dismissal after annotation tap handlers finish this event.
                 let generation = socialPressGeneration
                 let presentationRevision = socialProximityController.presentationRevision
                 DispatchQueue.main.async { [weak self, weak mapView] in
@@ -2483,7 +2345,7 @@ struct MapWithFogView: UIViewRepresentable {
 
             guard let annotationView = pressedSocialAnnotationView,
                   let annotation = annotationView.annotation,
-                  mapView.view(for: annotation) === annotationView else {
+                  annotationStore.view(for: annotation) === annotationView else {
                 clearImmediateSocialSelection()
                 restorePressedSocialAnnotationAppearance(animated: true)
                 return
@@ -2545,22 +2407,22 @@ struct MapWithFogView: UIViewRepresentable {
             }
         }
 
-        private func dismissSelectedSocialAnnotations(on mapView: MKMapView) {
-            let selectedSocialAnnotations = mapView.selectedAnnotations.filter {
+        private func dismissSelectedSocialAnnotations(on mapView: MapboxMaps.MapView) {
+            let selectedSocialAnnotations = annotationStore.selectedAnnotations.filter {
                 $0 is UserLocationAnnotation
                     || $0 is FriendLocationAnnotation
                     || $0 is OutingPlanAnnotation
                     || $0 is MapSocialProximityGroupAnnotation
             }
 
-            // Cancel pending selection even when MapKit has not selected its view yet.
+            // Cancel pending selection even when Mapbox has not selected its view yet.
             socialProximityController.collapse(on: mapView)
             for annotation in selectedSocialAnnotations {
-                mapView.deselectAnnotation(annotation, animated: false)
+                annotationStore.deselectAnnotation(annotation, animated: false)
             }
         }
 
-        private func protectCommittedSocialSelection(_ annotation: any MKAnnotation) {
+        private func protectCommittedSocialSelection(_ annotation: MapAnnotation) {
             immediateSocialSelectionResetWorkItem?.cancel()
             immediateSocialSelection = ImmediateSocialSelection(annotation: annotation, isCommitted: true)
             let generation = socialPressGeneration
@@ -2569,7 +2431,7 @@ struct MapWithFogView: UIViewRepresentable {
                 self?.clearImmediateSocialSelection()
             }
             immediateSocialSelectionResetWorkItem = workItem
-            // MapKit may finish resolving this tap after immediate activation.
+            // Keep ownership until other tap handlers finish this interaction.
             // A new touch or explicit selection releases this protection.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: workItem)
         }
@@ -2580,24 +2442,21 @@ struct MapWithFogView: UIViewRepresentable {
             immediateSocialSelection = nil
         }
 
-        private func restoreImmediateSocialSelection(on mapView: MKMapView) {
+        private func restoreImmediateSocialSelection(on mapView: MapboxMaps.MapView) {
             guard let selection = immediateSocialSelection, selection.isCommitted,
-                  !mapView.selectedAnnotations.contains(where: {
+                  !annotationStore.selectedAnnotations.contains(where: {
                       ($0 as AnyObject) === (selection.annotation as AnyObject)
                   }),
-                  mapView.view(for: selection.annotation) != nil,
-                  mapView.annotations.contains(where: {
+                  annotationStore.view(for: selection.annotation) != nil,
+                  annotationStore.annotations.contains(where: {
                       ($0 as AnyObject) === (selection.annotation as AnyObject)
                   }) else { return }
-            mapView.selectAnnotation(selection.annotation, animated: false)
+            annotationStore.selectAnnotation(selection.annotation, animated: false)
         }
 
         private func excludesEventCreation(from view: UIView) -> Bool {
-            view is MKAnnotationView
+            view is MapAnnotationView
                 || view is UIControl
-                || view is MKCompassButton
-                || view is MKScaleView
-                || view is MKUserTrackingButton
                 || view.accessibilityTraits.contains(.button)
         }
 
@@ -2605,19 +2464,19 @@ struct MapWithFogView: UIViewRepresentable {
             _ recognizer: UILongPressGestureRecognizer
         ) {
             guard recognizer.state == .began,
-                  let mapView = recognizer.view as? MKMapView else {
+                  let mapView = recognizer.view as? MapboxMaps.MapView else {
                 return
             }
 
             let point = recognizer.location(in: mapView)
-            let coordinate = mapView.convert(point, toCoordinateFrom: mapView)
+            let coordinate = mapView.mapboxMap.coordinate(for: point)
             guard CLLocationCoordinate2DIsValid(coordinate) else { return }
 
             eventCreationFeedback.impactOccurred()
             onCreateEvent(coordinate)
         }
 
-        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+        private func cameraDidChange(on mapView: MapboxMaps.MapView) {
             let userInitiated = hasActiveMapGesture(in: mapView)
             if userInitiated {
                 clearImmediateSocialSelection()
@@ -2630,23 +2489,6 @@ struct MapWithFogView: UIViewRepresentable {
                     && userInitiated
             )
             refreshMapOffscreenIndicators(on: mapView)
-        }
-
-        func mapView(
-            _ mapView: MKMapView,
-            regionWillChangeAnimated animated: Bool
-        ) {
-            let userInitiated = hasActiveMapGesture(in: mapView)
-            if userInitiated {
-                clearImmediateSocialSelection()
-                friendCamera.cancel()
-                userCamera.stopFollowing()
-            }
-            socialProximityController.regionWillChange(
-                on: mapView,
-                userInitiated: socialProximityController.hasActivePresentation
-                    && userInitiated
-            )
         }
 
         func applyFriendCameraRequest(
@@ -2672,7 +2514,7 @@ struct MapWithFogView: UIViewRepresentable {
 
         private func hasActiveMapGesture(in view: UIView) -> Bool {
             // Scrolling a group's list or touching its controls is not a map gesture.
-            guard !(view is MKAnnotationView), !(view is UIControl) else { return false }
+            guard !(view is MapAnnotationView), !(view is UIControl) else { return false }
             if view.gestureRecognizers?.contains(where: {
                 guard $0 !== immediateSocialAnnotationRecognizer,
                       $0 !== longPressRecognizer else { return false }
@@ -2688,42 +2530,20 @@ struct MapWithFogView: UIViewRepresentable {
             return view.subviews.contains { hasActiveMapGesture(in: $0) }
         }
 
-        func mapView(
-            _ mapView: MKMapView,
-            regionDidChangeAnimated animated: Bool
-        ) {
+        private func cameraDidFinish(on mapView: MapboxMaps.MapView) {
             socialProximityController.regionDidChange(on: mapView)
-            userCamera.regionDidChange(on: mapView)
+            refreshMapOffscreenIndicators(on: mapView)
+            applyPendingCameraUpdate()
         }
 
-        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let fogOverlay = overlay as? FogOfWarOverlay {
-                return FogOfWarOverlayRenderer(overlay: fogOverlay, fogColor: fogColor)
-            }
-            if let polygon = overlay as? MKPolygon {
-                let renderer = MKPolygonRenderer(polygon: polygon)
-                renderer.fillColor = fogColor
-                renderer.strokeColor = nil
-                renderer.lineWidth = 0
-                return renderer
-            }
-            if overlay is HeatMapOverlay {
-                return HeatMapOverlayRenderer(overlay: overlay)
-            }
-            return MKOverlayRenderer(overlay: overlay)
-        }
-
-        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+        func mapView(_ mapView: MapboxMaps.MapView, viewFor annotation: MapAnnotation) -> MapAnnotationView? {
             if annotation is UserLocationAnnotation {
-                let annotationView = mapView.dequeueReusableAnnotationView(
-                    withIdentifier: UserLocationAnnotationView.reuseIdentifier
-                ) as? UserLocationAnnotationView
-                    ?? UserLocationAnnotationView(
+                let annotationView = UserLocationAnnotationView(
                         annotation: annotation,
                         reuseIdentifier: UserLocationAnnotationView.reuseIdentifier
                     )
                 annotationView.annotation = annotation
-                annotationView.canShowCallout = false
+
                 annotationView.configure(
                     avatarID: userAvatarID,
                     profileColorHex: userProfileColorHex,
@@ -2743,14 +2563,9 @@ struct MapWithFogView: UIViewRepresentable {
                 return annotationView
             }
 
-            guard !(annotation is MKUserLocation) else { return nil }
             if let cluster = annotation
                 as? MapSocialProximityGroupAnnotation {
-                let annotationView = mapView.dequeueReusableAnnotationView(
-                    withIdentifier: MapSocialClusterAnnotationView
-                        .reuseIdentifier
-                ) as? MapSocialClusterAnnotationView
-                    ?? MapSocialClusterAnnotationView(
+                let annotationView = MapSocialClusterAnnotationView(
                         annotation: annotation,
                         reuseIdentifier: MapSocialClusterAnnotationView
                             .reuseIdentifier
@@ -2765,39 +2580,11 @@ struct MapWithFogView: UIViewRepresentable {
             }
 
             if annotation is DraftOutingAnnotation {
-                let reuseIdentifier = "DraftOutingAnnotation"
-                let annotationView = mapView.dequeueReusableAnnotationView(
-                    withIdentifier: reuseIdentifier
-                ) as? MKMarkerAnnotationView
-                    ?? MKMarkerAnnotationView(
-                        annotation: annotation,
-                        reuseIdentifier: reuseIdentifier
-                    )
-                annotationView.annotation = annotation
-                annotationView.markerTintColor = .systemRed
-                annotationView.glyphImage = UIImage(
-                    systemName: "calendar.badge.plus"
-                )
-                annotationView.glyphTintColor = .white
-                annotationView.titleVisibility = .hidden
-                annotationView.subtitleVisibility = .hidden
-                annotationView.canShowCallout = false
-                annotationView.clusteringIdentifier = nil
-                annotationView.displayPriority = .required
-                annotationView.isAccessibilityElement = true
-                annotationView.accessibilityLabel =
-                    "Lieu du nouvel événement"
-                annotationView.accessibilityHint =
-                    "Ce pin indique le lieu qui sera publié."
-                annotationView.accessibilityTraits = .image
-                return annotationView
+                return DraftOutingAnnotationView(annotation: annotation, reuseIdentifier: "DraftOutingAnnotation")
             }
 
             if let outingPlanAnnotation = annotation as? OutingPlanAnnotation {
-                let annotationView = mapView.dequeueReusableAnnotationView(
-                    withIdentifier: OutingPlanAnnotationView.reuseIdentifier
-                ) as? OutingPlanAnnotationView
-                    ?? OutingPlanAnnotationView(
+                let annotationView = OutingPlanAnnotationView(
                         annotation: annotation,
                         reuseIdentifier: OutingPlanAnnotationView.reuseIdentifier
                 )
@@ -2813,16 +2600,13 @@ struct MapWithFogView: UIViewRepresentable {
                 return nil
             }
 
-            let annotationView = mapView.dequeueReusableAnnotationView(
-                withIdentifier: UserLocationAnnotationView.friendReuseIdentifier
-            ) as? UserLocationAnnotationView
-                ?? UserLocationAnnotationView(
+            let annotationView = UserLocationAnnotationView(
                     annotation: annotation,
                     reuseIdentifier: UserLocationAnnotationView.friendReuseIdentifier
                 )
             annotationView.annotation = annotation
 
-            let displayName = annotation.title.flatMap { $0 } ?? "Explorer"
+            let displayName = annotation.title ?? "Explorer"
             let userID = friendAnnotation.userID
             let avatarID = friendAvatarIDByUserID[userID]
                 ?? ProfileAvatar.generatedID(seed: userID)
@@ -2850,24 +2634,20 @@ struct MapWithFogView: UIViewRepresentable {
             return annotationView
         }
 
-        func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
-            for view in views where view.annotation is MKUserLocation {
-                view.isHidden = userLocationAnnotation != nil
-            }
+        func mapView(_ mapView: MapboxMaps.MapView, didAdd views: [MapAnnotationView]) {
             socialProximityController.didAddViews(on: mapView)
         }
 
-        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+        func mapView(_ mapView: MapboxMaps.MapView, didSelect view: MapAnnotationView) {
             guard let annotation = view.annotation,
-                  mapView.view(for: annotation) === view,
-                  mapView.selectedAnnotations.contains(where: {
+                  annotationStore.view(for: annotation) === view,
+                  annotationStore.selectedAnnotations.contains(where: {
                       ($0 as AnyObject) === (annotation as AnyObject)
                   }) else { return }
             if let selection = immediateSocialSelection {
-                // The passive observer owns this physical touch. MapKit can
-                // choose a neighbouring pin, even after selecting the right one.
+                // The passive observer owns this touch, including its target annotation.
                 if (annotation as AnyObject) !== (selection.annotation as AnyObject) {
-                    mapView.deselectAnnotation(annotation, animated: false)
+                    annotationStore.deselectAnnotation(annotation, animated: false)
                     restoreImmediateSocialSelection(on: mapView)
                 }
                 return
@@ -2881,12 +2661,12 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func activateSocialAnnotation(
-            _ annotation: any MKAnnotation,
-            view: MKAnnotationView,
-            on mapView: MKMapView,
+            _ annotation: MapAnnotation,
+            view: MapAnnotationView,
+            on mapView: MapboxMaps.MapView,
             notifyOutingSelection: Bool = true
         ) {
-            // MapKit can finish selecting this friend after its pin enters view.
+            // A queued selection can complete when the friend enters the viewport.
             if !socialProximityController.isFocused(annotation) {
                 friendCamera.cancel()
             }
@@ -2906,7 +2686,7 @@ struct MapWithFogView: UIViewRepresentable {
             }
         }
 
-        func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
+        func mapView(_ mapView: MapboxMaps.MapView, didDeselect view: MapAnnotationView) {
             guard let annotation = view.annotation else { return }
             socialProximityController.didDeselect(annotation, on: mapView)
         }
@@ -2916,7 +2696,7 @@ struct MapWithFogView: UIViewRepresentable {
             avatarID: String,
             profileColorHex: String,
             presenceInfo: MapUserPresenceInfo,
-            on mapView: MKMapView
+            on mapView: MapboxMaps.MapView
         ) {
             let normalizedAvatarID = ProfileAvatar.normalizedID(avatarID)
                 ?? ProfileAvatar.cyclopsHorns.id
@@ -2935,7 +2715,7 @@ struct MapWithFogView: UIViewRepresentable {
             userPresenceInfo = presenceInfo
 
             guard let annotation = userLocationAnnotation,
-                  let annotationView = mapView.view(for: annotation)
+                  let annotationView = annotationStore.view(for: annotation)
                     as? UserLocationAnnotationView else { return }
 
             annotationView.configure(
@@ -2947,7 +2727,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func configureFriendAnnotationView(
-            _ annotationView: MKAnnotationView,
+            _ annotationView: MapAnnotationView,
             avatarID: String,
             profileColorHex: String,
             presenceInfo: MapUserPresenceInfo,
@@ -2957,7 +2737,6 @@ struct MapWithFogView: UIViewRepresentable {
                   annotationView.annotation is FriendLocationAnnotation else {
                 return
             }
-            annotationView.canShowCallout = false
 
             annotationView.configure(
                 avatarID: avatarID,
@@ -2972,51 +2751,58 @@ struct MapWithFogView: UIViewRepresentable {
 
 // MARK: - User camera
 
-/// Owns the user camera without enabling MapKit's independent follow/zoom policy.
+/// Follows CoreLocation updates while preserving the user's map orientation.
 @MainActor
 final class MapUserCameraController {
+    // Avoid synthesized isolated deinit on older Swift runtimes (swiftlang/swift#88036).
+    // Animation cleanup remains in stopFollowing() on the main actor.
+    nonisolated deinit {}
+
     private(set) var isFollowing = false
-    private var isAnimating = false
+    private(set) var isAnimating = false
     private var latestCoordinate: CLLocationCoordinate2D?
     private var lastAppliedCoordinate: CLLocationCoordinate2D?
+    private var animationGeneration = 0
+    private var animation: Cancelable?
 
-    static func focusedRegion(at coordinate: CLLocationCoordinate2D) -> MKCoordinateRegion {
-        MKCoordinateRegion(
-            center: coordinate,
-            latitudinalMeters: 800,
-            longitudinalMeters: 800
-        )
+    static func hasUsableBounds(on mapView: MapboxMaps.MapView) -> Bool {
+        let size = mapView.bounds.size
+        return size.width.isFinite && size.height.isFinite
+            && size.width > 0 && size.height > 0
     }
 
-    func recenter(on mapView: MKMapView, at coordinate: CLLocationCoordinate2D) {
-        guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+    static func focusedCamera(
+        at coordinate: CLLocationCoordinate2D,
+        on mapView: MapboxMaps.MapView
+    ) -> CameraOptions {
+        guard hasUsableBounds(on: mapView) else { return CameraOptions(center: coordinate) }
+        // Fit an 800-metre square using the map's rendered dimensions.
+        let latitudeRadians = coordinate.latitude * .pi / 180
+        let metersPerPointAtZero = cos(latitudeRadians) * 40_075_016.686 / 512
+        let points = min(mapView.bounds.width, mapView.bounds.height)
+        let zoom = log2(max(1, metersPerPointAtZero * Double(points) / 800))
+        return CameraOptions(center: coordinate, zoom: zoom)
+    }
+
+    func recenter(on mapView: MapboxMaps.MapView, at coordinate: CLLocationCoordinate2D) {
+        guard CLLocationCoordinate2DIsValid(coordinate),
+              Self.hasUsableBounds(on: mapView) else { return }
         latestCoordinate = coordinate
         isFollowing = true
         guard !isAnimating else { return }
 
-        let target = mapView.regionThatFits(Self.focusedRegion(at: coordinate))
-        let current = mapView.region
+        let target = Self.focusedCamera(at: coordinate, on: mapView)
+        let current = mapView.mapboxMap.cameraState
         let isAtTarget = distance(current.center, coordinate) <= 5
-            && abs(current.span.latitudeDelta - target.span.latitudeDelta)
-                <= target.span.latitudeDelta * 0.01
-            && abs(current.span.longitudeDelta - target.span.longitudeDelta)
-                <= target.span.longitudeDelta * 0.01
+            && abs(current.zoom - (target.zoom ?? current.zoom)) <= 0.01
         lastAppliedCoordinate = coordinate
         guard !isAtTarget else { return }
-
-        // Publish before MapKit can synchronously call its delegate.
-        isAnimating = true
-        mapView.setRegion(target, animated: true)
+        animate(to: target, on: mapView)
     }
 
-    func updateLocation(_ coordinate: CLLocationCoordinate2D, on mapView: MKMapView) {
+    func updateLocation(_ coordinate: CLLocationCoordinate2D, on mapView: MapboxMaps.MapView) {
         guard CLLocationCoordinate2DIsValid(coordinate) else { return }
         latestCoordinate = coordinate
-        followLatestLocation(on: mapView)
-    }
-
-    func regionDidChange(on mapView: MKMapView) {
-        isAnimating = false
         followLatestLocation(on: mapView)
     }
 
@@ -3025,19 +2811,30 @@ final class MapUserCameraController {
         isAnimating = false
         latestCoordinate = nil
         lastAppliedCoordinate = nil
+        animationGeneration &+= 1
+        animation?.cancel()
+        animation = nil
     }
 
-    private func followLatestLocation(on mapView: MKMapView) {
+    private func animate(to camera: CameraOptions, on mapView: MapboxMaps.MapView) {
+        isAnimating = true
+        animationGeneration &+= 1
+        let generation = animationGeneration
+        animation = mapView.camera.ease(to: camera, duration: 0.35) { [weak self, weak mapView] _ in
+            guard let self, let mapView, generation == self.animationGeneration else { return }
+            self.animation = nil
+            self.isAnimating = false
+            self.followLatestLocation(on: mapView)
+        }
+    }
+
+    private func followLatestLocation(on mapView: MapboxMaps.MapView) {
         guard isFollowing, !isAnimating,
               let coordinate = latestCoordinate,
               let lastAppliedCoordinate,
               distance(lastAppliedCoordinate, coordinate) > 5 else { return }
-
-        // Updating only the center preserves the zoom, heading and pitch.
-        // Keep the latest position received during an animation for its completion.
         self.lastAppliedCoordinate = coordinate
-        isAnimating = true
-        mapView.setCenter(coordinate, animated: true)
+        animate(to: CameraOptions(center: coordinate), on: mapView)
     }
 
     private func distance(

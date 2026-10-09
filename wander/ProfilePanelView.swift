@@ -23,7 +23,6 @@ struct ProfilePanelView: View {
     let friendsScrollRequest: ProfileFriendsScrollRequest?
     let summary: AnyView
     @Binding var settingsPresented: Bool
-    @Binding var heatMapEnabled: Bool
     let onProfileColorSelected: (String) -> Void
     var onAccountFlowStateChanged: (Bool) -> Void = { _ in }
 
@@ -119,15 +118,6 @@ struct ProfilePanelView: View {
     private var settingsSheet: some View {
         NavigationStack {
             Form {
-                Section {
-                    Toggle("Carte de fréquentation", isOn: $heatMapEnabled)
-                        .accessibilityIdentifier("profile-heat-map")
-                } header: {
-                    Text("Affichage de la carte")
-                } footer: {
-                    Text("Affiche les zones où tu as passé le plus de temps.")
-                }
-
                 Section {
                     TextField("Pseudo", text: $displayName)
                         .textInputAutocapitalization(.words)

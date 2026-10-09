@@ -1,6 +1,7 @@
 ---
 title: "Restaurer une exploration Firebase dans un cache SwiftData"
 date: 2026-08-09
+updated: 2026-10-09
 category: architecture
 tags: [solution, firebase, firestore, swiftdata, synchronization]
 related_plan: "../plans/2026-08-09-restauration-compte-multi-appareil.md"
@@ -39,8 +40,8 @@ entre l'hydratation initiale et les écritures sortantes.
 - Appliquer une union monotone : les cases distantes sont ajoutées, les cases
   locales et leurs métadonnées sont conservées, et aucune absence distante ne
   provoque de suppression locale implicite.
-- Republier le store dans `LocationTracker`, reconstruire la heat map et
-  recalculer la progression après l'import.
+- Republier le store dans `LocationTracker` et recalculer la progression
+  après l'import.
 - Renvoyer l'union vers Firestore seulement après le snapshot serveur initial.
 - Bloquer les écritures de pseudo et de couleur jusqu'au profil serveur, tout
   en conservant une modification utilisateur explicite faite pendant l'attente.
@@ -49,6 +50,12 @@ entre l'hydratation initiale et les écritures sortantes.
 
 Firestore demeure ainsi la source durable du compte et SwiftData le cache local
 rapide et hors ligne utilisé par la carte.
+
+Depuis le retrait de la heatmap du 9 octobre 2026, les métadonnées locales
+préservées sont la résolution et les dates de découverte. Les durées et
+compteurs sont retirés du modèle actif ; les anciens schémas restent définis
+uniquement pour migrer les bases installées. Voir
+[le plan de suppression](../plans/2026-10-09-supprimer-heatmap.md).
 
 ## What did not work
 

@@ -1,4 +1,5 @@
-import MapKit
+import MapboxMaps
+import UIKit
 import XCTest
 @testable import wander
 
@@ -35,12 +36,12 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         friend.userID = "friend-a"
         let group = MapSocialProximityGroupAnnotation(identifier: "group-a", memberAnnotations: [user, friend])
         XCTAssertEqual(MapWithFogView.Coordinator.edgeZoomTargetID(for: user), "current-user")
-        XCTAssertNil(MapWithFogView.Coordinator.edgeZoomTargetID(for: MKPointAnnotation()))
+        XCTAssertNil(MapWithFogView.Coordinator.edgeZoomTargetID(for: MapAnnotation()))
         XCTAssertEqual(MapWithFogView.Coordinator.edgeZoomTargetID(for: friend), "friend:friend-a")
         XCTAssertEqual(MapWithFogView.Coordinator.edgeZoomTargetID(for: group), "group:group-a")
         group.update(memberAnnotations: [user])
         XCTAssertEqual(MapWithFogView.Coordinator.edgeZoomTargetID(for: group), "group:group-a")
-        group.update(memberAnnotations: [MKPointAnnotation()])
+        group.update(memberAnnotations: [MapAnnotation()])
         XCTAssertNil(MapWithFogView.Coordinator.edgeZoomTargetID(for: group))
     }
 
@@ -59,64 +60,64 @@ final class MapEdgeZoomControllerTests: XCTestCase {
     }
 
     func testZoomSessionFreezesCameraAndTargetWithoutAnInitialJump() {
-        let initial = MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0),
-                                 fromDistance: 800, pitch: 30, heading: 45)
+        var initial = CameraState(center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                                 padding: .zero, zoom: 15, bearing: 45, pitch: 30)
         let friend = FriendLocationAnnotation()
         friend.coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0.01)
         let target = MapEdgeZoomController.Target(id: "friend:a", coordinate: friend.coordinate, screenPoint: CGPoint(x: 160, y: 300))
         let session = MapEdgeZoomController.ZoomSession(camera: initial, target: target)
         // Both external inputs can change after the gesture starts.
-        initial.centerCoordinate = CLLocationCoordinate2D(latitude: 20, longitude: 30)
+        initial.center = CLLocationCoordinate2D(latitude: 20, longitude: 30)
         friend.coordinate = CLLocationCoordinate2D(latitude: 25, longitude: 35)
-        let unchanged = session.camera(at: 800, focusProgress: 0)
-        XCTAssertEqual(unchanged.centerCoordinate.latitude, 0, accuracy: 0.000001)
-        XCTAssertEqual(unchanged.centerCoordinate.longitude, 0, accuracy: 0.000001)
-        let zoomed = session.camera(at: 400)
-        XCTAssertEqual(zoomed.centerCoordinate.longitude, 0.01, accuracy: 0.000001)
-        XCTAssertEqual(zoomed.centerCoordinateDistance, 400, accuracy: 0.01)
-        XCTAssertEqual(zoomed.heading, 45, accuracy: 0.01)
-        XCTAssertEqual(zoomed.pitch, 30, accuracy: 0.01)
+        let unchanged = session.camera(at: 15, focusProgress: 0)
+        XCTAssertEqual(unchanged.center?.latitude ?? .nan, 0, accuracy: 0.000001)
+        XCTAssertEqual(unchanged.center?.longitude ?? .nan, 0, accuracy: 0.000001)
+        let zoomed = session.camera(at: 16)
+        XCTAssertEqual(zoomed.center?.longitude ?? .nan, 0.01, accuracy: 0.000001)
+        XCTAssertEqual(zoomed.zoom ?? .nan, 16, accuracy: 0.01)
+        XCTAssertEqual(zoomed.bearing ?? .nan, 45, accuracy: 0.01)
+        XCTAssertEqual(zoomed.pitch ?? .nan, 30, accuracy: 0.01)
         XCTAssertEqual(session.anchor?.longitude, 0.01)
-        let zoomedOut = session.camera(at: 1_600)
-        XCTAssertEqual(zoomedOut.centerCoordinate.longitude, 0.01, accuracy: 0.000001)
-        let halfway = session.camera(at: 800, focusProgress: 0.5)
-        XCTAssertEqual(halfway.centerCoordinate.longitude, 0.005, accuracy: 0.000001)
+        let zoomedOut = session.camera(at: 14)
+        XCTAssertEqual(zoomedOut.center?.longitude ?? .nan, 0.01, accuracy: 0.000001)
+        let halfway = session.camera(at: 15, focusProgress: 0.5)
+        XCTAssertEqual(halfway.center?.longitude ?? .nan, 0.005, accuracy: 0.000001)
     }
 
     func testZoomWithoutTargetKeepsOriginalCenter() {
         let center = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.978)
-        let camera = MKMapCamera(lookingAtCenter: center, fromDistance: 800, pitch: 0, heading: 90)
+        let camera = CameraState(center: center, padding: .zero, zoom: 15, bearing: 90, pitch: 0)
         let session = MapEdgeZoomController.ZoomSession(camera: camera, target: nil)
-        for distance in [400.0, 1_600.0] {
-            let next = session.camera(at: distance)
-            XCTAssertEqual(next.centerCoordinate.latitude, center.latitude, accuracy: 0.000001)
-            XCTAssertEqual(next.centerCoordinate.longitude, center.longitude, accuracy: 0.000001)
-            XCTAssertEqual(next.centerCoordinateDistance, distance, accuracy: 0.01)
-            XCTAssertEqual(next.heading, 90, accuracy: 0.01)
+        for zoom: CGFloat in [16, 14] {
+            let next = session.camera(at: zoom)
+            XCTAssertEqual(next.center?.latitude ?? .nan, center.latitude, accuracy: 0.000001)
+            XCTAssertEqual(next.center?.longitude ?? .nan, center.longitude, accuracy: 0.000001)
+            XCTAssertEqual(next.zoom ?? .nan, zoom, accuracy: 0.01)
+            XCTAssertEqual(next.bearing ?? .nan, 90, accuracy: 0.01)
         }
     }
 
     func testTargetCentersInVisibleViewportOnRotatedAndTiltedMap() {
-        let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
+        let map = makeMap(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
         let center = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.978)
         for pitch in [0.0, 30.0] {
             for heading in [0.0, 45.0, 180.0] {
-                map.setCamera(MKMapCamera(lookingAtCenter: center, fromDistance: 1_200,
-                                          pitch: pitch, heading: heading), animated: false)
+                map.mapboxMap.setCamera(to: CameraOptions(center: center, zoom: 15,
+                                          bearing: heading, pitch: pitch))
                 let point = CGPoint(x: 230, y: 375)
                 let target = MapEdgeZoomController.Target(
                     id: "friend:a",
-                    coordinate: map.convert(point, toCoordinateFrom: map),
+                    coordinate: map.mapboxMap.coordinate(for: point),
                     screenPoint: point
                 )
                 let destination = CGPoint(x: 187.5, y: 325)
                 let session = MapEdgeZoomController.ZoomSession(
-                    camera: map.camera, target: target,
-                    focusCoordinate: map.convert(destination, toCoordinateFrom: map)
+                    camera: map.mapboxMap.cameraState, target: target,
+                    focusCoordinate: map.mapboxMap.coordinate(for: destination)
                 )
-                for distance in [1_200.0, 600.0, 2_400.0] {
-                    map.setCamera(session.camera(at: distance), animated: false)
-                    let projected = map.convert(target.coordinate, toPointTo: map)
+                for zoom: CGFloat in [15, 16, 14] {
+                    map.mapboxMap.setCamera(to: session.camera(at: zoom))
+                    let projected = map.mapboxMap.point(for: target.coordinate)
                     XCTAssertEqual(projected.x, destination.x, accuracy: 1)
                     XCTAssertEqual(projected.y, destination.y, accuracy: 1)
                 }
@@ -125,19 +126,19 @@ final class MapEdgeZoomControllerTests: XCTestCase {
     }
 
     func testFocusFeedbackOccursOnlyWhenGestureAcquiresTargetAndCancelStopsCamera() {
-        let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
+        let map = makeMap(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
         let viewport = MapViewportView(mapView: map, renderSize: nil)
         viewport.frame = map.frame
         viewport.layoutIfNeeded()
-        map.setCamera(MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0),
-                                  fromDistance: 1_200, pitch: 0, heading: 0), animated: false)
+        map.mapboxMap.setCamera(to: CameraOptions(center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                                  zoom: 15, bearing: 0, pitch: 0))
         var offersTarget = true
         var focusCount = 0
         var beginCount = 0
         let controller = MapEdgeZoomController(viewport: viewport, targets: { map in
             guard offersTarget else { return [] }
             let point = CGPoint(x: 230, y: 375)
-            return [.init(id: "friend:a", coordinate: map.convert(point, toCoordinateFrom: map), screenPoint: point)]
+            return [.init(id: "friend:a", coordinate: map.mapboxMap.coordinate(for: point), screenPoint: point)]
         }, onFocus: { focusCount += 1 }, onBegin: { beginCount += 1 })
         controller.begin(on: map)
         XCTAssertEqual(focusCount, 0)
@@ -147,12 +148,12 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         XCTAssertTrue(controller.isActive)
         controller.cancel()
         XCTAssertFalse(controller.isActive)
-        let cancelledCenter = map.centerCoordinate
+        let cancelledCenter = map.mapboxMap.cameraState.center
         let settled = expectation(description: "Cancelled focus has no later camera update")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { settled.fulfill() }
         wait(for: [settled], timeout: 1)
-        XCTAssertEqual(map.centerCoordinate.latitude, cancelledCenter.latitude, accuracy: 0.000001)
-        XCTAssertEqual(map.centerCoordinate.longitude, cancelledCenter.longitude, accuracy: 0.000001)
+        XCTAssertEqual(map.mapboxMap.cameraState.center.latitude, cancelledCenter.latitude, accuracy: 0.000001)
+        XCTAssertEqual(map.mapboxMap.cameraState.center.longitude, cancelledCenter.longitude, accuracy: 0.000001)
         XCTAssertEqual(focusCount, 1)
         offersTarget = false
         controller.begin(on: map)
@@ -163,14 +164,14 @@ final class MapEdgeZoomControllerTests: XCTestCase {
     }
 
     func testShortSwipeCompletesFocusAndNewGestureCanInterruptIt() {
-        let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
+        let map = makeMap(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
         let viewport = MapViewportView(mapView: map, renderSize: nil)
         viewport.frame = map.frame
         viewport.layoutIfNeeded()
-        map.setCamera(MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0),
-                                  fromDistance: 1_200, pitch: 0, heading: 0), animated: false)
+        map.mapboxMap.setCamera(to: CameraOptions(center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                                  zoom: 15, bearing: 0, pitch: 0))
         let point = CGPoint(x: 230, y: 375)
-        let coordinate = map.convert(point, toCoordinateFrom: map)
+        let coordinate = map.mapboxMap.coordinate(for: point)
         var focusCount = 0
         let controller = MapEdgeZoomController(viewport: viewport, targets: { _ in
             [.init(id: "friend:a", coordinate: coordinate, screenPoint: point)]
@@ -181,7 +182,7 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         controller.advanceFocus(at: 0.2)
         XCTAssertFalse(controller.isActive)
         XCTAssertEqual(focusCount, 1)
-        let projected = map.convert(coordinate, toPointTo: map)
+        let projected = map.mapboxMap.point(for: coordinate)
         XCTAssertEqual(projected.x, viewport.visibleSafeMapRect.midX, accuracy: 1)
         XCTAssertEqual(projected.y, viewport.visibleSafeMapRect.midY, accuracy: 1)
 
@@ -193,23 +194,23 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         XCTAssertTrue(controller.isActive)
         XCTAssertEqual(focusCount, 3)
         controller.cancel()
-        let cancelledCenter = map.centerCoordinate
+        let cancelledCenter = map.mapboxMap.cameraState.center
         controller.advanceFocus(at: 2)
         XCTAssertFalse(controller.isActive)
-        XCTAssertEqual(map.centerCoordinate.latitude, cancelledCenter.latitude, accuracy: 0.000001)
-        XCTAssertEqual(map.centerCoordinate.longitude, cancelledCenter.longitude, accuracy: 0.000001)
+        XCTAssertEqual(map.mapboxMap.cameraState.center.latitude, cancelledCenter.latitude, accuracy: 0.000001)
+        XCTAssertEqual(map.mapboxMap.cameraState.center.longitude, cancelledCenter.longitude, accuracy: 0.000001)
         controller.uninstall()
     }
 
     func testZoomOutNeverAcquiresTargetOrMovesCenter() {
-        let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
+        let map = makeMap(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
         let viewport = MapViewportView(mapView: map, renderSize: nil)
         viewport.frame = map.frame
         viewport.layoutIfNeeded()
-        map.setCamera(MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.978),
-                                 fromDistance: 1_200, pitch: 0, heading: 45), animated: false)
-        let center = map.centerCoordinate
-        let initialDistance = map.camera.centerCoordinateDistance
+        map.mapboxMap.setCamera(to: CameraOptions(center: CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.978),
+                                 zoom: 15, bearing: 45, pitch: 0))
+        let center = map.mapboxMap.cameraState.center
+        let initialZoom = map.mapboxMap.cameraState.zoom
         let controller = MapEdgeZoomController(viewport: viewport, targets: { _ in
             XCTFail("Zoom out must not look for a magnetic target")
             return []
@@ -217,40 +218,40 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         controller.begin(on: map)
         controller.move(on: map, translationY: 0, velocityY: 0, at: 0)
         controller.move(on: map, translationY: 150, velocityY: 50, at: 0.1)
-        XCTAssertGreaterThan(map.camera.centerCoordinateDistance, initialDistance)
-        XCTAssertEqual(map.centerCoordinate.latitude, center.latitude, accuracy: 0.000001)
-        XCTAssertEqual(map.centerCoordinate.longitude, center.longitude, accuracy: 0.000001)
+        XCTAssertLessThan(map.mapboxMap.cameraState.zoom, initialZoom)
+        XCTAssertEqual(map.mapboxMap.cameraState.center.latitude, center.latitude, accuracy: 0.000001)
+        XCTAssertEqual(map.mapboxMap.cameraState.center.longitude, center.longitude, accuracy: 0.000001)
         controller.end()
         controller.advanceFocus(at: 1)
         XCTAssertFalse(controller.isActive)
-        XCTAssertEqual(map.centerCoordinate.longitude, center.longitude, accuracy: 0.000001)
+        XCTAssertEqual(map.mapboxMap.cameraState.center.longitude, center.longitude, accuracy: 0.000001)
         controller.uninstall()
     }
 
     func testReversingToZoomOutStopsFocusAndKeepsDisplayedCenter() {
         for elapsed in [0.0, 0.05, 0.2] {
-            let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
+            let map = makeMap(frame: CGRect(x: 0, y: 0, width: 375, height: 600))
             let viewport = MapViewportView(mapView: map, renderSize: nil)
             viewport.frame = map.frame
             viewport.layoutIfNeeded()
-            map.setCamera(MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.978),
-                                     fromDistance: 1_200, pitch: 0, heading: 0), animated: false)
+            map.mapboxMap.setCamera(to: CameraOptions(center: CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.978),
+                                     zoom: 15, bearing: 0, pitch: 0))
             var focusCount = 0
             let controller = MapEdgeZoomController(viewport: viewport, targets: { map in
                 let point = CGPoint(x: 230, y: 375)
-                return [.init(id: "friend:a", coordinate: map.convert(point, toCoordinateFrom: map), screenPoint: point)]
+                return [.init(id: "friend:a", coordinate: map.mapboxMap.coordinate(for: point), screenPoint: point)]
             }, onFocus: { focusCount += 1 }, onBegin: {})
             controller.begin(on: map)
             controller.move(on: map, translationY: -50, velocityY: -100, at: 0)
             if elapsed > 0 { controller.advanceFocus(at: elapsed) }
-            let before = map.camera.copy() as! MKMapCamera
+            let before = map.mapboxMap.cameraState
             // Still a negative total translation, but this increment is zooming out.
             controller.move(on: map, translationY: -40, velocityY: 50, at: elapsed + 0.01)
-            XCTAssertGreaterThan(map.camera.centerCoordinateDistance, before.centerCoordinateDistance)
-            XCTAssertEqual(map.centerCoordinate.latitude, before.centerCoordinate.latitude, accuracy: 0.000001)
-            XCTAssertEqual(map.centerCoordinate.longitude, before.centerCoordinate.longitude, accuracy: 0.000001)
+            XCTAssertLessThan(map.mapboxMap.cameraState.zoom, before.zoom)
+            XCTAssertEqual(map.mapboxMap.cameraState.center.latitude, before.center.latitude, accuracy: 0.000001)
+            XCTAssertEqual(map.mapboxMap.cameraState.center.longitude, before.center.longitude, accuracy: 0.000001)
             controller.advanceFocus(at: 1)
-            XCTAssertEqual(map.centerCoordinate.longitude, before.centerCoordinate.longitude, accuracy: 0.000001)
+            XCTAssertEqual(map.mapboxMap.cameraState.center.longitude, before.center.longitude, accuracy: 0.000001)
             XCTAssertEqual(focusCount, 1)
             // Returning to zoom in can acquire focus again, from the current camera.
             controller.move(on: map, translationY: -45, velocityY: -50, at: 1.1)
@@ -268,6 +269,13 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         )
         XCTAssertEqual(abs(center.longitude), 180, accuracy: 0.000001)
         XCTAssertEqual(center.latitude, 0, accuracy: 0.000001)
+        let original = CLLocationCoordinate2D(latitude: 37, longitude: 127)
+        let invalidOffset = MapEdgeZoomController.anchoredCenter(
+            initial: original, anchor: center, scale: 0.5,
+            offsetOrigin: kCLLocationCoordinate2DInvalid
+        )
+        XCTAssertEqual(invalidOffset.latitude, original.latitude)
+        XCTAssertEqual(invalidOffset.longitude, original.longitude)
     }
 
     func testEdgeZonesUseCroppedMapCoordinatesAndRejectHiddenContent() {
@@ -306,11 +314,11 @@ final class MapEdgeZoomControllerTests: XCTestCase {
     func testFastGestureZoomsFurtherAndStillRespectsCameraLimits() {
         let slow = MapEdgeZoomController.acceleratedTranslation(150, velocityY: 50)
         let fast = MapEdgeZoomController.acceleratedTranslation(150, velocityY: 900)
-        XCTAssertEqual(MapEdgeZoomController.distance(from: 800, translationY: slow), 1_600)
-        XCTAssertEqual(MapEdgeZoomController.distance(from: 800, translationY: fast), 6_400)
-        XCTAssertEqual(MapEdgeZoomController.distance(from: 800, translationY: -fast), 100)
-        XCTAssertEqual(MapEdgeZoomController.distance(from: 800, translationY: fast, maximum: 2_000), 2_000)
-        XCTAssertEqual(MapEdgeZoomController.distance(from: 800, translationY: -fast, minimum: 200), 200)
+        XCTAssertEqual(MapEdgeZoomController.zoom(from: 15, translationY: slow), 14)
+        XCTAssertEqual(MapEdgeZoomController.zoom(from: 15, translationY: fast), 12)
+        XCTAssertEqual(MapEdgeZoomController.zoom(from: 15, translationY: -fast), 18)
+        XCTAssertEqual(MapEdgeZoomController.zoom(from: 15, translationY: fast, minimum: 13), 13)
+        XCTAssertEqual(MapEdgeZoomController.zoom(from: 15, translationY: -fast, maximum: 17), 17)
     }
 
     func testVerticalIntentRejectsHorizontalAndDiagonalPanning() {
@@ -322,36 +330,36 @@ final class MapEdgeZoomControllerTests: XCTestCase {
     }
 
     func testZoomDirectionAndProportionalSensitivityAtDifferentScales() {
-        for distance in [800.0, 80_000.0, 8_000_000.0] {
-            let closer = MapEdgeZoomController.distance(from: distance, translationY: -150)
-            XCTAssertEqual(closer, distance / 2, accuracy: 0.001)
-            XCTAssertEqual(MapEdgeZoomController.distance(from: closer, translationY: 150),
-                           distance, accuracy: 0.001)
+        for zoom: CGFloat in [5, 10, 15] {
+            let closer = MapEdgeZoomController.zoom(from: zoom, translationY: -150)
+            XCTAssertEqual(closer, zoom + 1, accuracy: 0.001)
+            XCTAssertEqual(MapEdgeZoomController.zoom(from: closer, translationY: 150),
+                           zoom, accuracy: 0.001)
         }
     }
 
     func testLimitsAndReversalHaveNoOverscrollDeadZone() {
-        let closest = MapEdgeZoomController.distance(from: 100, translationY: -10_000)
-        let farthest = MapEdgeZoomController.distance(from: 20_000_000, translationY: 10_000)
-        XCTAssertEqual(closest, 80)
-        XCTAssertEqual(farthest, 30_000_000)
-        XCTAssertGreaterThan(MapEdgeZoomController.distance(from: closest, translationY: 1), closest)
-        XCTAssertLessThan(MapEdgeZoomController.distance(from: farthest, translationY: -1), farthest)
-        XCTAssertEqual(MapEdgeZoomController.distance(from: 800, translationY: .nan), 800)
-        XCTAssertEqual(MapEdgeZoomController.distance(from: 800, translationY: 150,
-                                                     minimum: 100, maximum: 1_000), 1_000)
+        let closest = MapEdgeZoomController.zoom(from: 21, translationY: -10_000)
+        let farthest = MapEdgeZoomController.zoom(from: 1, translationY: 10_000)
+        XCTAssertEqual(closest, 22)
+        XCTAssertEqual(farthest, 0)
+        XCTAssertLessThan(MapEdgeZoomController.zoom(from: closest, translationY: 1), closest)
+        XCTAssertGreaterThan(MapEdgeZoomController.zoom(from: farthest, translationY: -1), farthest)
+        XCTAssertEqual(MapEdgeZoomController.zoom(from: 15, translationY: .nan), 15)
+        XCTAssertEqual(MapEdgeZoomController.zoom(from: 15, translationY: 150,
+                                                 minimum: 14.5, maximum: 16), 14.5)
     }
 
-    func testDefaultMapKitRangeAllowsZoomInBothDirectionsWithoutJumping() throws {
-        let map = MKMapView()
-        let range = try XCTUnwrap(map.cameraZoomRange)
-        for (translation, expected) in [(CGFloat(-150), 400.0), (CGFloat(150), 1600.0), (.zero, 800.0)] {
+    func testDefaultMapboxRangeAllowsZoomInBothDirectionsWithoutJumping() {
+        let map = makeMap()
+        let bounds = map.mapboxMap.cameraBounds
+        for (translation, expected) in [(CGFloat(-150), CGFloat(16)), (CGFloat(150), 14), (.zero, 15)] {
             XCTAssertEqual(
-                MapEdgeZoomController.distance(
-                    from: 800,
+                MapEdgeZoomController.zoom(
+                    from: 15,
                     translationY: translation,
-                    minimum: range.minCenterCoordinateDistance,
-                    maximum: range.maxCenterCoordinateDistance
+                    minimum: bounds.minZoom,
+                    maximum: bounds.maxZoom
                 ),
                 expected,
                 accuracy: 0.001
@@ -359,37 +367,42 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         }
     }
 
-    func testDefaultSentinelCanBeCombinedWithAnExplicitZoomLimit() {
+    func testDefaultBoundsCanBeCombinedWithAnExplicitZoomLimit() throws {
+        let map = makeMap()
+        try map.mapboxMap.setCameraBounds(with: CameraBoundsOptions(minZoom: 14))
+        var bounds = map.mapboxMap.cameraBounds
         XCTAssertEqual(
-            MapEdgeZoomController.distance(from: 800, translationY: -1_800,
-                                           minimum: MKMapCameraZoomDefault, maximum: 1_000),
-            80
+            MapEdgeZoomController.zoom(from: 15, translationY: -1_800,
+                                        minimum: bounds.minZoom, maximum: bounds.maxZoom),
+            22
         )
         XCTAssertEqual(
-            MapEdgeZoomController.distance(from: 800, translationY: 150,
-                                           minimum: MKMapCameraZoomDefault, maximum: 1_000),
-            1_000
+            MapEdgeZoomController.zoom(from: 15, translationY: 300,
+                                        minimum: bounds.minZoom, maximum: bounds.maxZoom),
+            14
+        )
+        try map.mapboxMap.setCameraBounds(with: CameraBoundsOptions(maxZoom: 17, minZoom: 0))
+        bounds = map.mapboxMap.cameraBounds
+        XCTAssertEqual(
+            MapEdgeZoomController.zoom(from: 15, translationY: -1_800,
+                                        minimum: bounds.minZoom, maximum: bounds.maxZoom),
+            17
         )
         XCTAssertEqual(
-            MapEdgeZoomController.distance(from: 800, translationY: -1_800,
-                                           minimum: 100, maximum: MKMapCameraZoomDefault),
-            100
-        )
-        XCTAssertEqual(
-            MapEdgeZoomController.distance(from: 800, translationY: 150,
-                                           minimum: 100, maximum: MKMapCameraZoomDefault),
-            1_600
+            MapEdgeZoomController.zoom(from: 15, translationY: 150,
+                                        minimum: bounds.minZoom, maximum: bounds.maxZoom),
+            14
         )
     }
 
     func testControlsAndAnnotationsAreExcludedThroughTheirDescendants() {
-        let map = MKMapView()
+        let map = makeMap()
         let button = UIButton()
         let label = UILabel()
         map.addSubview(button)
         button.addSubview(label)
         XCTAssertTrue(MapEdgeZoomController.excludesTouch(on: label, mapView: map))
-        let annotation = MKAnnotationView()
+        let annotation = MapAnnotationView()
         let image = UIImageView()
         map.addSubview(annotation)
         annotation.addSubview(image)
@@ -398,7 +411,7 @@ final class MapEdgeZoomControllerTests: XCTestCase {
     }
 
     func testGesturePriorityStaysInsideMapAndUninstallRestoresHierarchy() throws {
-        let map = MKMapView()
+        let map = makeMap()
         let viewport = MapViewportView(mapView: map, renderSize: nil)
         let initialRecognizers = map.gestureRecognizers ?? []
         let initialSubviews = map.subviews
@@ -449,5 +462,11 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         feedback.dismiss()
         XCTAssertFalse(feedback.isShowing)
         XCTAssertEqual(try XCTUnwrap(shape.path).boundingBoxOfPath.width, 0)
+    }
+
+    private func makeMap(frame: CGRect = .zero) -> MapboxMaps.MapView {
+        MapboxMaps.MapView(frame: frame, mapInitOptions: MapInitOptions(
+            styleJSON: #"{"version":8,"sources":{},"layers":[]}"#
+        ))
     }
 }

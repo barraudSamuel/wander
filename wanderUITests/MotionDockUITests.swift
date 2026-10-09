@@ -34,7 +34,7 @@ final class MotionDockUITests: XCTestCase {
         assertEventsCenteredAtBottom()
         XCTAssertFalse(events.isSelected)
         XCTAssertFalse(eventList.isHittable)
-        let nativeMapSize = app.maps.firstMatch.frame.size
+        let nativeMapSize = app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame.size
         let fullMapFrame = mapViewport.frame
         let buttonFrame = events.frame
 
@@ -47,7 +47,7 @@ final class MotionDockUITests: XCTestCase {
             XCTAssertEqual(mapViewport.frame.maxY, eventsHandle.frame.minY + 12, accuracy: 2)
             XCTAssertLessThan(mapViewport.frame.height, fullMapFrame.height)
             XCTAssertEqual(eventList.frame.maxY, app.windows.firstMatch.frame.maxY, accuracy: 2)
-            XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+            XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame.size, nativeMapSize)
             assertEventsFrame(buttonFrame)
 
             if iteration == 0 {
@@ -59,7 +59,7 @@ final class MotionDockUITests: XCTestCase {
             XCTAssertFalse(eventList.isHittable)
             XCTAssertFalse(events.isSelected)
             XCTAssertEqual(mapViewport.frame, fullMapFrame)
-            XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+            XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame.size, nativeMapSize)
             assertEventsFrame(buttonFrame)
         }
         attachScreenshot("Bouton événements centré après ouvertures et fermetures")
@@ -73,7 +73,7 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(friendPane.waitForExistence(timeout: 10))
         XCTAssertTrue(friendPane.staticTexts["Amina"].exists)
         XCTAssertFalse(command("events").isSelected)
-        let nativeMapSize = app.maps.firstMatch.frame.size
+        let nativeMapSize = app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame.size
         let start = friendPane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
         let bottom = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
         start.press(forDuration: 0.05, thenDragTo: bottom)
@@ -84,7 +84,7 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(command("events").isSelected)
         assertEventsCenteredAtBottom()
         XCTAssertFalse(app.buttons["map-detail-resize-handle"].exists)
-        XCTAssertEqual(app.maps.firstMatch.frame.size, nativeMapSize)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame.size, nativeMapSize)
     }
 
     func testImageButtonEdgesOpenTheirSheets() {
@@ -138,7 +138,7 @@ final class MotionDockUITests: XCTestCase {
     }
 
     func testFriendsLiveInProfileWithoutSplittingMap() {
-        let originalMap = app.maps.firstMatch.frame
+        let originalMap = app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame
         let originalViewport = mapViewport.frame
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
@@ -146,7 +146,7 @@ final class MotionDockUITests: XCTestCase {
         revealInOwnSheet(ownSheet.buttons["Accepter"])
         XCTAssertTrue(ownSheet.staticTexts["Demandes reçues"].exists)
         XCTAssertTrue(ownSheet.staticTexts["Mes amis"].exists)
-        XCTAssertEqual(app.maps.firstMatch.frame, originalMap)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame, originalMap)
         XCTAssertEqual(mapViewport.frame, originalViewport)
         XCTAssertFalse(app.buttons["map-friends-resize-handle"].exists)
         XCTAssertFalse(command("friends").exists)
@@ -282,7 +282,7 @@ final class MotionDockUITests: XCTestCase {
 
     func testFriendInvitationsLiveInProfileAndDraftSurvivesClosing() {
         let eventsFrame = command("events").frame
-        let originalMap = app.maps.firstMatch.frame
+        let originalMap = app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
         let share = ownSheet.buttons["Partager mon code"]
@@ -303,7 +303,7 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
         assertEventsCenteredAtBottom()
         assertEventsFrame(eventsFrame)
-        XCTAssertEqual(app.maps.firstMatch.frame, originalMap)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "exploration-map-canvas").firstMatch.frame, originalMap)
         command("events").tap()
         XCTAssertTrue(eventsHandle.waitForExistence(timeout: 3))
         command("events").tap()
@@ -329,10 +329,11 @@ final class MotionDockUITests: XCTestCase {
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
         app.buttons["own-profile-settings"].tap()
         XCTAssertTrue(app.navigationBars["Réglages"].waitForExistence(timeout: 3))
-        let heatMap = app.switches["profile-heat-map"]
-        XCTAssertTrue(heatMap.waitForExistence(timeout: 3))
-        heatMap.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        XCTAssertEqual(heatMap.value as? String, "1")
+        XCTAssertFalse(app.switches["profile-heat-map"].exists)
+        let ghostMode = app.switches["Mode fantôme"]
+        XCTAssertTrue(ghostMode.waitForExistence(timeout: 3))
+        ghostMode.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(ghostMode.value as? String, "1")
         app.navigationBars["Réglages"].buttons["Fermer"].tap()
         XCTAssertTrue(ownSheet.exists)
         revealInOwnSheet(ownSheet.buttons["Accepter"])
@@ -340,7 +341,7 @@ final class MotionDockUITests: XCTestCase {
         profileButton.tap()
         XCTAssertTrue(ownSheet.waitForExistence(timeout: 3))
         app.buttons["own-profile-settings"].tap()
-        XCTAssertEqual(heatMap.value as? String, "1")
+        XCTAssertEqual(ghostMode.value as? String, "1")
     }
 
     func testEventsButtonRemainsCenteredAndReachableAfterClosingProfile() {

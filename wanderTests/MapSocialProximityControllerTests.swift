@@ -1,10 +1,11 @@
-import MapKit
+import CoreLocation
+import MapboxMaps
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import XCTest
 @testable import wander
 
-/// Exercises the controller through real MapKit annotations, views, and delegate callbacks.
+/// Exercises the controller through real Mapbox view annotations and selection callbacks.
 @MainActor
 final class MapSocialProximityControllerTests: XCTestCase {
     func testSilentEventSelectionDoesNotSilenceLaterUserCentering() async throws {
@@ -28,13 +29,11 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         let friend = fixture.annotation("Amina", meters: 0)
         fixture.update([.friend("amina"): friend])
-        try await eventually("The friend pin is rendered") { fixture.mapView.view(for: friend) != nil }
-        let view = try XCTUnwrap(fixture.mapView.view(for: friend))
-        let centers = fixture.mapView.centerRequestCount
-        let regions = fixture.mapView.regionRequestCount
+        try await eventually("The friend pin is rendered") { fixture.annotationStore.view(for: friend) != nil }
+        let view = try XCTUnwrap(fixture.annotationStore.view(for: friend))
+        let initialCamera = fixture.cameraSnapshot
         XCTAssertEqual(fixture.controller.activate(friend, view: view, on: fixture.mapView), .friend("amina"))
-        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
-        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+        XCTAssertEqual(fixture.cameraSnapshot, initialCamera)
 
         fixture.controller.collapse(on: fixture.mapView)
         fixture.update(fixture.mixedSources())
@@ -42,19 +41,17 @@ final class MapSocialProximityControllerTests: XCTestCase {
         try await eventually("The group is rendered") { fixture.groupView(for: group) != nil }
         fixture.groupView(for: group)?.onSelectMember?(.friend("amina"))
         XCTAssertEqual(requests, ["amina"])
-        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
-        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+        XCTAssertEqual(fixture.cameraSnapshot, initialCamera)
 
         fixture.update([.friend("far"): fixture.annotation("Far away", meters: 50_000)])
         fixture.controller.center(on: .friend("far"), on: fixture.mapView)
         XCTAssertEqual(requests, ["amina", "far"], "Offscreen selection must not wait for a visible pin")
         await flushMainQueue()
-        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
-        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+        XCTAssertEqual(fixture.cameraSnapshot, initialCamera)
 
         fixture.update([.outing("event"): fixture.annotation("Event", meters: 100)])
         fixture.controller.center(on: .outing("event"), on: fixture.mapView)
-        XCTAssertEqual(fixture.mapView.regionRequestCount, regions + 1, "Events keep native centering")
+        try await eventually("Events keep native centering") { fixture.cameraSnapshot != initialCamera }
     }
 
     func testOwnProfileCameraOwnsOpeningFromPinAndGroup() async throws {
@@ -63,13 +60,11 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         let user = fixture.annotation("Vous", meters: 0)
         fixture.update([.currentUser: user])
-        try await eventually("The personal pin is rendered") { fixture.mapView.view(for: user) != nil }
-        let view = try XCTUnwrap(fixture.mapView.view(for: user))
-        let centers = fixture.mapView.centerRequestCount
-        let regions = fixture.mapView.regionRequestCount
+        try await eventually("The personal pin is rendered") { fixture.annotationStore.view(for: user) != nil }
+        let view = try XCTUnwrap(fixture.annotationStore.view(for: user))
+        let initialCamera = fixture.cameraSnapshot
         XCTAssertEqual(fixture.controller.activate(user, view: view, on: fixture.mapView), .currentUser)
-        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
-        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+        XCTAssertEqual(fixture.cameraSnapshot, initialCamera)
 
         fixture.controller.collapse(on: fixture.mapView)
         fixture.update(fixture.mixedSources())
@@ -77,8 +72,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         try await eventually("The group is rendered") { fixture.groupView(for: group) != nil }
         fixture.groupView(for: group)?.onSelectMember?(.currentUser)
         XCTAssertEqual(requests, 1)
-        XCTAssertEqual(fixture.mapView.centerRequestCount, centers)
-        XCTAssertEqual(fixture.mapView.regionRequestCount, regions)
+        XCTAssertEqual(fixture.cameraSnapshot, initialCamera)
     }
 
     func testExpandedGroupFitsChangingViewportWithoutLosingSelectionOrRepeatedCentering() async throws {
@@ -90,7 +84,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         let group = try XCTUnwrap(fixture.groups.first)
         try await eventually("The group view appears") { fixture.groupView(for: group) != nil }
         let view = try XCTUnwrap(fixture.groupView(for: group))
-        fixture.mapView.selectAnnotation(group, animated: false)
+        fixture.annotationStore.selectAnnotation(group, animated: false)
         try await eventually("The group expands") { view.isExpanded }
         let revision = fixture.controller.presentationRevision
         let nativeBounds = fixture.mapView.bounds
@@ -104,7 +98,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         fixture.visibleBounds = visibleBounds
         fixture.controller.viewportDidChange(on: fixture.mapView)
         try await eventually("The list and its anchor fit the nonzero-origin viewport") {
-            let anchor = fixture.mapView.convert(group.coordinate, toPointTo: fixture.mapView)
+            let anchor = fixture.mapView.mapboxMap.point(for: group.coordinate)
             let frame = view.projectedExpandedFrame(at: anchor)
             let safeBounds = visibleBounds.insetBy(dx: 12, dy: 12)
             return safeBounds.insetBy(dx: -1, dy: -1).contains(frame)
@@ -116,17 +110,17 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertEqual(rows.count, 8)
         XCTAssertGreaterThan(scrollView.contentSize.height, scrollView.bounds.height)
         XCTAssertGreaterThan(scrollView.bounds.height, 44)
-        // setCenter updates projection before MapKit lays out its annotation views.
-        try await eventually("MapKit lays out the list at its projected position") {
+        // setCenter updates projection before Mapbox lays out its annotation views.
+        try await eventually("Mapbox lays out the list at its projected position") {
             view.layoutIfNeeded()
-            let anchor = fixture.mapView.convert(group.coordinate, toPointTo: fixture.mapView)
+            let anchor = fixture.mapView.mapboxMap.point(for: group.coordinate)
             let expected = view.projectedExpandedFrame(at: anchor).insetBy(dx: 6, dy: 6)
             let actual = scrollView.convert(scrollView.bounds, to: fixture.mapView)
             return abs(actual.minX - expected.minX) <= 1
                 && abs(actual.minY - expected.minY) <= 1
                 && abs(actual.height - expected.height) <= 1
         }
-        let anchor = fixture.mapView.convert(group.coordinate, toPointTo: fixture.mapView)
+        let anchor = fixture.mapView.mapboxMap.point(for: group.coordinate)
         let expectedFrame = view.projectedExpandedFrame(at: anchor).insetBy(dx: 6, dy: 6)
         let actualFrame = scrollView.convert(scrollView.bounds, to: fixture.mapView)
         XCTAssertEqual(actualFrame.minX, expectedFrame.minX, accuracy: 1)
@@ -134,11 +128,11 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertEqual(actualFrame.height, expectedFrame.height, accuracy: 1)
 
         scrollView.setContentOffset(CGPoint(x: 0, y: 40), animated: false)
-        let centerRequests = fixture.mapView.centerRequestCount
+        let cameraBefore = fixture.cameraSnapshot
         for _ in 0..<5 {
             fixture.controller.viewportDidChange(on: fixture.mapView)
         }
-        XCTAssertEqual(fixture.mapView.centerRequestCount, centerRequests)
+        XCTAssertEqual(fixture.cameraSnapshot, cameraBefore)
         XCTAssertEqual(scrollView.contentOffset.y, 40, accuracy: 0.5)
         XCTAssertEqual(fixture.controller.presentationRevision, revision)
         XCTAssertTrue(fixture.isSelected(group))
@@ -165,7 +159,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         try await eventually("The group view appears") { fixture.groupView(for: group) != nil }
         let view = try XCTUnwrap(fixture.groupView(for: group))
 
-        fixture.mapView.selectAnnotation(group, animated: false)
+        fixture.annotationStore.selectAnnotation(group, animated: false)
         try await eventually("Native selection expands the group") { view.isExpanded }
         XCTAssertTrue(view.isAccessibilityElement)
         XCTAssertTrue(view.accessibilityTraits.contains(.button))
@@ -199,16 +193,16 @@ final class MapSocialProximityControllerTests: XCTestCase {
         try await eventually("The initial group is rendered") { fixture.groupView(for: group) != nil }
 
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
-        try await eventually("MapKit selects the extracted member") { fixture.isSelected(friend) }
+        try await eventually("Mapbox selects the extracted member") { fixture.isSelected(friend) }
 
         XCTAssertTrue(fixture.groups.first === group)
         XCTAssertEqual(fixture.socialAnnotations.count, 2)
         XCTAssertEqual(group.memberAnnotations.count, 2)
         XCTAssertFalse(group.memberAnnotations.contains { ($0 as AnyObject) === friend })
-        XCTAssertTrue(fixture.mapView.view(for: friend)?.isAccessibilityElement == true)
+        XCTAssertTrue(fixture.annotationStore.view(for: friend)?.isAccessibilityElement == true)
         XCTAssertEqual(fixture.attachedCount(of: friend), 1)
 
-        fixture.mapView.deselectAnnotation(friend, animated: false)
+        fixture.annotationStore.deselectAnnotation(friend, animated: false)
         try await eventually("Deselection restores the original group") {
             fixture.socialAnnotations.count == 1 && group.memberAnnotations.count == 3
         }
@@ -224,8 +218,8 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         let friend = fixture.annotation("Amina", meters: 0)
         fixture.update([.friend("amina"): friend])
-        try await eventually("The singleton view appears") { fixture.mapView.view(for: friend) != nil }
-        let view = try XCTUnwrap(fixture.mapView.view(for: friend))
+        try await eventually("The singleton view appears") { fixture.annotationStore.view(for: friend) != nil }
+        let view = try XCTUnwrap(fixture.annotationStore.view(for: friend))
 
         // No annotations are added during this selection, so didAdd cannot resume it.
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
@@ -241,17 +235,17 @@ final class MapSocialProximityControllerTests: XCTestCase {
         )
         fixture.update([.friend("amina"): friend])
 
-        let centerRequests = fixture.mapView.centerRequestCount
+        let cameraBefore = fixture.cameraSnapshot
         let revision = fixture.controller.presentationRevision
         fixture.visibleBounds = fixture.mapView.bounds.insetBy(dx: 0, dy: 120)
         fixture.controller.viewportDidChange(on: fixture.mapView)
-        XCTAssertEqual(fixture.mapView.centerRequestCount, centerRequests)
+        XCTAssertEqual(fixture.cameraSnapshot, cameraBefore)
         XCTAssertEqual(fixture.controller.presentationRevision, revision)
 
         XCTAssertTrue(fixture.isSelected(friend))
         XCTAssertEqual(fixture.attachedCount(of: friend), 1)
         XCTAssertEqual(fixture.socialAnnotations.count, 1)
-        XCTAssertTrue(fixture.mapView.view(for: friend) === view)
+        XCTAssertTrue(fixture.annotationStore.view(for: friend) === view)
     }
 
     func testActivatingAnotherEventKeepsBothMembersAttachedWithoutRestoringTheirGroup() async throws {
@@ -264,9 +258,9 @@ final class MapSocialProximityControllerTests: XCTestCase {
 
         fixture.controller.select(.outing("walk"), on: fixture.mapView)
         try await eventually("The first event is selected and the second has a view") {
-            fixture.isSelected(walk) && fixture.mapView.view(for: coffee) != nil
+            fixture.isSelected(walk) && fixture.annotationStore.view(for: coffee) != nil
         }
-        let coffeeView = try XCTUnwrap(fixture.mapView.view(for: coffee))
+        let coffeeView = try XCTUnwrap(fixture.annotationStore.view(for: coffee))
 
         // The passive tap observer calls activate before native selection finishes.
         XCTAssertEqual(
@@ -307,7 +301,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
 
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
         try await eventually("The friend is selected and both member views are available") {
-            fixture.isSelected(friend) && fixture.mapView.view(for: outing) != nil
+            fixture.isSelected(friend) && fixture.annotationStore.view(for: outing) != nil
         }
 
         // Queue competing native selections without yielding to the main queue.
@@ -326,7 +320,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertEqual(fixture.attachedCount(of: outing), 1)
         XCTAssertEqual(fixture.attachedCount(of: friend), 1)
         XCTAssertTrue(fixture.groups.isEmpty)
-        XCTAssertEqual(fixture.mapView.selectedAnnotations.count, 1)
+        XCTAssertEqual(fixture.annotationStore.selectedAnnotations.count, 1)
     }
 
     func testActivatingGroupClearsMemberFocusAndClosesItsPresentationOnce() async throws {
@@ -343,7 +337,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         let groupView = try XCTUnwrap(fixture.groupView(for: group))
 
         // Queue native deselection before the tap observer activates the group.
-        fixture.mapView.deselectAnnotation(friend, animated: false)
+        fixture.annotationStore.deselectAnnotation(friend, animated: false)
         fixture.controller.activate(group, view: groupView, on: fixture.mapView)
         await flushMainQueue()
 
@@ -369,15 +363,15 @@ final class MapSocialProximityControllerTests: XCTestCase {
         ])
         let group = try XCTUnwrap(fixture.groups.first)
         try await eventually("The group and distant event have views") {
-            fixture.groupView(for: group) != nil && fixture.mapView.view(for: outing) != nil
+            fixture.groupView(for: group) != nil && fixture.annotationStore.view(for: outing) != nil
         }
         let groupView = try XCTUnwrap(fixture.groupView(for: group))
-        let outingView = try XCTUnwrap(fixture.mapView.view(for: outing))
-        fixture.mapView.selectAnnotation(group, animated: false)
+        let outingView = try XCTUnwrap(fixture.annotationStore.view(for: outing))
+        fixture.annotationStore.selectAnnotation(group, animated: false)
         try await eventually("The initial group is expanded") { groupView.isExpanded }
 
         // The old group's callback must not be responsible for closing its view.
-        fixture.mapView.deselectAnnotation(group, animated: false)
+        fixture.annotationStore.deselectAnnotation(group, animated: false)
         XCTAssertEqual(
             fixture.controller.activate(outing, view: outingView, on: fixture.mapView),
             .outing("coffee")
@@ -404,7 +398,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         let group = try XCTUnwrap(fixture.groups.first)
 
         fixture.controller.center(on: .friend("amina"), on: fixture.mapView)
-        // MapKit can finish one camera update before reporting the next one.
+        // Mapbox can finish one camera update before reporting the next one.
         fixture.controller.regionDidChange(on: fixture.mapView)
         fixture.controller.regionWillChange(on: fixture.mapView, userInitiated: false)
         fixture.controller.visibleRegionDidChange(on: fixture.mapView, userInitiated: false)
@@ -435,7 +429,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         let friend = fixture.annotation("Amina", meters: 5)
         fixture.update([.friend("amina"): friend])
-        try await eventually("The friend view appears") { fixture.mapView.view(for: friend) != nil }
+        try await eventually("The friend view appears") { fixture.annotationStore.view(for: friend) != nil }
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
         try await eventually("The friend is selected") { fixture.isSelected(friend) }
 
@@ -470,10 +464,10 @@ final class MapSocialProximityControllerTests: XCTestCase {
         let group = try XCTUnwrap(fixture.groups.first)
         try await eventually("The group view appears") { fixture.groupView(for: group) != nil }
         let view = try XCTUnwrap(fixture.groupView(for: group))
-        fixture.mapView.selectAnnotation(group, animated: false)
+        fixture.annotationStore.selectAnnotation(group, animated: false)
         try await eventually("The group expands") { view.isExpanded }
 
-        let replacement = MKPointAnnotation()
+        let replacement = MapAnnotation()
         replacement.coordinate = previousFriend.coordinate
         replacement.title = "Amina actualisée"
         sources[.friend("amina")] = replacement
@@ -494,7 +488,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertEqual(fixture.attachedCount(of: previousFriend), 0)
         XCTAssertEqual(fixture.attachedCount(of: replacement), 1)
         XCTAssertFalse(fixture.isSelected(previousFriend))
-        XCTAssertEqual(fixture.mapView.view(for: replacement)?.annotation?.title ?? nil, "Amina actualisée")
+        XCTAssertEqual(fixture.annotationStore.view(for: replacement)?.annotation?.title ?? nil, "Amina actualisée")
     }
 
     func testReplacingFocusedSourcePreservesNativeSelectionAndIgnoresOldCallbacks() async throws {
@@ -505,7 +499,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         fixture.update(sources)
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
         try await eventually("The original friend is selected") { fixture.isSelected(previousFriend) }
-        let previousView = try XCTUnwrap(fixture.mapView.view(for: previousFriend))
+        let previousView = try XCTUnwrap(fixture.annotationStore.view(for: previousFriend))
         let remainingGroup = try XCTUnwrap(fixture.groups.first)
 
         let replacement = fixture.annotation("Amina actualisée", meters: 5)
@@ -542,7 +536,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
             fixture.groupView(for: previousGroup) != nil
         }
         let previousView = try XCTUnwrap(fixture.groupView(for: previousGroup))
-        fixture.mapView.selectAnnotation(previousGroup, animated: false)
+        fixture.annotationStore.selectAnnotation(previousGroup, animated: false)
         try await eventually("The first group expands") { previousView.isExpanded }
 
         fixture.update([
@@ -555,7 +549,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
             fixture.groupView(for: replacementGroup) != nil
         }
         let replacementView = try XCTUnwrap(fixture.groupView(for: replacementGroup))
-        fixture.mapView.selectAnnotation(replacementGroup, animated: false)
+        fixture.annotationStore.selectAnnotation(replacementGroup, animated: false)
         try await eventually("The replacement group expands") { replacementView.isExpanded }
 
         fixture.controller.didDeselect(previousGroup, on: fixture.mapView)
@@ -566,7 +560,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertTrue(fixture.isSelected(replacementGroup))
         XCTAssertEqual(fixture.socialAnnotations.count, 1)
 
-        fixture.mapView.deselectAnnotation(replacementGroup, animated: false)
+        fixture.annotationStore.deselectAnnotation(replacementGroup, animated: false)
         try await eventually("Native deselection closes the replacement group") {
             !replacementView.isExpanded
         }
@@ -578,7 +572,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         let friend = fixture.annotation("Amina", meters: 0)
         fixture.update([.friend("amina"): friend])
-        try await eventually("The singleton view appears") { fixture.mapView.view(for: friend) != nil }
+        try await eventually("The singleton view appears") { fixture.annotationStore.view(for: friend) != nil }
 
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
         fixture.controller.tearDown()
@@ -594,7 +588,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         let friend = fixture.annotation("Amina", meters: 0)
         fixture.update([.friend("amina"): friend])
-        try await eventually("The singleton view appears") { fixture.mapView.view(for: friend) != nil }
+        try await eventually("The singleton view appears") { fixture.annotationStore.view(for: friend) != nil }
 
         fixture.controller.select(.friend("amina"), on: fixture.mapView)
         fixture.controller.collapse(on: fixture.mapView)
@@ -606,13 +600,156 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertEqual(fixture.socialAnnotations.count, 1)
     }
 
+    func testAnnotationStoreBatchOperationsPreserveIdentityAndCleanUpOnce() {
+        let mapView = makeLocalMap()
+        mapView.frame = CGRect(x: 0, y: 0, width: 320, height: 480)
+        let store = MapAnnotationStore(mapView: mapView)
+        let first = MapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522))
+        let deferred = MapAnnotation()
+        var createdViews: [ReuseTrackingAnnotationView] = []
+        var additions: [Int] = []
+        var deselections = 0
+        store.makeView = { annotation in
+            let view = ReuseTrackingAnnotationView(annotation: annotation)
+            view.bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
+            createdViews.append(view)
+            return view
+        }
+        store.onDidAdd = { additions.append($0.count) }
+        store.onDeselect = { _ in deselections += 1 }
+        defer { store.removeAll() }
+
+        store.addAnnotations([first, first, deferred, deferred])
+        store.addAnnotations([deferred, first])
+        XCTAssertEqual(store.annotations.count, 2)
+        XCTAssertTrue(store.annotations[0] === first)
+        XCTAssertTrue(store.annotations[1] === deferred)
+        XCTAssertEqual(createdViews.count, 1)
+        XCTAssertEqual(additions, [1])
+
+        deferred.coordinate = first.coordinate
+        store.synchronizeCoordinates()
+        XCTAssertEqual(createdViews.count, 2)
+        XCTAssertEqual(additions, [1, 1])
+        store.selectAnnotation(first, animated: false)
+        store.removeAnnotations([first, deferred, first, deferred])
+
+        XCTAssertTrue(store.annotations.isEmpty)
+        XCTAssertTrue(store.selectedAnnotations.isEmpty)
+        XCTAssertEqual(deselections, 1)
+        XCTAssertEqual(createdViews.map(\.reuseCount), [1, 1])
+        XCTAssertTrue(createdViews.allSatisfy { $0.superview == nil })
+    }
+
+    func testAnnotationStoreMovesResizesAndRemovesItsNativeView() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.close() }
+        let friend = fixture.annotation("Amina", meters: 0)
+        fixture.update([.friend("amina"): friend])
+        let view = try XCTUnwrap(fixture.annotationStore.view(for: friend))
+        fixture.controller.select(.friend("amina"), on: fixture.mapView)
+        try await eventually("The member is selected") { fixture.isSelected(friend) }
+
+        friend.coordinate = fixture.coordinate(meters: 150)
+        view.bounds.size = CGSize(width: 72, height: 44)
+        view.centerOffset = CGSize(width: 20, height: -30)
+        fixture.update([.friend("amina"): friend])
+        try await eventually("Mapbox applies the new coordinate, size, and anchor offset") {
+            let anchor = fixture.mapView.mapboxMap.point(for: friend.coordinate)
+            let frame = view.convert(view.bounds, to: fixture.mapView)
+            return !view.isHidden && abs(frame.midX - anchor.x - 20) <= 1
+                && abs(frame.midY - anchor.y + 30) <= 1
+                && frame.width == 72 && frame.height == 44
+        }
+        XCTAssertTrue(fixture.annotationStore.view(for: friend) === view)
+        XCTAssertTrue(fixture.isSelected(friend))
+
+        fixture.update([:])
+        await flushMainQueue()
+        XCTAssertNil(view.superview)
+        XCTAssertNil(fixture.annotationStore.view(for: friend))
+        XCTAssertTrue(fixture.annotationStore.annotations.isEmpty)
+        XCTAssertTrue(fixture.annotationStore.selectedAnnotations.isEmpty)
+        XCTAssertEqual(fixture.deselectedMembers, [.friend("amina")])
+    }
+
+    func testOffscreenFriendIndicatorsFollowCardinalDirectionsAndMapRotation() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer {
+            fixture.coordinator.removeMapOffscreenIndicatorContainer()
+            fixture.close()
+        }
+        let center = fixture.mapView.mapboxMap.cameraState.center
+        let targets: [(id: String, coordinate: CLLocationCoordinate2D)] = [
+            ("north", CLLocationCoordinate2D(latitude: center.latitude + 0.2, longitude: center.longitude)),
+            ("east", CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude + 0.2)),
+            ("south", CLLocationCoordinate2D(latitude: center.latitude - 0.2, longitude: center.longitude)),
+            ("west", CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude - 0.2)),
+            ("visible", center)
+        ]
+        fixture.coordinator.friendAnnotations = Dictionary(uniqueKeysWithValues: targets.map { target in
+            let annotation = FriendLocationAnnotation()
+            annotation.userID = target.id
+            annotation.coordinate = target.coordinate
+            return (target.id, annotation)
+        })
+        fixture.coordinator.friendPresenceInfoByUserID = Dictionary(uniqueKeysWithValues: targets.map { target in
+            (target.id, MapUserPresenceInfo(
+                displayName: target.id,
+                relationshipText: "Ami",
+                locationSampledAt: nil,
+                spotEnteredAt: nil,
+                isLocationFresh: true,
+                keepsSpotDurationVisible: false
+            ))
+        })
+        fixture.coordinator.installMapOffscreenIndicatorContainer(on: fixture.mapView)
+        let indicatorBounds = try XCTUnwrap(MapOffscreenIndicatorLayout.indicatorBounds(
+            in: fixture.coordinator.visibleSafeBounds(on: fixture.mapView),
+            safeAreaInsets: .zero
+        ))
+        let cases: [(bearing: Double, edges: [MapOffscreenIndicatorEdge])] = [
+            (0, [.top, .right, .bottom, .left]),
+            (90, [.left, .top, .right, .bottom])
+        ]
+        for testCase in cases {
+            fixture.mapView.mapboxMap.setCamera(to: CameraOptions(bearing: testCase.bearing))
+            for target in targets.prefix(4) {
+                XCTAssertEqual(fixture.mapView.mapboxMap.point(for: target.coordinate), CGPoint(x: -1, y: -1))
+            }
+            fixture.coordinator.refreshMapOffscreenIndicators(on: fixture.mapView)
+            let indicators = fixture.mapView.subviews.flatMap(\.subviews)
+                .compactMap { $0 as? FriendOffscreenIndicatorView }
+            XCTAssertEqual(Set(indicators.map(\.userID)), Set(targets.prefix(4).map(\.id)),
+                           "Only offscreen friends should receive an indicator")
+            for (target, edge) in zip(targets, testCase.edges) {
+                let indicator = try XCTUnwrap(indicators.first { $0.userID == target.id })
+                let expectedCenter: CGPoint
+                switch edge {
+                case .top:
+                    expectedCenter = CGPoint(x: indicatorBounds.midX, y: indicatorBounds.minY)
+                case .right:
+                    expectedCenter = CGPoint(x: indicatorBounds.maxX, y: indicatorBounds.midY)
+                case .bottom:
+                    expectedCenter = CGPoint(x: indicatorBounds.midX, y: indicatorBounds.maxY)
+                case .left:
+                    expectedCenter = CGPoint(x: indicatorBounds.minX, y: indicatorBounds.midY)
+                }
+                XCTAssertEqual(indicator.center.x, expectedCenter.x, accuracy: 2,
+                               "\(target.id) at bearing \(testCase.bearing)")
+                XCTAssertEqual(indicator.center.y, expectedCenter.y, accuracy: 2,
+                               "\(target.id) at bearing \(testCase.bearing)")
+            }
+        }
+    }
+
     // MARK: - Passive touch observer callbacks
 
     func testNearbyNativeSelectionBeforeTouchEndDoesNotRefreshAnotherFriend() async throws {
         let fixture = try await makeCoordinatorFixture()
         defer { fixture.close() }
         let touch = try fixture.beginTouch(on: fixture.first)
-        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        fixture.annotationStore.selectAnnotation(fixture.second, animated: false)
         fixture.observer.onTapEnded?(touch)
         await flushMainQueue()
 
@@ -625,7 +762,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         try fixture.tap(fixture.first)
         await flushMainQueue()
-        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        fixture.annotationStore.selectAnnotation(fixture.second, animated: false)
         await flushMainQueue()
 
         XCTAssertEqual(fixture.selectedFriendIDs, ["first"])
@@ -636,7 +773,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         let fixture = try await makeCoordinatorFixture()
         defer { fixture.close() }
         let touch = try fixture.beginTouch(on: fixture.first)
-        fixture.mapView.selectAnnotation(fixture.first, animated: false)
+        fixture.annotationStore.selectAnnotation(fixture.first, animated: false)
         fixture.observer.onTapEnded?(touch)
         await flushMainQueue()
 
@@ -660,7 +797,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         _ = try fixture.beginTouch(on: fixture.first)
         fixture.observer.onTouchCancelled?()
         XCTAssertTrue(fixture.selectedFriendIDs.isEmpty)
-        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        fixture.annotationStore.selectAnnotation(fixture.second, animated: false)
         await flushMainQueue()
         XCTAssertEqual(fixture.selectedFriendIDs, ["second"])
     }
@@ -671,7 +808,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         try fixture.tap(fixture.first)
         fixture.coordinator.synchronizeDetailSelection(.friend("first"), on: fixture.mapView)
         await flushMainQueue()
-        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        fixture.annotationStore.selectAnnotation(fixture.second, animated: false)
         await flushMainQueue()
         XCTAssertEqual(fixture.selectedFriendIDs, ["first"])
         XCTAssertTrue(fixture.isSelected(fixture.first))
@@ -696,7 +833,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         defer { fixture.close() }
         try fixture.tap(fixture.first)
         try await Task.sleep(nanoseconds: 1_100_000_000)
-        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        fixture.annotationStore.selectAnnotation(fixture.second, animated: false)
         await flushMainQueue()
         XCTAssertEqual(fixture.selectedFriendIDs, ["first", "second"])
     }
@@ -707,8 +844,8 @@ final class MapSocialProximityControllerTests: XCTestCase {
         let fixture = CoordinatorMapFixture(windowScene: scene)
         do {
             try await eventually("Both production friend pins are rendered") {
-                fixture.mapView.view(for: fixture.first) != nil
-                    && fixture.mapView.view(for: fixture.second) != nil
+                fixture.annotationStore.view(for: fixture.first)?.isHidden == false
+                    && fixture.annotationStore.view(for: fixture.second)?.isHidden == false
             }
             return fixture
         } catch {
@@ -794,7 +931,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
     private func assertSelectingAndRemovingCoincidentEvent(at rowIndex: Int) async throws {
         let fixture = try await makeFixture()
         defer { fixture.close() }
-        let events: [(id: MapSocialClusterMemberID, annotation: MKPointAnnotation)] = [
+        let events: [(id: MapSocialClusterMemberID, annotation: MapAnnotation)] = [
             (.outing("a-walk"), fixture.annotation("Balade", meters: 0)),
             (.outing("b-coffee"), fixture.annotation("Café", meters: 0))
         ]
@@ -809,15 +946,22 @@ final class MapSocialProximityControllerTests: XCTestCase {
             fixture.groupView(for: group) != nil
         }
         let groupView = try XCTUnwrap(fixture.groupView(for: group))
-        fixture.mapView.selectAnnotation(group, animated: false)
+        fixture.annotationStore.selectAnnotation(group, animated: false)
         try await eventually("The coincident event list opens") { groupView.isExpanded }
         groupView.layoutIfNeeded()
 
         let rows = fixture.memberRows(in: groupView)
         XCTAssertEqual(rows.map(\.accessibilityLabel), ["Balade", "Café"])
         let row = try XCTUnwrap(rows.indices.contains(rowIndex) ? rows[rowIndex] : nil)
-        let center = row.convert(CGPoint(x: row.bounds.midX, y: row.bounds.midY), to: groupView)
-        XCTAssertTrue(groupView.hitTest(center, with: nil) === row)
+        // The store exposes views before Mapbox places and unhides them.
+        try await eventually("The event row owns its rendered map hit target") {
+            groupView.layoutIfNeeded()
+            let center = row.convert(
+                CGPoint(x: row.bounds.midX, y: row.bounds.midY),
+                to: fixture.mapView
+            )
+            return fixture.mapView.hitTest(center, with: nil) === row
+        }
 
         // The row must own a tap even where it overlaps the native marker's bounds.
         let rowTap = try XCTUnwrap(row.gestureRecognizers?.compactMap { $0 as? UITapGestureRecognizer }.first)
@@ -830,7 +974,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertTrue(rowTap.cancelsTouchesInView, "A recognized tap must not also fire touchUpInside.")
 
         // Exercise the real row target/action instead of calling controller.select directly.
-        // This does not synthesize a finger gesture or MapKit's competing gesture callbacks.
+        // This does not synthesize a finger gesture or Mapbox's competing gesture callbacks.
         row.sendActions(for: .touchUpInside)
         try await eventually("The chosen row selects its own event") {
             fixture.isSelected(selected.annotation) && fixture.controller.isFocused(selected.annotation)
@@ -838,7 +982,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
 
         XCTAssertFalse(fixture.controller.isFocused(remaining.annotation))
         XCTAssertFalse(fixture.isSelected(remaining.annotation))
-        XCTAssertEqual(fixture.mapView.selectedAnnotations.count, 1)
+        XCTAssertEqual(fixture.annotationStore.selectedAnnotations.count, 1)
         XCTAssertTrue(fixture.groups.isEmpty)
         XCTAssertEqual(fixture.attachedCount(of: group), 0)
         XCTAssertEqual(fixture.attachedCount(of: selected.annotation), 1)
@@ -848,7 +992,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
 
         fixture.update([remaining.id: remaining.annotation])
         try await eventually("Removing the chosen event leaves one unselected singleton") {
-            fixture.socialAnnotations.count == 1 && fixture.mapView.selectedAnnotations.isEmpty
+            fixture.socialAnnotations.count == 1 && fixture.annotationStore.selectedAnnotations.isEmpty
         }
         // Repeated source snapshots must not dismiss the product presentation a second time.
         fixture.update([remaining.id: remaining.annotation])
@@ -857,7 +1001,7 @@ final class MapSocialProximityControllerTests: XCTestCase {
         XCTAssertFalse(fixture.controller.isFocused(selected.annotation))
         XCTAssertFalse(fixture.controller.isFocused(remaining.annotation))
         XCTAssertFalse(fixture.controller.hasActivePresentation)
-        XCTAssertTrue(fixture.mapView.selectedAnnotations.isEmpty)
+        XCTAssertTrue(fixture.annotationStore.selectedAnnotations.isEmpty)
         XCTAssertTrue(fixture.groups.isEmpty)
         XCTAssertEqual(fixture.attachedCount(of: group), 0)
         XCTAssertEqual(fixture.attachedCount(of: selected.annotation), 0)
@@ -922,23 +1066,20 @@ private final class ObserverTestTouch: UITouch {
     }
 }
 
-/// Uses the production delegate and observer; only the ordering of native selections is imposed.
+/// Uses the production store and observer; only the ordering of selections is imposed.
 @MainActor
 private final class CoordinatorMapFixture {
-    // Keep one coordinator for the test process: disposing BoundaryCache with
-    // Xcode 27 on iOS 26.3 crashes in swift_task_deinitOnExecutorImpl. Each test
-    // still resets sources, selection, observer and callbacks on its own map.
-    private static let sharedCoordinator = MapWithFogView.Coordinator(
-        fogColor: .clear, onSelectFriend: { _ in },
-        onSelectOutingPlan: { _ in }, onDeselectOutingPlan: { _ in }, onCreateEvent: { _ in }
-    )
-    let mapView = MKMapView(frame: .zero)
+    let mapView = makeLocalMap()
     let first = FriendLocationAnnotation()
     let second = FriendLocationAnnotation()
     private let window: UIWindow
     private weak var previousKeyWindow: UIWindow?
     private(set) var selectedFriendIDs: [String] = []
-    let coordinator = CoordinatorMapFixture.sharedCoordinator
+    let coordinator = MapWithFogView.Coordinator(
+        fogColor: .clear, onSelectFriend: { _ in },
+        onSelectOutingPlan: { _ in }, onDeselectOutingPlan: { _ in }, onCreateEvent: { _ in }
+    )
+    var annotationStore: MapAnnotationStore { coordinator.annotationStore }
     var observer: PassiveMapTapObserver {
         mapView.gestureRecognizers!.compactMap { $0 as? PassiveMapTapObserver }.first!
     }
@@ -952,11 +1093,11 @@ private final class CoordinatorMapFixture {
         root.view = mapView
         window.rootViewController = root
         window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
-        mapView.delegate = coordinator
+        coordinator.install(on: mapView)
         window.makeKeyAndVisible()
         window.layoutIfNeeded()
         let center = CLLocationCoordinate2D(latitude: 48.85, longitude: 2.35)
-        mapView.setRegion(MKCoordinateRegion(center: center, latitudinalMeters: 1_000, longitudinalMeters: 1_000), animated: false)
+        mapView.mapboxMap.setCamera(to: CameraOptions(center: center, zoom: 15))
         first.userID = "first"
         first.coordinate = CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude - 0.0007)
         second.userID = "second"
@@ -967,7 +1108,7 @@ private final class CoordinatorMapFixture {
     }
 
     func beginTouch(on annotation: FriendLocationAnnotation) throws -> CGPoint {
-        let view = try XCTUnwrap(mapView.view(for: annotation))
+        let view = try XCTUnwrap(annotationStore.view(for: annotation))
         let point = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: mapView)
         observer.onTouchBegan?(point)
         return point
@@ -979,7 +1120,7 @@ private final class CoordinatorMapFixture {
     }
 
     func isSelected(_ annotation: FriendLocationAnnotation) -> Bool {
-        mapView.selectedAnnotations.contains { ($0 as AnyObject) === annotation }
+        annotationStore.selectedAnnotations.contains { ($0 as AnyObject) === annotation }
     }
 
     func close() {
@@ -988,7 +1129,8 @@ private final class CoordinatorMapFixture {
         coordinator.friendAnnotations = [:]
         coordinator.synchronizeSocialProximityAnnotations(on: mapView)
         coordinator.onSelectFriend = { _ in }
-        mapView.delegate = nil
+        mapView.gestures.delegate = nil
+        annotationStore.removeAll()
         window.isHidden = true
         window.rootViewController = nil
         previousKeyWindow?.makeKey()
@@ -996,23 +1138,30 @@ private final class CoordinatorMapFixture {
 }
 
 @MainActor
-private final class MapFixture: NSObject, MKMapViewDelegate {
+private final class MapFixture {
     private let onRequestOwnProfile: (() -> Void)?
     private let onRequestFriendProfile: ((String) -> Void)?
     private let window: UIWindow
     private weak var previousKeyWindow: UIWindow?
-    private var sources: [MapSocialClusterMemberID: MKPointAnnotation] = [:]
+    private var sources: [MapSocialClusterMemberID: MapAnnotation] = [:]
     private(set) var hasSettledInitialRegion = false
     private(set) var deselectedMembers: [MapSocialClusterMemberID] = []
-    let mapView = CenterTrackingMapView(frame: .zero)
+    let mapView = makeLocalMap()
+    lazy var annotationStore = MapAnnotationStore(mapView: mapView)
+    private var subscriptions: Set<AnyCancelable> = []
+    var cameraSnapshot: [Double] {
+        let camera = mapView.mapboxMap.cameraState
+        return [camera.center.latitude, camera.center.longitude, camera.zoom, camera.bearing, camera.pitch]
+    }
     var visibleBounds: CGRect?
 
     lazy var controller = MapSocialProximityController(
+        annotationStore: annotationStore,
         presentation: { [weak self] group in
             self?.presentation(for: group) ?? MapSocialClusterPresentation(people: [], outings: [])
         },
         setFocusAppearance: { focused, view in
-            (view as? MKMarkerAnnotationView)?.markerTintColor = focused ? .systemOrange : .systemBlue
+            view.backgroundColor = focused ? .systemOrange : .systemBlue
         },
         onDeselectMember: { [weak self] memberID in
             self?.deselectedMembers.append(memberID)
@@ -1030,25 +1179,46 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         previousKeyWindow = windowScene.windows.first(where: \.isKeyWindow)
         window = UIWindow(windowScene: windowScene)
         window.frame = windowScene.effectiveGeometry.coordinateSpace.bounds
-        super.init()
 
         let rootViewController = UIViewController()
         rootViewController.view = mapView
         window.rootViewController = rootViewController
         window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
-        mapView.delegate = self
+        annotationStore.makeView = { [weak self] annotation in
+            self?.makeView(for: annotation)
+        }
+        annotationStore.onSelect = { [weak self] view in
+            guard let self, let annotation = view.annotation else { return }
+            self.controller.activate(annotation, view: view, on: self.mapView)
+        }
+        annotationStore.onDeselect = { [weak self] view in
+            guard let self, let annotation = view.annotation else { return }
+            self.controller.didDeselect(annotation, on: self.mapView)
+        }
+        annotationStore.onDidAdd = { [weak self] _ in
+            guard let self else { return }
+            self.controller.didAddViews(on: self.mapView)
+        }
+        mapView.mapboxMap.onMapLoaded.observeNext { [weak self] _ in
+            self?.hasSettledInitialRegion = true
+        }.store(in: &subscriptions)
+        mapView.mapboxMap.onCameraChanged.observe { [weak self] _ in
+            guard let self else { return }
+            self.controller.visibleRegionDidChange(on: self.mapView)
+        }.store(in: &subscriptions)
+        mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
+            guard let self else { return }
+            self.controller.regionDidChange(on: self.mapView)
+        }.store(in: &subscriptions)
         window.makeKeyAndVisible()
         window.layoutIfNeeded()
-        mapView.setRegion(
-            MKCoordinateRegion(center: coordinate(meters: 5), latitudinalMeters: 1_000, longitudinalMeters: 1_000),
-            animated: false
-        )
+        mapView.mapboxMap.setCamera(to: CameraOptions(center: coordinate(meters: 5), zoom: 15))
     }
 
     func close() {
         controller.tearDown()
-        mapView.delegate = nil
-        mapView.removeAnnotations(mapView.annotations)
+        subscriptions.removeAll()
+        annotationStore.removeAll()
         mapView.removeFromSuperview()
         window.isHidden = true
         window.rootViewController = nil
@@ -1059,14 +1229,14 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         CLLocationCoordinate2D(latitude: 48.8566 + meters / 111_195, longitude: 2.3522)
     }
 
-    func annotation(_ title: String, meters: Double) -> MKPointAnnotation {
-        let annotation = MKPointAnnotation()
+    func annotation(_ title: String, meters: Double) -> MapAnnotation {
+        let annotation = MapAnnotation()
         annotation.coordinate = coordinate(meters: meters)
         annotation.title = title
         return annotation
     }
 
-    func mixedSources() -> [MapSocialClusterMemberID: MKPointAnnotation] {
+    func mixedSources() -> [MapSocialClusterMemberID: MapAnnotation] {
         [
             .currentUser: annotation("Vous", meters: 0),
             .friend("amina"): annotation("Amina", meters: 5),
@@ -1074,21 +1244,21 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         ]
     }
 
-    func update(_ sources: [MapSocialClusterMemberID: MKPointAnnotation]) {
+    func update(_ sources: [MapSocialClusterMemberID: MapAnnotation]) {
         self.sources = sources
-        controller.update(sources: sources.mapValues { $0 as any MKAnnotation }, on: mapView)
+        controller.update(sources: sources, on: mapView)
     }
 
-    var socialAnnotations: [any MKAnnotation] {
-        mapView.annotations.filter { $0 is MKPointAnnotation || $0 is MapSocialProximityGroupAnnotation }
+    var socialAnnotations: [MapAnnotation] {
+        annotationStore.annotations
     }
 
     var groups: [MapSocialProximityGroupAnnotation] {
-        mapView.annotations.compactMap { $0 as? MapSocialProximityGroupAnnotation }
+        annotationStore.annotations.compactMap { $0 as? MapSocialProximityGroupAnnotation }
     }
 
     func groupView(for group: MapSocialProximityGroupAnnotation) -> MapSocialClusterAnnotationView? {
-        mapView.view(for: group) as? MapSocialClusterAnnotationView
+        annotationStore.view(for: group) as? MapSocialClusterAnnotationView
     }
 
     func memberRows(in view: MapSocialClusterAnnotationView) -> [UIControl] {
@@ -1107,62 +1277,32 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
         }
     }
 
-    func isSelected(_ annotation: any MKAnnotation) -> Bool {
-        mapView.selectedAnnotations.contains { ($0 as AnyObject) === (annotation as AnyObject) }
+    func isSelected(_ annotation: MapAnnotation) -> Bool {
+        annotationStore.selectedAnnotations.contains { ($0 as AnyObject) === (annotation as AnyObject) }
     }
 
-    func attachedCount(of annotation: any MKAnnotation) -> Int {
-        mapView.annotations.filter { ($0 as AnyObject) === (annotation as AnyObject) }.count
+    func attachedCount(of annotation: MapAnnotation) -> Int {
+        annotationStore.annotations.filter { ($0 as AnyObject) === (annotation as AnyObject) }.count
     }
 
-    // MARK: - Native delegate forwarding
+    // MARK: - Mapbox annotation views
 
-    func mapView(_ mapView: MKMapView, viewFor annotation: any MKAnnotation) -> MKAnnotationView? {
+    private func makeView(for annotation: MapAnnotation) -> MapAnnotationView? {
         if let group = annotation as? MapSocialProximityGroupAnnotation {
-            let view = (mapView.dequeueReusableAnnotationView(
-                withIdentifier: MapSocialClusterAnnotationView.reuseIdentifier
-            ) as? MapSocialClusterAnnotationView) ?? MapSocialClusterAnnotationView(
+            let view = MapSocialClusterAnnotationView(
                 annotation: group,
                 reuseIdentifier: MapSocialClusterAnnotationView.reuseIdentifier
             )
-            view.annotation = group
             controller.configure(view, for: group, on: mapView)
             return view
         }
-        guard annotation is MKPointAnnotation else { return nil }
-        let view = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: nil)
-        view.displayPriority = .required
-        view.clusteringIdentifier = nil
+        let view = MapAnnotationView(annotation: annotation)
+        view.bounds = CGRect(x: 0, y: 0, width: 36, height: 36)
+        view.backgroundColor = .systemBlue
+        view.layer.cornerRadius = 18
         view.isAccessibilityElement = true
-        view.accessibilityLabel = annotation.title ?? nil
+        view.accessibilityLabel = annotation.title
         return view
-    }
-
-    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-        guard let annotation = view.annotation else { return }
-        controller.activate(annotation, view: view, on: mapView)
-    }
-
-    func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
-        guard let annotation = view.annotation else { return }
-        controller.didDeselect(annotation, on: mapView)
-    }
-
-    func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
-        controller.didAddViews(on: mapView)
-    }
-
-    func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
-        controller.visibleRegionDidChange(on: mapView)
-    }
-
-    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
-        controller.regionWillChange(on: mapView)
-    }
-
-    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-        controller.regionDidChange(on: mapView)
-        hasSettledInitialRegion = true
     }
 
     // MARK: - Real group presentation from fixture sources
@@ -1207,17 +1347,27 @@ private final class MapFixture: NSObject, MKMapViewDelegate {
 }
 
 @MainActor
-private final class CenterTrackingMapView: MKMapView {
-    private(set) var centerRequestCount = 0
-    private(set) var regionRequestCount = 0
+private final class ReuseTrackingAnnotationView: MapAnnotationView {
+    private(set) var reuseCount = 0
 
-    override func setRegion(_ region: MKCoordinateRegion, animated: Bool) {
-        regionRequestCount += 1
-        super.setRegion(region, animated: animated)
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        reuseCount += 1
     }
+}
 
-    override func setCenter(_ coordinate: CLLocationCoordinate2D, animated: Bool) {
-        centerRequestCount += 1
-        super.setCenter(coordinate, animated: animated)
-    }
+/// A local style exercises Mapbox projection and native layout without credentials or tiles.
+@MainActor
+private func makeLocalMap() -> MapboxMaps.MapView {
+    MapboxMaps.MapView(
+        frame: .zero,
+        mapInitOptions: MapInitOptions(
+            cameraOptions: CameraOptions(
+                center: CLLocationCoordinate2D(latitude: 48.8566, longitude: 2.3522),
+                zoom: 15
+            ),
+            styleURI: nil,
+            styleJSON: ##"{"version":8,"sources":{},"layers":[{"id":"background","type":"background","paint":{"background-color":"#f2f2f2"}}]}"##
+        )
+    )
 }
