@@ -1,9 +1,19 @@
 ---
 title: "Rendre les interactions MapKit immédiates"
 date: 2026-09-02
+last_updated: 2026-10-09
+module: "Carte sociale"
+problem_type: ui_bug
+component: frontend
+severity: medium
+symptoms:
+  - "Un toucher peut sélectionner deux amis dont les avatars sont proches"
+root_cause: async_timing
+resolution_type: code_fix
 tags: [solution, mapkit, gestures, performance, ux]
 related:
   - ../plans/2026-09-02-rendre-taps-carte-immediats.md
+  - ../plans/2026-10-09-selection-unique-amis-proches.md
 ---
 
 # Rendre les interactions MapKit immédiates
@@ -23,14 +33,28 @@ groupe et de 420 ms pour une fiche événement amplifiaient ensuite cette lenteu
 compactes et au fond de carte. Il fournit un retour d'opacité dès le début du
 toucher, s'annule lorsque le doigt dépasse la tolérance de mouvement, puis
 active l'annotation au relâchement avant de demander sa sélection à MapKit.
-L'observateur exécute ses callbacks puis termine toujours dans l'état `.failed` ;
-ses méthodes `canPrevent` et `canBePrevented` renvoient également `false`. Il ne
-peut donc pas voler le premier tap au reconnaisseur double tap de MapKit.
+L'observateur rapporte le toucher sans reconnaître de geste UIKit ; ses
+méthodes `canPrevent` et `canBePrevented` renvoient `false`. Il ne peut donc pas
+voler le premier tap au reconnaisseur double tap de MapKit.
 
-Le même chemin d'activation reste appelé par `didSelect` pour VoiceOver et les
-sélections programmatiques. Un identifiant d'annotation absorbe uniquement le
-callback natif qui suit une activation immédiate afin de ne pas déclencher deux
-rafraîchissements ou deux présentations.
+Le même chemin d'activation reste appelé par `didSelect` pour les sélections
+natives et programmatiques. VoiceOver et Switch Control conservent ce chemin
+natif, sans activation par l'observateur passif.
+
+La première correction absorbait un callback natif portant le même identifiant
+d'annotation. La vidéo et les tests du 9 octobre montrent sa limite : MapKit
+peut sélectionner un voisin B après que l'observateur a activé A. Les deux
+identifiants diffèrent, donc deux profils et deux demandes de position partent.
+Une déduplication par ami dans le service ne corrigerait pas cette séquence.
+
+Le Coordinator mémorise désormais la cible au début du toucher et n'active
+celle-ci qu'au relâchement valide. Les callbacks natifs de ce toucher ne
+délivrent aucune autre action. Si MapKit sélectionne un voisin, le Coordinator
+rétablit la bonne sélection native avant que sa désélection différée efface le
+focus. La protection reste présente après le premier callback, pendant une
+seconde au maximum. Une nouvelle interaction ou une sélection explicite d'une
+autre cible la libère immédiatement ; l'écho SwiftUI du profil déjà ouvert ne
+la libère pas. Annulation, démontage et gestes de carte la libèrent aussi.
 
 Le reconnaisseur accepte également un toucher commencé sur le fond de carte.
 S'il se termine sans dépasser la tolérance de mouvement, les annotations
@@ -55,6 +79,22 @@ transition d'échelle sans fondu initial.
 
 ## Preuves
 
+### Correction des amis proches du 9 octobre
+
+- Avant correction, le vrai Coordinator produisait `[first, second]` ou
+  `[second, first]` pour un seul toucher, selon l'ordre imposé des callbacks.
+- Les huit régressions du Coordinator vérifient les deux ordres, les nouveaux
+  touchers, l'annulation, l'écho SwiftUI, une autre demande de profil, un toucher
+  répété et l'expiration de la protection. Ces tests utilisent le delegate de
+  production, pas une copie de sa logique.
+- Le scénario UI utilise deux amis géographiquement distincts dont les cibles
+  tactiles se chevauchent. Il compte les callbacks réellement sortants et
+  vérifie A puis B et l'absence d'une seconde activation tardive pendant la présentation.
+- Les résultats exacts, les limites de l'environnement et la comparaison avec
+  la version d'origine sont consignés dans le plan du 9 octobre lié ci-dessus.
+
+### Validation historique du 2 septembre
+
 - `git diff --check` réussit.
 - Le build Debug pour iOS Simulator réussit.
 - Les seuls avertissements sont les deux différences de `CFBundleVersion`
@@ -68,6 +108,10 @@ transition d'échelle sans fondu initial.
 - Une interaction applicative prioritaire ne doit pas dépendre exclusivement
   de la reconnaissance de sélection interne d'un composant cartographique.
 - Conserver le callback natif comme fallback accessible et programmatique.
+- Arbitrer l'interaction avant ses effets : deux annotations différentes
+  peuvent appartenir au même toucher. Ne pas libérer la protection au premier
+  callback, et vérifier les callbacks sortants plutôt que seulement la dernière
+  fiche visible. Un second vrai toucher reste une nouvelle interaction.
 - Limiter tout reconnaisseur supplémentaire aux cibles nécessaires et annuler
   rapidement dès qu'un déplacement commence.
 - Mesurer séparément le temps avant callback et la durée de l'animation ; une

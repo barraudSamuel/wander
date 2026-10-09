@@ -608,6 +608,115 @@ final class MapSocialProximityControllerTests: XCTestCase {
 
     // MARK: - Passive touch observer callbacks
 
+    func testNearbyNativeSelectionBeforeTouchEndDoesNotRefreshAnotherFriend() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        let touch = try fixture.beginTouch(on: fixture.first)
+        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        fixture.observer.onTapEnded?(touch)
+        await flushMainQueue()
+
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first"])
+        XCTAssertTrue(fixture.isSelected(fixture.first))
+    }
+
+    func testNearbyNativeSelectionAfterTouchEndDoesNotRefreshAnotherFriend() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        try fixture.tap(fixture.first)
+        await flushMainQueue()
+        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        await flushMainQueue()
+
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first"])
+        XCTAssertTrue(fixture.isSelected(fixture.first))
+    }
+
+    func testNativeSelectionOfTouchedFriendIsDeliveredOnce() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        let touch = try fixture.beginTouch(on: fixture.first)
+        fixture.mapView.selectAnnotation(fixture.first, animated: false)
+        fixture.observer.onTapEnded?(touch)
+        await flushMainQueue()
+
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first"])
+    }
+
+    func testNewTouchCanSelectNearbyFriendImmediately() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        try fixture.tap(fixture.first)
+        try fixture.tap(fixture.second)
+        await flushMainQueue()
+
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first", "second"])
+        XCTAssertTrue(fixture.isSelected(fixture.second))
+    }
+
+    func testCancelledFriendTouchDoesNotActivateAndAllowsNativeSelection() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        _ = try fixture.beginTouch(on: fixture.first)
+        fixture.observer.onTouchCancelled?()
+        XCTAssertTrue(fixture.selectedFriendIDs.isEmpty)
+        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        await flushMainQueue()
+        XCTAssertEqual(fixture.selectedFriendIDs, ["second"])
+    }
+
+    func testSwiftUIDetailEchoDoesNotReleaseTouchButAnotherDetailDoes() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        try fixture.tap(fixture.first)
+        fixture.coordinator.synchronizeDetailSelection(.friend("first"), on: fixture.mapView)
+        await flushMainQueue()
+        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        await flushMainQueue()
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first"])
+        XCTAssertTrue(fixture.isSelected(fixture.first))
+
+        fixture.coordinator.synchronizeDetailSelection(.friend("second"), on: fixture.mapView)
+        await flushMainQueue()
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first", "second"])
+        XCTAssertTrue(fixture.isSelected(fixture.second))
+    }
+
+    func testRepeatedTapOnSelectedFriendDoesNotRefreshAgain() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        try fixture.tap(fixture.first)
+        try fixture.tap(fixture.first)
+        await flushMainQueue()
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first"])
+    }
+
+    func testNativeSelectionIsAvailableAfterTouchProtectionExpires() async throws {
+        let fixture = try await makeCoordinatorFixture()
+        defer { fixture.close() }
+        try fixture.tap(fixture.first)
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        fixture.mapView.selectAnnotation(fixture.second, animated: false)
+        await flushMainQueue()
+        XCTAssertEqual(fixture.selectedFriendIDs, ["first", "second"])
+    }
+
+    private func makeCoordinatorFixture() async throws -> CoordinatorMapFixture {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = try XCTUnwrap(scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)
+        let fixture = CoordinatorMapFixture(windowScene: scene)
+        do {
+            try await eventually("Both production friend pins are rendered") {
+                fixture.mapView.view(for: fixture.first) != nil
+                    && fixture.mapView.view(for: fixture.second) != nil
+            }
+            return fixture
+        } catch {
+            fixture.close()
+            throw error
+        }
+    }
+
     func testPassiveTapObserverReportsConsecutiveTouchCallbacks() {
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         let observer = PassiveMapTapObserver(maximumMovement: 12)
@@ -810,6 +919,79 @@ private final class ObserverTestTouch: UITouch {
 
     override func location(in view: UIView?) -> CGPoint {
         point
+    }
+}
+
+/// Uses the production delegate and observer; only the ordering of native selections is imposed.
+@MainActor
+private final class CoordinatorMapFixture {
+    // Keep one coordinator for the test process: disposing BoundaryCache with
+    // Xcode 27 on iOS 26.3 crashes in swift_task_deinitOnExecutorImpl. Each test
+    // still resets sources, selection, observer and callbacks on its own map.
+    private static let sharedCoordinator = MapWithFogView.Coordinator(
+        fogColor: .clear, onSelectFriend: { _ in },
+        onSelectOutingPlan: { _ in }, onDeselectOutingPlan: { _ in }, onCreateEvent: { _ in }
+    )
+    let mapView = MKMapView(frame: .zero)
+    let first = FriendLocationAnnotation()
+    let second = FriendLocationAnnotation()
+    private let window: UIWindow
+    private weak var previousKeyWindow: UIWindow?
+    private(set) var selectedFriendIDs: [String] = []
+    let coordinator = CoordinatorMapFixture.sharedCoordinator
+    var observer: PassiveMapTapObserver {
+        mapView.gestureRecognizers!.compactMap { $0 as? PassiveMapTapObserver }.first!
+    }
+
+    init(windowScene: UIWindowScene) {
+        previousKeyWindow = windowScene.windows.first(where: \.isKeyWindow)
+        window = UIWindow(windowScene: windowScene)
+        window.frame = windowScene.effectiveGeometry.coordinateSpace.bounds
+        coordinator.onSelectFriend = { [weak self] in self?.selectedFriendIDs.append($0) }
+        let root = UIViewController()
+        root.view = mapView
+        window.rootViewController = root
+        window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
+        mapView.delegate = coordinator
+        window.makeKeyAndVisible()
+        window.layoutIfNeeded()
+        let center = CLLocationCoordinate2D(latitude: 48.85, longitude: 2.35)
+        mapView.setRegion(MKCoordinateRegion(center: center, latitudinalMeters: 1_000, longitudinalMeters: 1_000), animated: false)
+        first.userID = "first"
+        first.coordinate = CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude - 0.0007)
+        second.userID = "second"
+        second.coordinate = CLLocationCoordinate2D(latitude: center.latitude, longitude: center.longitude + 0.0007)
+        coordinator.friendAnnotations = ["first": first, "second": second]
+        coordinator.synchronizeSocialProximityAnnotations(on: mapView)
+        coordinator.installImmediateSocialAnnotationRecognizer(on: mapView)
+    }
+
+    func beginTouch(on annotation: FriendLocationAnnotation) throws -> CGPoint {
+        let view = try XCTUnwrap(mapView.view(for: annotation))
+        let point = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: mapView)
+        observer.onTouchBegan?(point)
+        return point
+    }
+
+    func tap(_ annotation: FriendLocationAnnotation) throws {
+        let touch = try beginTouch(on: annotation)
+        observer.onTapEnded?(touch)
+    }
+
+    func isSelected(_ annotation: FriendLocationAnnotation) -> Bool {
+        mapView.selectedAnnotations.contains { ($0 as AnyObject) === annotation }
+    }
+
+    func close() {
+        coordinator.removeImmediateSocialAnnotationRecognizer(from: mapView)
+        coordinator.synchronizeDetailSelection(nil, on: mapView)
+        coordinator.friendAnnotations = [:]
+        coordinator.synchronizeSocialProximityAnnotations(on: mapView)
+        coordinator.onSelectFriend = { _ in }
+        mapView.delegate = nil
+        window.isHidden = true
+        window.rootViewController = nil
+        previousKeyWindow?.makeKey()
     }
 }
 

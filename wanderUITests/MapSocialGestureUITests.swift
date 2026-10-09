@@ -145,6 +145,44 @@ final class MapSocialGestureUITests: XCTestCase {
         closeFriendSheet()
     }
 
+    func testNearbyFriendTapSelectsOnlyThatFriendAndAllowsNextFriendTap() {
+        launchDetailScenario(["nearby-friends"])
+        let amina = app.buttons["Amina, Ami"]
+        let jules = app.buttons["Jules, Ami"]
+        let probe = app.staticTexts["debug-friend-selections"]
+        XCTAssertTrue(amina.waitForExistence(timeout: 5))
+        XCTAssertTrue(jules.waitForExistence(timeout: 5))
+        XCTAssertTrue(probe.exists)
+        XCTAssertEqual(probe.value as? String, "count=0;history=")
+        XCTAssertTrue(amina.frame.intersects(jules.frame), "Le scénario doit garder deux marqueurs distincts dont les cibles se chevauchent.")
+
+        func assertOnlySelections(_ ids: [String]) {
+            let expected = "count=\(ids.count);history=" + ids.joined(separator: ",")
+            let received = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in probe.value as? String == expected },
+                object: probe
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 3), .completed)
+            // Keep observing after the sheet and its camera animation start so
+            // a later MapKit callback from the same touch cannot escape the check.
+            let duplicate = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in probe.value as? String != expected },
+                object: probe
+            )
+            duplicate.isInverted = true
+            XCTAssertEqual(XCTWaiter.wait(for: [duplicate], timeout: 1), .completed)
+        }
+
+        amina.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(detailPane.staticTexts["Amina"].waitForExistence(timeout: 3))
+        assertOnlySelections(["scenario-amina"])
+        XCTAssertTrue(jules.isHittable)
+        jules.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(detailPane.staticTexts["Jules"].waitForExistence(timeout: 3))
+        assertOnlySelections(["scenario-amina", "scenario-jules"])
+        attachScreenshot(named: "Deux amis proches, une sélection par appui")
+    }
+
     func testOpeningGroupAndClosingOnBackground() {
         let group = app.buttons["Groupe, 2 sorties prévues"]
         XCTAssertTrue(group.waitForExistence(timeout: 10))

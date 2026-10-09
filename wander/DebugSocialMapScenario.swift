@@ -16,8 +16,11 @@ struct DebugSocialMapScenarioView: View {
         var id: String { rawValue }
     }
 
-    @State private var scene: SceneKind = ProcessInfo.processInfo.arguments
-        .contains("-debug-social-map-mixed") ? .mixed : .events
+    @State private var scene: SceneKind = {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-debug-social-map-nearby-friends") { return .people }
+        return arguments.contains("-debug-social-map-mixed") ? .mixed : .events
+    }()
     @State private var revision = 0
     @State private var bottomList: MapBottomList? = {
         let arguments = ProcessInfo.processInfo.arguments
@@ -98,6 +101,7 @@ private struct DebugSocialMapScene: View {
 
     private let friends: [String: FriendLocation]
     @State private var requestedRosterIDs: Set<String> = []
+    @State private var selectedFriendIDs: [String] = []
     @State private var didSuspendRosters = false
     @StateObject private var locationTracker: LocationTracker
     @State private var plans: [String: OutingPlan]
@@ -155,7 +159,7 @@ private struct DebugSocialMapScene: View {
         let coordinate = Self.coordinate
         _locationTracker = StateObject(wrappedValue: LocationTracker(
             scenarioLocation: CLLocation(
-                latitude: coordinate.latitude + (kind == .events ? 0.0015 : 0),
+                latitude: coordinate.latitude + (kind == .events || Self.hasArgument("nearby-friends") ? 0.0015 : 0),
                 longitude: coordinate.longitude
             )
         ))
@@ -185,9 +189,16 @@ private struct DebugSocialMapScene: View {
         let referenceDate = Date()
         return Dictionary(uniqueKeysWithValues: ["Amina", "Jules"].map { name in
             let id = "scenario-\(name.lowercased())"
+            // About 64 m apart: distinct geographic groups, with overlapping
+            // annotation frames at the production camera's initial 800 m scale.
+            let coordinate = Self.hasArgument("nearby-friends")
+                ? CLLocationCoordinate2D(
+                    latitude: Self.coordinate.latitude,
+                    longitude: Self.coordinate.longitude + (name == "Amina" ? -0.00036 : 0.00036)
+                ) : Self.coordinate
             return (id, FriendLocation(
                 userID: id, displayName: name, avatarID: ProfileAvatar.cyclopsHorns.rawValue,
-                profileColorHex: "#3478F6", coordinate: Self.coordinate,
+                profileColorHex: "#3478F6", coordinate: coordinate,
                 horizontalAccuracy: 5, sampledAt: Self.hasArgument("stale") ? referenceDate.addingTimeInterval(-7200) : referenceDate, updatedAt: referenceDate,
                 receivedAt: referenceDate, spotEnteredAt: referenceDate.addingTimeInterval(-1800)
             ))
@@ -550,7 +561,10 @@ private struct DebugSocialMapScene: View {
             showsSystemUserLocation: false,
             showsHeatMap: heatMapEnabled,
             onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
-            onSelectFriend: { selectedDetail = .friend($0) },
+            onSelectFriend: {
+                if Self.hasArgument("nearby-friends") { selectedFriendIDs.append($0) }
+                selectedDetail = .friend($0)
+            },
             onSelectOutingPlan: {
                 bottomList = .events
                 selectedDetail = .outing($0)
@@ -567,7 +581,13 @@ private struct DebugSocialMapScene: View {
             .modifier(MapContentSafeArea(edges: [.top, .trailing]))
         }
         .overlay(alignment: .topLeading) {
-            if Self.hasArgument("roster-probe") {
+            if Self.hasArgument("nearby-friends") {
+                Text("Sélections : \(selectedFriendIDs.count)")
+                    .font(.caption)
+                    .accessibilityIdentifier("debug-friend-selections")
+                    .accessibilityValue("count=\(selectedFriendIDs.count);history=" + selectedFriendIDs.joined(separator: ","))
+                    .allowsHitTesting(false)
+            } else if Self.hasArgument("roster-probe") {
                 Text("Groupes : \(requestedRosterIDs.count)")
                     .font(.caption)
                     .accessibilityIdentifier("debug-list-rosters")
