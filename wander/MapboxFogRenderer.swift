@@ -80,6 +80,8 @@ final class MapboxFogRenderer {
             if !map.layerExists(withId: Self.layerID) {
                 var layer = FillLayer(id: Self.layerID, source: Self.sourceID)
                 layer.fillColor = .constant(StyleColor(fogColor))
+                // Preserve the fog tint independently of Standard's lighting.
+                layer.fillEmissiveStrength = .constant(1)
                 layer.fillAntialias = .constant(false)
                 try map.addLayer(layer)
             }

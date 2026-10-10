@@ -23,15 +23,15 @@ final class MapViewportViewTests: XCTestCase {
 
         XCTAssertEqual(viewport.visibleMapRect, CGRect(x: 0, y: 240, width: 375, height: 200))
         XCTAssertEqual(viewport.visibleSafeMapRect, CGRect(x: 12, y: 260, width: 355, height: 146))
-        XCTAssertEqual(map.ornaments.options.logo.margins, CGPoint(x: 20, y: 282))
-        XCTAssertEqual(map.ornaments.options.attributionButton.margins, CGPoint(x: 76, y: 282))
+        XCTAssertEqual(map.ornaments.options.logo.margins, CGPoint(x: 20, y: 248))
+        XCTAssertEqual(map.ornaments.options.attributionButton.margins, CGPoint(x: 16, y: 248))
 
         let paneInsets = UIEdgeInsets(top: 0, left: 6, bottom: 83, right: 4)
         viewport.contentInsets = paneInsets
         viewport.layoutIfNeeded()
         XCTAssertEqual(viewport.visibleSafeMapRect, CGRect(x: 6, y: 240, width: 365, height: 117))
-        XCTAssertEqual(map.ornaments.options.logo.margins, CGPoint(x: 14, y: 331))
-        XCTAssertEqual(map.ornaments.options.attributionButton.margins, CGPoint(x: 72, y: 331))
+        XCTAssertEqual(map.ornaments.options.logo.margins, CGPoint(x: 14, y: 248))
+        XCTAssertEqual(map.ornaments.options.attributionButton.margins, CGPoint(x: 12, y: 248))
         XCTAssertEqual(map.bounds.size, renderSize)
         XCTAssertEqual(viewport.visibleMapRect, CGRect(x: 0, y: 240, width: 375, height: 200))
         XCTAssertEqual(safeRects.count, 2)
@@ -86,7 +86,9 @@ final class MapViewportViewTests: XCTestCase {
         for ornament in [map.ornaments.logoView, map.ornaments.attributionButton] {
             let frame = map.convert(ornament.bounds, from: ornament)
             XCTAssertFalse(frame.isEmpty)
-            XCTAssertTrue(safe.contains(frame), "Required ornament must remain in the visible safe viewport")
+            XCTAssertTrue(viewport.ornamentSafeMapRect.contains(frame), "Required ornament must remain above the home indicator")
+            XCTAssertEqual(frame.maxY, viewport.ornamentSafeMapRect.maxY - 8, accuracy: 1)
+            XCTAssertGreaterThan(frame.maxY, safe.maxY, "Camera padding must not lift the corner ornaments")
         }
     }
 
@@ -165,6 +167,7 @@ final class MapViewportViewTests: XCTestCase {
         host.view.addSubview(viewport)
         viewport.layoutIfNeeded()
         let safe = viewport.visibleSafeMapRect
+        let initialOrnamentRect = viewport.ornamentSafeMapRect
         let initialCamera = map.mapboxMap.cameraState
         var viewportChanges = 0
         viewport.onViewportChange = { viewportChanges += 1 }
@@ -196,7 +199,7 @@ final class MapViewportViewTests: XCTestCase {
             XCTAssertTrue(safe.contains(map.convert(ornament.bounds, from: ornament)))
         }
         viewport.updateOrnaments()
-        XCTAssertEqual(viewport.ornamentSafeMapRect, safe)
+        XCTAssertEqual(viewport.ornamentSafeMapRect, initialOrnamentRect)
         XCTAssertEqual(viewportChanges, 0)
         XCTAssertEqual(map.mapboxMap.cameraState, initialCamera)
         map.layoutIfNeeded()

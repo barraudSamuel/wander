@@ -26,7 +26,17 @@ example, project file, documentation, or logs. CI can supply the
 `MAPBOX_ACCESS_TOKEN` Xcode build setting through its build configuration;
 avoid echoing the value in build logs.
 
-`MapboxConfiguration` creates the Streets map. The Debug simulator scenario
+`MapboxConfiguration` creates Clair pastel with a local Mapbox Standard import.
+The map stays light regardless of the iOS appearance. The style fixes Mercator,
+disables 3D objects and uses day lighting with light gray land, white roads,
+pastel green parks and pale blue water. Basemap POI labels and landmark icons
+are hidden. Native surrounding controls retain their system appearance.
+No appearance observer, theme selector or separate Studio style is required.
+The [appearance plan](plans/2026-10-10-theme-mapbox-systeme.md) records the
+withdrawal of the dark variant; the
+[original light palette plan](plans/2026-10-10-style-clair-pastel-mapbox.md)
+retains the original validation.
+The Debug simulator scenario
 `-debug-social-map` uses a local background style when no public token is
 configured. That mode exercises Mapbox gestures and annotations, but does not
 verify downloaded tiles. With a configured token, the scenario loads the real
@@ -38,12 +48,17 @@ and merges their contours with the native H3 `cellsToLinkedMultiPolygon`
 function. CoreGraphics then subtracts those contours from a Mercator world
 path, preserving unexplored holes and handling the date line.
 `MapboxFogRenderer` sends the resulting polygons to a
-GeoJSON source and fill layer. `MapAnnotationStore` hosts the existing UIKit
+GeoJSON source and fill layer. The fog has full emissive strength to preserve
+its tint independently of Standard's lighting. It stays outside the basemap
+slots, above the base map on the flat Mercator projection.
+`MapAnnotationStore` hosts the existing UIKit
 markers as Mapbox view annotations. The camera and viewport controllers use
 Mapbox's native camera and projection APIs; the existing SwiftData and Firebase
 exploration data remain unchanged. The compass sits below the profile button.
-The logo and attribution track the presented native sheet's frame without
-changing the map viewport or camera.
+The logo sits at the bottom left and attribution at the bottom right, 8 points
+above the system safe-area bottom. Camera padding for floating controls does
+not raise them. They track the presented native sheet's frame without changing
+the map viewport or camera.
 
 The migration is validated on the existing iPhone 17 Pro simulator. The app
 and test targets compile with the official SDKs. All 113 selected native tests

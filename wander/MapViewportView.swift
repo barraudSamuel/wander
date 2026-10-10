@@ -120,7 +120,13 @@ final class MapViewportView: UIView {
     }
 
     func updateOrnaments(occludedBelow sheetTop: CGFloat? = nil) {
-        let safe = visibleSafeMapRect
+        // Bottom controls reserve camera space, but the corner ornaments can sit
+        // below them. Keep the system home-indicator inset and sheet occlusion.
+        let systemSafe = convert(bounds.inset(by: safeAreaInsets), to: mapView)
+            .intersection(visibleMapRect)
+        let safe = CGRect(x: visibleSafeMapRect.minX, y: visibleSafeMapRect.minY,
+                          width: visibleSafeMapRect.width,
+                          height: max(0, systemSafe.maxY - visibleSafeMapRect.minY))
         guard !safe.isEmpty, !safe.isInfinite else { return }
         let bottomEdge = sheetTop.map { min(safe.maxY, max(safe.minY, $0)) } ?? safe.maxY
         ornamentSafeMapRect = CGRect(x: safe.minX, y: safe.minY,
@@ -141,7 +147,7 @@ final class MapViewportView: UIView {
         ornaments.logo.position = .bottomLeft
         ornaments.logo.margins = CGPoint(x: left, y: bottom)
         ornaments.attributionButton.position = .bottomRight
-        ornaments.attributionButton.margins = CGPoint(x: right + MapImageButton.side + 16, y: bottom)
+        ornaments.attributionButton.margins = CGPoint(x: right, y: bottom)
         if mapView.ornaments.options != ornaments {
             mapView.ornaments.options = ornaments
         }
