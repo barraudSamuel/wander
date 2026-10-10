@@ -116,6 +116,8 @@ struct ContentView: View {
     @State private var friendsScrollRequest: ProfileFriendsScrollRequest?
     @State private var isProfileAccountFlowActive = false
     @State private var outingComposerVisible = false
+    @State private var creationMenuVisible = false
+    @State private var shouldCreateEventAfterMenuDismissal = false
     @State private var outingComposerDetent =
         OutingComposerPresentation.creationDetent
     @State private var editingOutingEvent: OutingPlan?
@@ -148,7 +150,16 @@ struct ContentView: View {
         return GeometryReader { geometry in
             MotionDockView(
                 isEventsPresented: areEventsPresented,
-                onToggleEvents: toggleEvents
+                onToggleEvents: toggleEvents,
+                mapActions: MapDockActions(
+                    isCreationEnabled: !outingComposerVisible
+                        && selectedMapDetail?.profile == nil && !isProfileAccountFlowActive,
+                    onRecenter: { centerOnUser = true },
+                    onCreate: {
+                        guard !creationMenuVisible else { return }
+                        creationMenuVisible = true
+                    }
+                )
             ) {
                 exploreTab()
             }
@@ -481,7 +492,7 @@ struct ContentView: View {
                     centerOnFriendUserID: $centerOnFriendUserID,
                     centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
                     pendingOutingCoordinate: pendingOutingCoordinate,
-                    isEventCreationEnabled: !outingComposerVisible && !isProfileAccountFlowActive,
+                    isEventCreationEnabled: !outingComposerVisible && !creationMenuVisible && !isProfileAccountFlowActive,
                     selectedOutingPlanEventID: selectedOutingPlanEventID,
                     selectedMapProfile: selectedMapDetail?.profile,
                     friendCameraRequest: friendCameraRequest,
@@ -515,20 +526,27 @@ struct ContentView: View {
                 .padding(.trailing, 16)
                 .modifier(MapContentSafeArea(edges: [.top, .trailing]))
             }
-            .overlay(alignment: .bottomTrailing) {
-                Button {
-                    centerOnUser = true
-                } label: {
-                    Image(systemName: "scope")
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.large)
-                .accessibilityLabel("Recentrer la carte sur ma position")
-                .padding(.horizontal)
-                .padding(.bottom, 20)
-                .modifier(MapContentSafeArea(edges: [.bottom, .horizontal]))
+        }
+        .sheet(isPresented: $creationMenuVisible, onDismiss: {
+            guard shouldCreateEventAfterMenuDismissal else { return }
+            shouldCreateEventAfterMenuDismissal = false
+            guard !isProfileAccountFlowActive, selectedMapDetail?.profile == nil else {
+                pendingOutingCoordinate = nil
+                return
             }
+            selectedMapDetail = nil
+            editingOutingEvent = nil
+            outingComposerDetent = OutingComposerPresentation.creationDetent
+            outingComposerVisible = true
+        }) {
+            CreationMenuView(canCreateEvent: locationTracker.lastLocation != nil) {
+                guard let coordinate = locationTracker.lastLocation?.coordinate else { return }
+                pendingOutingCoordinate = coordinate
+                shouldCreateEventAfterMenuDismissal = true
+                creationMenuVisible = false
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .sheet(
             isPresented: $outingComposerVisible,

@@ -17,6 +17,7 @@ extension EnvironmentValues {
 struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
     let isEventsPresented: Bool
     let onToggleEvents: () -> Void
+    var mapActions: MapDockActions? = nil
     @State private var contentInsets = UIEdgeInsets.zero
     @ViewBuilder let content: () -> Content
 
@@ -31,6 +32,7 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
             coordinator?.contentInsets.wrappedValue = insets
         }
         controller.synchronizeEvents(isPresented: isEventsPresented)
+        controller.synchronizeMapActions(mapActions)
         return controller
     }
 
@@ -39,6 +41,7 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
         controller.onToggleEvents = onToggleEvents
         controller.updateContent(rootView(context: context))
         controller.synchronizeEvents(isPresented: isEventsPresented)
+        controller.synchronizeMapActions(mapActions)
     }
 
     private func rootView(context: Context) -> AnyView {
@@ -65,6 +68,8 @@ final class NativeMapTabController: UIViewController {
     private static let eventsButtonSide: CGFloat = 56
     private let contentController: UIHostingController<AnyView>
     private let eventsController = UIHostingController(rootView: AnyView(EmptyView()))
+    private let createController = UIHostingController(rootView: AnyView(EmptyView()))
+    private let recenterController = UIHostingController(rootView: AnyView(EmptyView()))
     private var isEventsPresented = false
     private var eventsButton: UIView { eventsController.view }
     private var reportedContentInsets = UIEdgeInsets.zero
@@ -125,6 +130,27 @@ final class NativeMapTabController: UIViewController {
         ])
         eventsController.didMove(toParent: self)
         updateEventsButtonAppearance()
+
+        for controller in [createController, recenterController] {
+            addChild(controller)
+            controller.safeAreaRegions = []
+            controller.sizingOptions = .intrinsicContentSize
+            controller.view.backgroundColor = .clear
+            controller.view.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(controller.view)
+            controller.didMove(toParent: self)
+        }
+        NSLayoutConstraint.activate([
+            createController.view.centerYAnchor.constraint(equalTo: eventsButton.centerYAnchor),
+            createController.view.trailingAnchor.constraint(
+                // Leave room for Mapbox's attribution control at the bottom right.
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -56
+            ),
+            recenterController.view.centerXAnchor.constraint(equalTo: createController.view.centerXAnchor),
+            recenterController.view.bottomAnchor.constraint(
+                equalTo: createController.view.topAnchor, constant: -12
+            )
+        ])
     }
 
     override func viewDidLayoutSubviews() {
@@ -183,5 +209,42 @@ final class NativeMapTabController: UIViewController {
 
     func updateContent(_ content: AnyView) {
         contentController.rootView = content
+    }
+
+    func synchronizeMapActions(_ actions: MapDockActions?) {
+        loadViewIfNeeded()
+        createController.view.isHidden = actions == nil
+        recenterController.view.isHidden = actions == nil
+        guard let actions else { return }
+
+        createController.rootView = AnyView(
+            mapActionButton(
+                symbol: "plus", label: "Créer", identifier: "map-create",
+                isEnabled: actions.isCreationEnabled, action: actions.onCreate
+            )
+        )
+        recenterController.rootView = AnyView(
+            mapActionButton(
+                symbol: "scope", label: "Recentrer la carte sur ma position", identifier: "map-recenter",
+                isEnabled: true, action: actions.onRecenter
+            )
+        )
+    }
+
+    private func mapActionButton(
+        symbol: String, label: String, identifier: String,
+        isEnabled: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier)
+        .disabled(!isEnabled)
+        .fixedSize()
     }
 }
