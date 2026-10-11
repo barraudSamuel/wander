@@ -1092,6 +1092,45 @@ final class MapSocialGestureUITests: XCTestCase {
         assertFullMap(window: app.windows.firstMatch.frame)
     }
 
+    func testMapActionsStayRightAndRecenterFollowsResizedMap() {
+        launchDetailScenario(["many-events", "fullscreen", "naver"])
+        let create = app.buttons["map-create"]
+        let recenter = app.buttons["map-recenter"]
+        XCTAssertTrue(create.waitForExistence(timeout: 3))
+        XCTAssertTrue(recenter.waitForExistence(timeout: 3))
+        let fullRecenterFrame = recenter.frame
+        let createFrame = create.frame
+        XCTAssertEqual(createFrame.midY, eventsButton.frame.midY, accuracy: 2)
+        XCTAssertLessThanOrEqual(app.windows.firstMatch.frame.maxX - createFrame.maxX, 24)
+        XCTAssertEqual(recenter.frame.midX, createFrame.midX, accuracy: 2)
+        XCTAssertLessThan(recenter.frame.maxY, createFrame.minY)
+        attachScreenshot(named: "Actions à droite sur la carte complète")
+
+        openEventList()
+        XCTAssertLessThan(recenter.frame.maxY, map.frame.maxY - 32)
+        XCTAssertEqual(create.frame, createFrame)
+        let splitRecenterY = recenter.frame.midY
+        let handle = eventsResizeHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        handle.press(forDuration: 0.05, thenDragTo: handle.withOffset(CGVector(dx: 0, dy: -90)))
+        XCTAssertEqual(recenter.frame.midY, splitRecenterY - 90, accuracy: 8)
+        XCTAssertTrue(recenter.isHittable)
+        XCTAssertEqual(create.frame, createFrame)
+        attachScreenshot(named: "Actions à droite avec viseur dans la carte redimensionnée")
+
+        eventsResizeHandle.tap()
+        XCTAssertTrue(recenter.isHittable)
+        XCTAssertTrue(map.frame.contains(recenter.frame))
+        XCTAssertFalse(recenter.frame.intersects(app.buttons["map-own-profile"].frame))
+        attachScreenshot(named: "Viseur dans la carte avec liste agrandie")
+        eventsResizeHandle.tap()
+        XCTAssertTrue(eventsResizeHandle.waitForNonExistence(timeout: 3))
+        XCTAssertEqual(recenter.frame.minY, fullRecenterFrame.minY, accuracy: 2)
+        recenter.tap()
+        XCTAssertTrue(recenter.waitForExistence(timeout: 3))
+        create.tap()
+        XCTAssertTrue(app.buttons["creation-menu-naver"].waitForExistence(timeout: 3))
+    }
+
     func testEventListScrollDoesNotResizeOrFoldPane() {
         launchDetailScenario(["many-events", "fullscreen"])
         openEventList()

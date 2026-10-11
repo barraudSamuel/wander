@@ -6,7 +6,16 @@ private struct MapNavigationBottomInsetKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
 
+private struct MapRecenterActionKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
 extension EnvironmentValues {
+    var mapRecenterAction: (() -> Void)? {
+        get { self[MapRecenterActionKey.self] }
+        set { self[MapRecenterActionKey.self] = newValue }
+    }
+
     var mapNavigationBottomInset: CGFloat {
         get { self[MapNavigationBottomInsetKey.self] }
         set { self[MapNavigationBottomInsetKey.self] = newValue }
@@ -47,6 +56,7 @@ struct NativeMapTabView<Content: View>: UIViewControllerRepresentable {
     private func rootView(context: Context) -> AnyView {
         AnyView(content()
             .environment(\.modelContext, context.environment.modelContext)
+            .environment(\.mapRecenterAction, mapActions?.onRecenter)
             .environment(\.mapNavigationBottomInset, contentInsets.bottom)
             .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: contentInsets.top) }
             .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: contentInsets.bottom) }
@@ -69,7 +79,6 @@ final class NativeMapTabController: UIViewController {
     private let contentController: UIHostingController<AnyView>
     private let eventsController = UIHostingController(rootView: AnyView(EmptyView()))
     private let createController = UIHostingController(rootView: AnyView(EmptyView()))
-    private let recenterController = UIHostingController(rootView: AnyView(EmptyView()))
     private var isEventsPresented = false
     private var eventsButton: UIView { eventsController.view }
     private var reportedContentInsets = UIEdgeInsets.zero
@@ -131,24 +140,17 @@ final class NativeMapTabController: UIViewController {
         eventsController.didMove(toParent: self)
         updateEventsButtonAppearance()
 
-        for controller in [createController, recenterController] {
-            addChild(controller)
-            controller.safeAreaRegions = []
-            controller.sizingOptions = .intrinsicContentSize
-            controller.view.backgroundColor = .clear
-            controller.view.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(controller.view)
-            controller.didMove(toParent: self)
-        }
+        addChild(createController)
+        createController.safeAreaRegions = []
+        createController.sizingOptions = .intrinsicContentSize
+        createController.view.backgroundColor = .clear
+        createController.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(createController.view)
+        createController.didMove(toParent: self)
         NSLayoutConstraint.activate([
             createController.view.centerYAnchor.constraint(equalTo: eventsButton.centerYAnchor),
             createController.view.trailingAnchor.constraint(
-                // Leave room for Mapbox's attribution control at the bottom right.
-                equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -56
-            ),
-            recenterController.view.centerXAnchor.constraint(equalTo: createController.view.centerXAnchor),
-            recenterController.view.bottomAnchor.constraint(
-                equalTo: createController.view.topAnchor, constant: -12
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16
             )
         ])
     }
@@ -214,27 +216,25 @@ final class NativeMapTabController: UIViewController {
     func synchronizeMapActions(_ actions: MapDockActions?) {
         loadViewIfNeeded()
         createController.view.isHidden = actions == nil
-        recenterController.view.isHidden = actions == nil
         guard let actions else { return }
 
         createController.rootView = AnyView(
-            mapActionButton(
+            MapActionButton(
                 symbol: "plus", label: "Créer", identifier: "map-create",
                 isEnabled: actions.isCreationEnabled, action: actions.onCreate
             )
         )
-        recenterController.rootView = AnyView(
-            mapActionButton(
-                symbol: "scope", label: "Recentrer la carte sur ma position", identifier: "map-recenter",
-                isEnabled: true, action: actions.onRecenter
-            )
-        )
     }
+}
 
-    private func mapActionButton(
-        symbol: String, label: String, identifier: String,
-        isEnabled: Bool, action: @escaping () -> Void
-    ) -> some View {
+struct MapActionButton: View {
+    let symbol: String
+    let label: String
+    let identifier: String
+    var isEnabled = true
+    let action: () -> Void
+
+    var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .frame(width: 24, height: 24)
@@ -242,6 +242,7 @@ final class NativeMapTabController: UIViewController {
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
         .controlSize(.large)
+        .tint(.primary)
         .accessibilityLabel(label)
         .accessibilityIdentifier(identifier)
         .disabled(!isEnabled)

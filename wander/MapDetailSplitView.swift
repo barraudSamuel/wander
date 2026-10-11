@@ -14,6 +14,7 @@ private enum ListSeparatorMetrics {
 struct MapDetailSplitView<Events: View, MapContent: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.mapNavigationBottomInset) private var navigationBottomInset
+    @Environment(\.mapRecenterAction) private var recenterAction
     @ScaledMetric(relativeTo: .body) private var minimumPaneHeight = 140
     @State private var listPosition: Position = .third
     @State private var listDragOrigin: DragOrigin?
@@ -168,7 +169,7 @@ struct MapDetailSplitView<Events: View, MapContent: View>: View {
                     withTransaction(Transaction(animation: nil)) {
                         listDragOrigin = origin
                         listPosition = .custom(min(
-                            availableHeight * 0.85,
+                            maximumListHeight(availableHeight: availableHeight),
                             max(0, proposedHeight)
                         ) / availableHeight)
                     }
@@ -192,7 +193,7 @@ struct MapDetailSplitView<Events: View, MapContent: View>: View {
             if height < listClosingThreshold(availableHeight: availableHeight) {
                 bottomList = nil
             } else {
-                listPosition = .custom(min(availableHeight * 0.85, height) / availableHeight)
+                listPosition = .custom(min(maximumListHeight(availableHeight: availableHeight), height) / availableHeight)
             }
         }
     }
@@ -203,7 +204,7 @@ struct MapDetailSplitView<Events: View, MapContent: View>: View {
 
     private func listHeight(availableHeight: CGFloat) -> CGFloat {
         if case .custom(let fraction) = listPosition {
-            return min(availableHeight * 0.85, max(0, availableHeight * fraction))
+            return min(maximumListHeight(availableHeight: availableHeight), max(0, availableHeight * fraction))
         }
         return height(for: listPosition, availableHeight: availableHeight)
     }
@@ -219,9 +220,15 @@ struct MapDetailSplitView<Events: View, MapContent: View>: View {
     }
 
     private func clampedHeight(_ height: CGFloat, availableHeight: CGFloat) -> CGFloat {
-        let maximum = availableHeight * 0.85
+        let maximum = maximumListHeight(availableHeight: availableHeight)
         let minimum = min(minimumPaneHeight + 80, maximum)
         return min(maximum, max(minimum, height))
+    }
+
+    private func maximumListHeight(availableHeight: CGFloat) -> CGFloat {
+        // Leave room for the profile, recenter action and attribution in the map.
+        let mapControlsHeight = recenterAction == nil ? 0 : minimumPaneHeight + 32
+        return min(availableHeight * 0.85, max(0, availableHeight - mapControlsHeight))
     }
 
     private struct DragOrigin {
@@ -255,6 +262,7 @@ struct MapDetailSplitView<Events: View, MapContent: View>: View {
 /// Animate the list geometry while keeping the map at its native rendering size.
 private struct MapDetailArrangement<Lists: View, MapContent: View, ListHandle: View>:
     View, Animatable {
+    @Environment(\.mapRecenterAction) private var recenterAction
     var listHeight: CGFloat
     var listSeparatorHeight: CGFloat
     let windowSize: CGSize
@@ -296,6 +304,17 @@ private struct MapDetailArrangement<Lists: View, MapContent: View, ListHandle: V
                 ))
                 .frame(maxWidth: .infinity)
                 .frame(height: mapHeight)
+                .overlay(alignment: .bottomTrailing) {
+                    if let recenterAction {
+                        MapActionButton(
+                            symbol: "scope", label: "Recentrer la carte sur ma position",
+                            identifier: "map-recenter", action: recenterAction
+                        )
+                        .padding(.trailing, safeInsets.trailing + 16)
+                        // Reserve the attribution row; in full screen, also clear the +.
+                        .padding(.bottom, (safeInsets.bottom + 4) * (1 - expansion) + 44 * expansion)
+                    }
+                }
                 .clipShape(mapShape)
                 .contentShape(mapShape)
 
