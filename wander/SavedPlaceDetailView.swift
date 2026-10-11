@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SavedPlaceDetailView: View {
     let place: SavedPlace
+    let onCreateEvent: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -21,6 +22,12 @@ struct SavedPlaceDetailView: View {
                             Label("Position à vérifier sur Naver", systemImage: "mappin.slash")
                         }
                     }
+                }
+                Section {
+                    Button(action: onCreateEvent) {
+                        Label("Créer un événement", systemImage: "calendar.badge.plus")
+                    }
+                    .accessibilityIdentifier("saved-place-create-event")
                 }
                 if let url = place.naverURL {
                     Section {

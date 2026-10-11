@@ -33,6 +33,9 @@ final class NaverImportUITests: XCTestCase {
         for _ in 0..<2 {
             pin.tap()
             XCTAssertTrue(app.staticTexts["Adresse de démonstration"].waitForExistence(timeout: 3))
+            if !app.links["Ouvrir dans Naver"].exists && !app.buttons["Ouvrir dans Naver"].exists {
+                app.swipeUp()
+            }
             XCTAssertTrue(app.links["Ouvrir dans Naver"].exists || app.buttons["Ouvrir dans Naver"].exists)
             app.buttons["Fermer"].tap()
             XCTAssertTrue(app.staticTexts["Adresse de démonstration"].waitForNonExistence(timeout: 3))
@@ -60,6 +63,87 @@ final class NaverImportUITests: XCTestCase {
         app.buttons["naver-import-close"].tap()
         XCTAssertTrue(field.waitForNonExistence(timeout: 3))
         XCTAssertFalse(app.buttons["saved-place-test-cafe"].exists)
+    }
+
+    func testCreateEventFromSavedAddressPrefillsPlaceAndCategory() {
+        loadPreview()
+        XCTAssertTrue(app.staticTexts["1 adresse à importer"].waitForExistence(timeout: 5))
+        submit.tap()
+        XCTAssertTrue(app.staticTexts["Import terminé"].waitForExistence(timeout: 5))
+        submit.tap()
+
+        let pin = app.buttons["saved-place-test-cafe"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        for attempt in 0..<2 {
+            pin.tap()
+            let create = app.buttons["saved-place-create-event"]
+            XCTAssertTrue(create.waitForExistence(timeout: 3))
+            create.tap()
+            XCTAssertTrue(app.navigationBars["Nouvel événement"].waitForExistence(timeout: 5))
+            let placeText = composerPlaceText
+            XCTAssertTrue(placeText.contains("Café de test"))
+            XCTAssertTrue(placeText.contains("Adresse de démonstration"))
+            XCTAssertTrue(placeText.contains("37.56650, 126.97400"))
+            XCTAssertTrue(app.buttons["outing-category"].staticTexts["Café"].exists)
+            XCTAssertTrue(app.buttons["Publier"].isEnabled)
+            screenshot("Événement prérempli depuis une adresse")
+            if attempt == 0 {
+                app.buttons["Fermer"].tap()
+                XCTAssertTrue(app.navigationBars["Nouvel événement"].waitForNonExistence(timeout: 3))
+            } else {
+                app.buttons["outing-category"].tap()
+                app.buttons["Repas"].tap()
+                XCTAssertTrue(app.buttons["outing-category"].staticTexts["Repas"].exists)
+                app.buttons["Publier"].tap()
+            }
+        }
+        XCTAssertTrue(app.navigationBars["Nouvel événement"].waitForNonExistence(timeout: 5))
+        app.buttons["motion-dock-events"].tap()
+        let publishedCard = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "event-card-", "Lieu : Café de test."
+        )).firstMatch
+        XCTAssertTrue(publishedCard.waitForExistence(timeout: 5))
+        XCTAssertTrue(publishedCard.label.contains("un repas"))
+        XCTAssertTrue(publishedCard.staticTexts["Adresse de démonstration"].exists)
+    }
+
+    func testUnknownCategoryRequiresChoiceAndLongPlaceCanPublish() {
+        loadPreview("https://naver.me/long-place")
+        XCTAssertTrue(app.staticTexts["1 adresse à importer"].waitForExistence(timeout: 5))
+        submit.tap()
+        XCTAssertTrue(app.staticTexts["Import terminé"].waitForExistence(timeout: 5))
+        submit.tap()
+        let pin = app.buttons["saved-place-test-cafe"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        pin.tap()
+        XCTAssertTrue(app.navigationBars["Adresse enregistrée"].waitForExistence(timeout: 3))
+        app.swipeUp()
+        let create = app.buttons["saved-place-create-event"]
+        XCTAssertTrue(create.waitForExistence(timeout: 3))
+        create.tap()
+        XCTAssertTrue(app.navigationBars["Nouvel événement"].waitForExistence(timeout: 5))
+        app.swipeUp()
+        let placeText = composerPlaceText
+        XCTAssertTrue(placeText.contains(String(repeating: "N", count: 120)))
+        XCTAssertFalse(placeText.contains(String(repeating: "N", count: 121)))
+        XCTAssertTrue(placeText.contains(String(repeating: "A", count: 200)))
+        XCTAssertFalse(placeText.contains(String(repeating: "A", count: 201)))
+        XCTAssertFalse(app.buttons["Publier"].isEnabled)
+        let category = app.buttons["outing-category"]
+        if !category.isHittable { app.swipeUp() }
+        category.tap()
+        app.buttons["Café"].tap()
+        XCTAssertTrue(app.buttons["Publier"].isEnabled)
+        app.buttons["Publier"].tap()
+        XCTAssertTrue(app.navigationBars["Nouvel événement"].waitForNonExistence(timeout: 5))
+    }
+
+    private var composerPlaceText: String {
+        let place = app.descendants(matching: .any).matching(identifier: "outing-place")
+        XCTAssertGreaterThan(place.count, 0)
+        return place.allElementsBoundByIndex.map {
+            $0.label + ($0.value as? String ?? "")
+        }.joined(separator: " ")
     }
 
     func testMapLabelsAppearOnZoomAndDisappearOnZoomOut() {
@@ -182,10 +266,10 @@ final class NaverImportUITests: XCTestCase {
         XCTAssertTrue(app.textFields["naver-import-link"].waitForExistence(timeout: 3))
     }
 
-    private func loadPreview() {
+    private func loadPreview(_ link: String = "https://naver.me/demo") {
         let field = app.textFields["naver-import-link"]
         field.tap()
-        field.typeText("https://naver.me/demo")
+        field.typeText(link)
         submit.tap()
     }
 

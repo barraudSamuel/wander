@@ -123,6 +123,7 @@ struct ContentView: View {
     @State private var shouldImportNaverAfterMenuDismissal = false
     @State private var naverImportVisible = false
     @State private var selectedSavedPlace: SavedPlace?
+    @State private var pendingOutingSavedPlace: SavedPlace?
     @State private var outingComposerDetent =
         OutingComposerPresentation.creationDetent
     @State private var editingOutingEvent: OutingPlan?
@@ -577,10 +578,25 @@ struct ContentView: View {
             NaverImportView(ownerID: ownerID)
                 .presentationDetents([.large])
         }
-        .sheet(item: $selectedSavedPlace) { place in
+        .sheet(item: $selectedSavedPlace, onDismiss: {
+            guard let place = pendingOutingSavedPlace else { return }
+            guard place.ownerID == ownerID, !isProfileAccountFlowActive,
+                  CLLocationCoordinate2DIsValid(place.coordinate) else {
+                pendingOutingSavedPlace = nil
+                return
+            }
+            selectedMapDetail = nil
+            editingOutingEvent = nil
+            pendingOutingCoordinate = place.coordinate
+            outingComposerDetent = OutingComposerPresentation.creationDetent
+            outingComposerVisible = true
+        }) { place in
             if place.ownerID == ownerID {
-                SavedPlaceDetailView(place: place)
-                    .presentationDetents([.medium, .large])
+                SavedPlaceDetailView(place: place, onCreateEvent: {
+                    pendingOutingSavedPlace = place
+                    selectedSavedPlace = nil
+                })
+                .presentationDetents([.medium, .large])
             }
         }
         .sheet(
@@ -588,11 +604,13 @@ struct ContentView: View {
             onDismiss: {
                 editingOutingEvent = nil
                 pendingOutingCoordinate = nil
+                pendingOutingSavedPlace = nil
             }
         ) {
             OutingPlanComposerView(
                 displayName: displayName.isEmpty ? "Explorer" : displayName,
                 initialCoordinate: pendingOutingCoordinate,
+                initialSavedPlace: pendingOutingSavedPlace,
                 editingEvent: editingOutingEvent
             )
             .modifier(

@@ -77,10 +77,13 @@ struct DebugSocialMapScenarioView: View {
                     }
                     return NaverImportedList(name: "Cafés de test", places: [
                         NaverImportedPlace(
-                            id: "test-cafe", name: "Café de test", address: "Adresse de démonstration",
+                            id: "test-cafe",
+                            name: input.contains("long-place") ? String(repeating: "N", count: 130) : "Café de test",
+                            address: input.contains("long-place") ? String(repeating: "A", count: 210) : "Adresse de démonstration",
                             latitude: 37.5665, longitude: 126.974,
                             naverURL: URL(string: "https://map.naver.com/")!,
-                            isUnavailable: true, hasLocationWarning: true, categoryCode: "CAFE"
+                            isUnavailable: true, hasLocationWarning: true,
+                            categoryCode: input.contains("long-place") ? "UNKNOWN" : "CAFE"
                         )
                     ])
                 })
@@ -161,6 +164,8 @@ struct DebugSocialMapScenarioView: View {
 private struct DebugSocialMapScene: View {
     @Query private var savedPlaces: [SavedPlace]
     @State private var selectedSavedPlace: SavedPlace?
+    @State private var pendingOutingSavedPlace: SavedPlace?
+    @State private var savedPlaceComposerVisible = false
     private static let coordinate = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
     private static let ownerID = "scenario-owner"
     private static let arguments = Set(ProcessInfo.processInfo.arguments)
@@ -496,38 +501,62 @@ private struct DebugSocialMapScene: View {
         } message: {
             Text("L’action a été reçue par le scénario local.")
         }
-        .sheet(item: $selectedSavedPlace) { place in
-            SavedPlaceDetailView(place: place)
-                .presentationDetents([.medium, .large])
+        .sheet(item: $selectedSavedPlace, onDismiss: {
+            if pendingOutingSavedPlace != nil {
+                savedPlaceComposerVisible = true
+            }
+        }) { place in
+            SavedPlaceDetailView(place: place, onCreateEvent: {
+                pendingOutingSavedPlace = place
+                selectedSavedPlace = nil
+            })
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $savedPlaceComposerVisible, onDismiss: {
+            pendingOutingSavedPlace = nil
+        }) {
+            OutingPlanComposerView(
+                displayName: "Moi", initialCoordinate: nil,
+                initialSavedPlace: pendingOutingSavedPlace,
+                operations: composerOperations,
+                showsNotificationSettings: false
+            )
+            .presentationDetents([.fraction(0.66), .large])
         }
         .sheet(item: $editingEvent) { event in
             OutingPlanComposerView(
                 displayName: "Moi", initialCoordinate: nil, editingEvent: event,
-                operations: OutingPlanComposerOperations(
-                    fetchEvent: { plans[$0] },
-                    publish: { draft, existing in
-                        guard let existing else { throw OutingPlanValidationError.invalidEventID }
-                        let updated = OutingPlan(
-                            eventID: existing.eventID, eventIDValue: existing.eventIDValue,
-                            ownerID: existing.ownerID, publicationID: existing.publicationID,
-                            publicationIDValue: existing.publicationIDValue,
-                            displayName: draft.displayName, placeName: draft.placeName,
-                            address: draft.address, category: draft.category,
-                            coordinate: draft.coordinate, plannedAt: draft.plannedAt,
-                            publishedAt: existing.publishedAt, updatedAt: Date(),
-                            timeZoneIdentifier: draft.timeZoneIdentifier
-                        )
-                        plans[updated.id] = updated
-                        return updated
-                    },
-                    cancel: { id in
-                        plans.removeValue(forKey: id)
-                        if selectedDetail == .outing(id) { selectedDetail = nil }
-                    }
-                ),
+                operations: composerOperations,
                 showsNotificationSettings: false
             )
         }
+    }
+
+    private var composerOperations: OutingPlanComposerOperations {
+        OutingPlanComposerOperations(
+            fetchEvent: { plans[$0] },
+            publish: { draft, existing in
+                let draft = try OutingPlan.validatedDraft(draft)
+                let eventID = existing?.eventID ?? UUID()
+                let publicationID = existing?.publicationID ?? UUID()
+                let updated = OutingPlan(
+                    eventID: eventID, eventIDValue: existing?.eventIDValue ?? eventID.uuidString,
+                    ownerID: existing?.ownerID ?? Self.ownerID, publicationID: publicationID,
+                    publicationIDValue: existing?.publicationIDValue ?? publicationID.uuidString,
+                    displayName: draft.displayName, placeName: draft.placeName,
+                    address: draft.address, category: draft.category,
+                    coordinate: draft.coordinate, plannedAt: draft.plannedAt,
+                    publishedAt: existing?.publishedAt ?? Date(), updatedAt: Date(),
+                    timeZoneIdentifier: draft.timeZoneIdentifier
+                )
+                plans[updated.id] = updated
+                return updated
+            },
+            cancel: { id in
+                plans.removeValue(forKey: id)
+                if selectedDetail == .outing(id) { selectedDetail = nil }
+            }
+        )
     }
 
     private var friendsList: some View {
@@ -633,7 +662,7 @@ private struct DebugSocialMapScene: View {
             centerOnUser: $centerOnUser, resetMapOrientation: $resetOrientation,
             centerOnFriendUserID: $centerOnFriend, centerOnOutingPlanEventID: $centerOnEvent,
             pendingOutingCoordinate: pendingCreatedEventCoordinate,
-            isEventCreationEnabled: editingEvent == nil && selectedSavedPlace == nil,
+            isEventCreationEnabled: editingEvent == nil && selectedSavedPlace == nil && !savedPlaceComposerVisible,
             selectedOutingPlanEventID: selectedDetail?.outingEventID,
             selectedMapProfile: selectedDetail?.profile,
             friendCameraRequest: friendCameraRequest,

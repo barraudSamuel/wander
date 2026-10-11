@@ -60,22 +60,25 @@ struct OutingPlanComposerView: View {
     private let operations: OutingPlanComposerOperations
     private let showsNotificationSettings: Bool
     private let eventIDToLoad: String?
+    private let hasInitialSavedPlace: Bool
 
     init(
         displayName: String,
         initialCoordinate: CLLocationCoordinate2D?,
+        initialSavedPlace: SavedPlace? = nil,
         editingEvent: OutingPlan? = nil,
         operations: OutingPlanComposerOperations? = nil,
         showsNotificationSettings: Bool = true
     ) {
         let referenceDate = Date()
-        let coordinate = editingEvent?.coordinate ?? initialCoordinate
+        let coordinate = editingEvent?.coordinate ?? initialSavedPlace?.coordinate ?? initialCoordinate
 
         self.displayName = displayName
         self.planningWindowStart = referenceDate
         self.operations = operations ?? .live
         self.showsNotificationSettings = showsNotificationSettings
         self.eventIDToLoad = editingEvent?.eventIDValue
+        self.hasInitialSavedPlace = initialSavedPlace != nil
         _loadingState = State(
             initialValue: editingEvent == nil ? .loaded : .loading
         )
@@ -83,10 +86,17 @@ struct OutingPlanComposerView: View {
         _selectedCoordinate = State(initialValue: coordinate)
         _placeName = State(
             initialValue: editingEvent?.placeName
+                ?? initialSavedPlace.map {
+                    String($0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .prefix(OutingPlan.maximumPlaceNameLength))
+                }
                 ?? (coordinate == nil ? "" : "Lieu sélectionné")
         )
-        _address = State(initialValue: editingEvent?.address)
-        _category = State(initialValue: editingEvent?.category)
+        _address = State(initialValue: editingEvent?.address ?? initialSavedPlace.map {
+            String($0.address.trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix(OutingPlan.maximumAddressLength))
+        })
+        _category = State(initialValue: editingEvent?.category ?? initialSavedPlace?.outingCategory)
         _plannedAt = State(
             initialValue: editingEvent?.plannedAt
                 ?? referenceDate.addingTimeInterval(60 * 60)
@@ -190,6 +200,7 @@ struct OutingPlanComposerView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .accessibilityIdentifier("outing-place")
                 } else {
                     Label(
                         "Le point sélectionné n’est plus disponible.",
@@ -214,6 +225,7 @@ struct OutingPlanComposerView: View {
                         .tag(category as OutingCategory?)
                     }
                 }
+                .accessibilityIdentifier("outing-category")
             } header: {
                 Text("Type de sortie")
             }
@@ -303,7 +315,7 @@ struct OutingPlanComposerView: View {
     private func loadEvent() async {
         guard let eventIDToLoad else {
             loadingState = .loaded
-            if let selectedCoordinate {
+            if !hasInitialSavedPlace, let selectedCoordinate {
                 resolveAddress(for: selectedCoordinate)
             }
             return

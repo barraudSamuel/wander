@@ -22,6 +22,14 @@ final class SavedPlace {
         NaverPlaceCategory.label(for: categoryCode, name: categoryName)
     }
 
+    var outingCategory: OutingCategory? {
+        switch categoryCode {
+        case "CAFE": .coffee
+        case "DINING": .meal
+        default: nil
+        }
+    }
+
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }

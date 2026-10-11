@@ -4,6 +4,17 @@ import XCTest
 
 @MainActor
 final class SavedPlaceTests: XCTestCase {
+    func testOutingCategoryUsesOnlyRecognizedNaverCodes() {
+        let saved = SavedPlace(place: place(), ownerID: "first", listName: "Test")
+        XCTAssertEqual(saved.outingCategory, .coffee)
+        saved.categoryCode = "DINING"
+        XCTAssertEqual(saved.outingCategory, .meal)
+        saved.categoryCode = "UNKNOWN"
+        XCTAssertNil(saved.outingCategory)
+        saved.categoryCode = nil
+        XCTAssertNil(saved.outingCategory)
+    }
+
     func testReimportUpdatesWithoutDuplicatesAndSeparatesAccounts() throws {
         let container = try ModelContainer(for: SavedPlace.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let context = container.mainContext
