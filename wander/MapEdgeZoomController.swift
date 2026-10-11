@@ -206,6 +206,8 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
     static func excludesTouch(on view: UIView?, mapView: MapboxMaps.MapView) -> Bool {
         var candidate = view
         while let current = candidate, current !== mapView {
+            // An address tap still opens its sheet; a vertical edge drag can zoom.
+            if current is SavedPlaceAnnotationView { return false }
             if current is UIControl || current is MapAnnotationView
                 || current === mapView.ornaments.compassView
                 || current === mapView.ornaments.scaleBarView
@@ -231,7 +233,8 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        edge != nil && pan.numberOfTouches == 1 && Self.isVertical(pan.translation(in: pan.view))
+        // Translation can still be zero when UIKit asks whether the pan may begin.
+        edge != nil && pan.numberOfTouches == 1 && Self.isVertical(pan.velocity(in: pan.view))
     }
 
     func gestureRecognizer(

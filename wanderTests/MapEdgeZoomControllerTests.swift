@@ -410,6 +410,24 @@ final class MapEdgeZoomControllerTests: XCTestCase {
         XCTAssertFalse(MapEdgeZoomController.excludesTouch(on: map, mapView: map))
     }
 
+    func testSavedAddressAllowsEdgeZoomThroughItsIconAndLabels() {
+        let map = makeMap()
+        let address = SavedPlaceAnnotationView(annotation: nil, reuseIdentifier: nil)
+        map.addSubview(address)
+        XCTAssertTrue(address.accessibilityTraits.contains(.button))
+        XCTAssertFalse(MapEdgeZoomController.excludesTouch(on: address, mapView: map))
+        for child in address.subviews {
+            XCTAssertFalse(MapEdgeZoomController.excludesTouch(on: child, mapView: map))
+        }
+
+        let button = UIButton()
+        let label = UILabel()
+        address.addSubview(button)
+        button.addSubview(label)
+        XCTAssertTrue(MapEdgeZoomController.excludesTouch(on: label, mapView: map))
+        XCTAssertTrue(MapEdgeZoomController.excludesTouch(on: map.ornaments.attributionButton, mapView: map))
+    }
+
     func testGesturePriorityStaysInsideMapAndUninstallRestoresHierarchy() throws {
         let map = makeMap()
         let viewport = MapViewportView(mapView: map, renderSize: nil)

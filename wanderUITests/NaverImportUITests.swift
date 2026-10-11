@@ -186,6 +186,83 @@ final class NaverImportUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Adresse de démonstration"].waitForExistence(timeout: 3))
     }
 
+    func testLeftEdgeZoomStartsOnSavedAddressIconAndStillAllowsTap() {
+        checkEdgeZoomStartingOnAddress(atRightEdge: false)
+    }
+
+    func testRightEdgeZoomStartsOnSavedAddressLabelAndStillAllowsTap() {
+        checkEdgeZoomStartingOnAddress(atRightEdge: true)
+    }
+
+    private func checkEdgeZoomStartingOnAddress(atRightEdge: Bool) {
+        loadPreview()
+        XCTAssertTrue(app.staticTexts["1 adresse à importer"].waitForExistence(timeout: 5))
+        submit.tap()
+        XCTAssertTrue(app.staticTexts["Import terminé"].waitForExistence(timeout: 5))
+        submit.tap()
+        let pin = app.buttons["saved-place-test-cafe"]
+        let map = app.otherElements["map-visible-viewport"].firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        let expanded = NSPredicate { _, _ in pin.exists && pin.frame.width > 44 }
+        expectation(for: expanded, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+
+        func dragFromAddress(translationY: CGFloat, onLabel: Bool) {
+            let touchOffset = onLabel ? pin.frame.width - 20 : 22
+            let edgeX = atRightEdge ? map.frame.maxX - 22 : map.frame.minX + 22
+            // Keep the entire positioning gesture onscreen and horizontal.
+            let offsetX = edgeX - pin.frame.minX - touchOffset
+            if abs(offsetX) > 10 {
+                let panStart = map.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                    dx: pin.frame.minX + 22 - map.frame.minX,
+                    dy: pin.frame.midY - map.frame.minY
+                ))
+                let panEnd = panStart.withOffset(CGVector(dx: offsetX, dy: 0))
+                panStart.press(forDuration: 0.05, thenDragTo: panEnd, withVelocity: .slow,
+                               thenHoldForDuration: 0.2)
+            }
+            // Native panning consumes a few points before recognition; the touch must
+            // land inside the 44-point edge band, not at an exact screen coordinate.
+            let aligned = NSPredicate { _, _ in
+                pin.exists && abs(pin.frame.minX + touchOffset - edgeX) <= 21
+            }
+            expectation(for: aligned, evaluatedWith: app)
+            waitForExpectations(timeout: 5)
+            // Nearby event hit targets can overlap the top of the compact address.
+            let point = CGPoint(x: pin.frame.minX + touchOffset, y: pin.frame.maxY - 10)
+            XCTAssertTrue(pin.frame.contains(point))
+            XCTAssertLessThanOrEqual(abs(point.x - edgeX), 21)
+            screenshot("Adresse sous le pouce avant glissement")
+            let start = map.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: point.x - map.frame.minX, dy: point.y - map.frame.minY
+            ))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: translationY)),
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
+            XCTAssertFalse(app.navigationBars["Adresse enregistrée"].exists)
+        }
+
+        dragFromAddress(translationY: 180, onLabel: atRightEdge)
+        let compact = NSPredicate { _, _ in pin.exists && abs(pin.frame.width - 44) < 1 }
+        expectation(for: compact, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        screenshot("Dézoom depuis l’adresse")
+
+        dragFromAddress(translationY: -180, onLabel: false)
+        if atRightEdge {
+            // All focus coordinates are offscreen in this framing, so zooming in
+            // keeps the center and moves the address beyond the right edge.
+            XCTAssertTrue(pin.waitForNonExistence(timeout: 5))
+            screenshot("Zoom avant depuis l’adresse au bord droit")
+            app.buttons["map-recenter"].tap()
+        }
+        expectation(for: expanded, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        screenshot("Zoom depuis l’adresse")
+        pin.tap()
+        XCTAssertTrue(app.navigationBars["Adresse enregistrée"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Adresse de démonstration"].exists)
+    }
+
     func testDenseAddressesHideOverlapsAndOpenDetails() {
         let field = app.textFields["naver-import-link"]
         field.tap()
