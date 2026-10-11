@@ -2,7 +2,7 @@
 //  WanderMigrationPlan.swift
 //  wander
 //
-//  Historical schemas preserve existing exploration while V3 removes heatmap data.
+//  Historical schemas preserve exploration and saved places; V5 adds categories.
 //
 
 import Foundation
@@ -64,15 +64,63 @@ enum WanderSchemaV3: VersionedSchema {
     }
 }
 
+enum WanderSchemaV4: VersionedSchema {
+    static var versionIdentifier = Schema.Version(4, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        [DiscoveredCell.self, SavedPlace.self]
+    }
+
+    @Model
+    final class SavedPlace {
+        @Attribute(.unique) var id: String
+        var ownerID: String
+        var sourceID: String
+        var name: String
+        var address: String
+        var latitude: Double
+        var longitude: Double
+        var naverURLString: String
+        var isUnavailable: Bool
+        var hasLocationWarning: Bool
+        var listName: String
+
+        init(place: NaverImportedPlace, ownerID: String, listName: String) {
+            // Length prefix keeps account/source pairs unique even when identifiers contain separators.
+            self.id = "\(ownerID.utf8.count):\(ownerID):\(place.id)"
+            self.ownerID = ownerID
+            self.sourceID = place.id
+            self.name = place.name
+            self.address = place.address
+            self.latitude = place.latitude
+            self.longitude = place.longitude
+            self.naverURLString = place.naverURL.absoluteString
+            self.isUnavailable = place.isUnavailable
+            self.hasLocationWarning = place.hasLocationWarning
+            self.listName = listName
+        }
+    }
+}
+
+enum WanderSchemaV5: VersionedSchema {
+    static var versionIdentifier = Schema.Version(5, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        [DiscoveredCell.self, SavedPlace.self]
+    }
+}
+
 enum WanderMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [WanderSchemaV1.self, WanderSchemaV2.self, WanderSchemaV3.self]
+        [WanderSchemaV1.self, WanderSchemaV2.self, WanderSchemaV3.self, WanderSchemaV4.self, WanderSchemaV5.self]
     }
 
     static var stages: [MigrationStage] {
         [
             .lightweight(fromVersion: WanderSchemaV1.self, toVersion: WanderSchemaV2.self),
-            .lightweight(fromVersion: WanderSchemaV2.self, toVersion: WanderSchemaV3.self)
+            .lightweight(fromVersion: WanderSchemaV2.self, toVersion: WanderSchemaV3.self),
+            .lightweight(fromVersion: WanderSchemaV3.self, toVersion: WanderSchemaV4.self),
+            .lightweight(fromVersion: WanderSchemaV4.self, toVersion: WanderSchemaV5.self)
         ]
     }
 }

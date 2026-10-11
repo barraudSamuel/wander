@@ -88,6 +88,7 @@ private struct ExternalMapNavigationDestination: Equatable {
 }
 
 struct ContentView: View {
+    let ownerID: String
     private static let navigationDateTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "fr_FR")
@@ -105,6 +106,7 @@ struct ContentView: View {
     @StateObject private var locationPushService = LocationPushService.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
+    @Query private var savedPlaces: [SavedPlace]
     @AppStorage("profile.displayName") private var displayName = ""
     @AppStorage(ProfileAvatar.storageKey) private var avatarID = ""
     @AppStorage(ProfileColor.storageKey) private var profileColorHex = ""
@@ -118,6 +120,9 @@ struct ContentView: View {
     @State private var outingComposerVisible = false
     @State private var creationMenuVisible = false
     @State private var shouldCreateEventAfterMenuDismissal = false
+    @State private var shouldImportNaverAfterMenuDismissal = false
+    @State private var naverImportVisible = false
+    @State private var selectedSavedPlace: SavedPlace?
     @State private var outingComposerDetent =
         OutingComposerPresentation.creationDetent
     @State private var editingOutingEvent: OutingPlan?
@@ -142,6 +147,11 @@ struct ContentView: View {
     @State private var drawerExpanded = false
     #endif
 
+    init(ownerID: String) {
+        self.ownerID = ownerID
+        _savedPlaces = Query(filter: #Predicate<SavedPlace> { $0.ownerID == ownerID }, sort: \SavedPlace.name)
+    }
+
     var body: some View {
         lifecycleObservedContent
     }
@@ -152,7 +162,7 @@ struct ContentView: View {
                 isEventsPresented: areEventsPresented,
                 onToggleEvents: toggleEvents,
                 mapActions: MapDockActions(
-                    isCreationEnabled: !outingComposerVisible
+                    isCreationEnabled: !outingComposerVisible && !naverImportVisible && selectedSavedPlace == nil
                         && selectedMapDetail?.profile == nil && !isProfileAccountFlowActive,
                     onRecenter: { centerOnUser = true },
                     onCreate: {
@@ -484,6 +494,7 @@ struct ContentView: View {
                     refreshingFriendLocationUserIDs:
                         locationPushService.refreshingFriendUserIDs,
                     outingPlans: outingPlans,
+                    savedPlaces: savedPlaces,
                     userDisplayName: displayName,
                     userAvatarID: avatarID,
                     userProfileColorHex: profileColorHex,
@@ -492,13 +503,18 @@ struct ContentView: View {
                     centerOnFriendUserID: $centerOnFriendUserID,
                     centerOnOutingPlanEventID: $centerOnOutingPlanEventID,
                     pendingOutingCoordinate: pendingOutingCoordinate,
-                    isEventCreationEnabled: !outingComposerVisible && !creationMenuVisible && !isProfileAccountFlowActive,
+                    isEventCreationEnabled: !outingComposerVisible && !creationMenuVisible && !naverImportVisible && selectedSavedPlace == nil && !isProfileAccountFlowActive,
                     selectedOutingPlanEventID: selectedOutingPlanEventID,
                     selectedMapProfile: selectedMapDetail?.profile,
                     friendCameraRequest: friendCameraRequest,
                     onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
                     onSelectFriend: presentMapFriendProfile,
                     onSelectOutingPlan: selectOuting,
+                    onSelectSavedPlace: { id in
+                        guard !naverImportVisible, !outingComposerVisible else { return }
+                        selectedMapDetail = nil
+                        selectedSavedPlace = savedPlaces.first { $0.id == id }
+                    },
                     onCreateEvent: { coordinate in
                         guard !isProfileAccountFlowActive,
                               CLLocationCoordinate2DIsValid(coordinate),
@@ -528,6 +544,12 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $creationMenuVisible, onDismiss: {
+            if shouldImportNaverAfterMenuDismissal {
+                shouldImportNaverAfterMenuDismissal = false
+                guard !isProfileAccountFlowActive else { return }
+                naverImportVisible = true
+                return
+            }
             guard shouldCreateEventAfterMenuDismissal else { return }
             shouldCreateEventAfterMenuDismissal = false
             guard !isProfileAccountFlowActive, selectedMapDetail?.profile == nil else {
@@ -539,14 +561,27 @@ struct ContentView: View {
             outingComposerDetent = OutingComposerPresentation.creationDetent
             outingComposerVisible = true
         }) {
-            CreationMenuView(canCreateEvent: locationTracker.lastLocation != nil) {
+            CreationMenuView(canCreateEvent: locationTracker.lastLocation != nil, onCreateEvent: {
                 guard let coordinate = locationTracker.lastLocation?.coordinate else { return }
                 pendingOutingCoordinate = coordinate
                 shouldCreateEventAfterMenuDismissal = true
                 creationMenuVisible = false
-            }
+            }, onImportNaver: {
+                shouldImportNaverAfterMenuDismissal = true
+                creationMenuVisible = false
+            })
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $naverImportVisible) {
+            NaverImportView(ownerID: ownerID)
+                .presentationDetents([.large])
+        }
+        .sheet(item: $selectedSavedPlace) { place in
+            if place.ownerID == ownerID {
+                SavedPlaceDetailView(place: place)
+                    .presentationDetents([.medium, .large])
+            }
         }
         .sheet(
             isPresented: $outingComposerVisible,
@@ -1505,5 +1540,5 @@ private struct ThreeFingerPressCatcher: UIViewRepresentable {
 #endif
 
 #Preview {
-    ContentView()
+    ContentView(ownerID: "preview")
 }

@@ -2,10 +2,25 @@
 import CoreLocation
 import H3
 import SwiftUI
+import SwiftData
 import UIKit
 
 enum DebugSocialMapScenario {
     static let isEnabled = ProcessInfo.processInfo.arguments.contains("-debug-social-map")
+
+    static func denseNaverList() -> NaverImportedList {
+        let places: [NaverImportedPlace] = (0..<36).map { (index: Int) in
+            let latitude = 37.5665 + Double(index / 6 - 2) * 0.0004
+            let longitude = 126.974 + Double(index % 6 - 2) * 0.0005
+            return NaverImportedPlace(
+                id: String(format: "dense-%02d", index), name: "Café du quartier \(index + 1)",
+                address: "Adresse de démonstration", latitude: latitude, longitude: longitude,
+                naverURL: URL(string: "https://map.naver.com/")!,
+                isUnavailable: false, hasLocationWarning: false, categoryCode: "CAFE"
+            )
+        }
+        return NaverImportedList(name: "Quartier de test", places: places)
+    }
 }
 
 /// Uses production map, event cards, profiles and composer views. Only the data source is local.
@@ -30,12 +45,60 @@ struct DebugSocialMapScenarioView: View {
     }()
     @State private var friendCode = ""
     @State private var selectedDetail = DebugSocialMapScene.initialSelection
+    @State private var creationMenuVisible = false
+    @State private var importAfterDismissal = false
+    @State private var naverImportVisible = false
 
     var body: some View {
+        sceneContent
+            .sheet(isPresented: $creationMenuVisible, onDismiss: {
+                if importAfterDismissal {
+                    importAfterDismissal = false
+                    naverImportVisible = true
+                }
+            }) {
+                CreationMenuView(canCreateEvent: false, onCreateEvent: {}, onImportNaver: {
+                    importAfterDismissal = true
+                    creationMenuVisible = false
+                })
+                .presentationDetents([.medium])
+            }
+            .sheet(isPresented: $naverImportVisible) {
+                NaverImportView(ownerID: "scenario-owner", loadList: { input in
+                    if ProcessInfo.processInfo.arguments.contains("-debug-social-map-naver-live") {
+                        return try await NaverListImporter().load(input)
+                    }
+                    try await Task.sleep(for: .milliseconds(500))
+                    if input.contains("invalid") {
+                        throw URLError(.notConnectedToInternet)
+                    }
+                    if input.contains("dense") {
+                        return DebugSocialMapScenario.denseNaverList()
+                    }
+                    return NaverImportedList(name: "Cafés de test", places: [
+                        NaverImportedPlace(
+                            id: "test-cafe", name: "Café de test", address: "Adresse de démonstration",
+                            latitude: 37.5665, longitude: 126.974,
+                            naverURL: URL(string: "https://map.naver.com/")!,
+                            isUnavailable: true, hasLocationWarning: true, categoryCode: "CAFE"
+                        )
+                    ])
+                })
+                .presentationDetents([.large])
+            }
+    }
+
+    @ViewBuilder private var sceneContent: some View {
         if ProcessInfo.processInfo.arguments.contains("-debug-social-map-fullscreen") {
             MotionDockView(
                 isEventsPresented: areEventsPresented,
-                onToggleEvents: toggleEvents
+                onToggleEvents: toggleEvents,
+                mapActions: ProcessInfo.processInfo.arguments.contains("-debug-social-map-naver")
+                    ? MapDockActions(
+                        isCreationEnabled: !naverImportVisible && selectedDetail?.profile == nil,
+                        onRecenter: { revision += 1 },
+                        onCreate: { creationMenuVisible = true }
+                    ) : nil
             ) {
                 mapScene
             }
@@ -96,6 +159,8 @@ struct DebugSocialMapScenarioView: View {
 }
 
 private struct DebugSocialMapScene: View {
+    @Query private var savedPlaces: [SavedPlace]
+    @State private var selectedSavedPlace: SavedPlace?
     private static let coordinate = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
     private static let ownerID = "scenario-owner"
     private static let arguments = Set(ProcessInfo.processInfo.arguments)
@@ -431,6 +496,10 @@ private struct DebugSocialMapScene: View {
         } message: {
             Text("L’action a été reçue par le scénario local.")
         }
+        .sheet(item: $selectedSavedPlace) { place in
+            SavedPlaceDetailView(place: place)
+                .presentationDetents([.medium, .large])
+        }
         .sheet(item: $editingEvent) { event in
             OutingPlanComposerView(
                 displayName: "Moi", initialCoordinate: nil, editingEvent: event,
@@ -558,12 +627,13 @@ private struct DebugSocialMapScene: View {
             cityBoundaryCoordinates: [],
             friendLocations: friends, freshFriendLocationUserIDs: Set(friends.keys),
             outingPlans: presentations,
+            savedPlaces: savedPlaces.filter { $0.ownerID == Self.ownerID },
             userDisplayName: profileName, userAvatarID: avatarID,
             userProfileColorHex: "#3478F6",
             centerOnUser: $centerOnUser, resetMapOrientation: $resetOrientation,
             centerOnFriendUserID: $centerOnFriend, centerOnOutingPlanEventID: $centerOnEvent,
             pendingOutingCoordinate: pendingCreatedEventCoordinate,
-            isEventCreationEnabled: editingEvent == nil,
+            isEventCreationEnabled: editingEvent == nil && selectedSavedPlace == nil,
             selectedOutingPlanEventID: selectedDetail?.outingEventID,
             selectedMapProfile: selectedDetail?.profile,
             friendCameraRequest: friendCameraRequest,
@@ -576,6 +646,10 @@ private struct DebugSocialMapScene: View {
                 bottomList = .events
                 selectedDetail = .outing($0)
                 eventScrollRequest = MapEventScrollRequest(eventID: $0)
+            },
+            onSelectSavedPlace: { id in
+                selectedDetail = nil
+                selectedSavedPlace = savedPlaces.first { $0.id == id }
             },
             onCreateEvent: { coordinate in
                 guard Self.hasArgument("create-event"),

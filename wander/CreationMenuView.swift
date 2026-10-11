@@ -3,6 +3,7 @@ import SwiftUI
 struct CreationMenuView: View {
     let canCreateEvent: Bool
     let onCreateEvent: () -> Void
+    var onImportNaver: () -> Void = {}
 
     var body: some View {
         List {
@@ -21,7 +22,10 @@ struct CreationMenuView: View {
             .disabled(!canCreateEvent)
             .accessibilityIdentifier("creation-menu-event")
 
-            upcomingAction("Importer des adresses", systemImage: "square.and.arrow.down")
+            Button(action: onImportNaver) {
+                Label("Importer adresse Naver", systemImage: "square.and.arrow.down")
+            }
+            .accessibilityIdentifier("creation-menu-naver")
             upcomingAction("Créer un groupe d’amis", systemImage: "person.3")
 
             if !canCreateEvent {

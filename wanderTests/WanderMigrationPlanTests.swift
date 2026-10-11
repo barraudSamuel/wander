@@ -71,6 +71,81 @@ final class WanderMigrationPlanTests: XCTestCase {
         }
     }
 
+    func testV3MigrationAddsSavedPlacesWithoutChangingExploration() throws {
+        let url = try makeStoreURL()
+        try autoreleasepool {
+            let schema = Schema(versionedSchema: WanderSchemaV3.self)
+            let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none))
+            for original in originalCells {
+                container.mainContext.insert(DiscoveredCell(id: original.id, resolution: original.resolution,
+                                                            firstSeenAt: original.firstSeenAt, lastSeenAt: original.lastSeenAt))
+            }
+            try container.mainContext.save()
+        }
+        try assertOriginalCells(at: url)
+        try autoreleasepool {
+            let container = try currentContainer(at: url)
+            XCTAssertEqual(try container.mainContext.fetchCount(FetchDescriptor<SavedPlace>()), 0)
+        }
+        try assertOriginalCells(at: url)
+    }
+
+    func testV4MigrationPreservesFavoritesAndExplorationThenEnrichesOnReimport() throws {
+        for schema in [
+            Schema(versionedSchema: WanderSchemaV4.self),
+            Schema([DiscoveredCell.self, WanderSchemaV4.SavedPlace.self])
+        ] {
+            let url = try makeStoreURL()
+            let imported = NaverImportedPlace(id: "place:1", name: "Café conservé", address: "Adresse conservée",
+                                             latitude: 37, longitude: 127,
+                                             naverURL: URL(string: "https://map.naver.com/p/entry/place/1")!,
+                                             isUnavailable: true, hasLocationWarning: true,
+                                             categoryCode: "CAFE", categoryName: "카페")
+            try autoreleasepool {
+                let container = try ModelContainer(for: schema, configurations:
+                    ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none))
+                for original in originalCells {
+                    container.mainContext.insert(DiscoveredCell(id: original.id, resolution: original.resolution,
+                                                                firstSeenAt: original.firstSeenAt, lastSeenAt: original.lastSeenAt))
+                }
+                for owner in ["first", "second"] {
+                    container.mainContext.insert(WanderSchemaV4.SavedPlace(place: imported, ownerID: owner, listName: "Ancienne liste"))
+                }
+                try container.mainContext.save()
+            }
+            try assertOriginalCells(at: url)
+            try autoreleasepool {
+                let container = try currentContainer(at: url)
+                let places = try container.mainContext.fetch(FetchDescriptor<SavedPlace>())
+                XCTAssertEqual(places.count, 2)
+                for place in places {
+                    XCTAssertEqual(place.id, "\(place.ownerID.utf8.count):\(place.ownerID):place:1")
+                    XCTAssertEqual(place.name, imported.name)
+                    XCTAssertEqual(place.address, imported.address)
+                    XCTAssertEqual(place.latitude, imported.latitude)
+                    XCTAssertEqual(place.longitude, imported.longitude)
+                    XCTAssertEqual(place.naverURL, imported.naverURL)
+                    XCTAssertEqual(place.listName, "Ancienne liste")
+                    XCTAssertTrue(place.isUnavailable)
+                    XCTAssertTrue(place.hasLocationWarning)
+                    XCTAssertNil(place.categoryCode)
+                    XCTAssertNil(place.categoryName)
+                    XCTAssertEqual(place.categoryLabel, "Adresse")
+                }
+                XCTAssertEqual(try SavedPlace.importList(NaverImportedList(name: "Cafés", places: [imported]),
+                                                        ownerID: "first", into: container.mainContext), 0)
+            }
+            try autoreleasepool {
+                let container = try currentContainer(at: url)
+                let places = try container.mainContext.fetch(FetchDescriptor<SavedPlace>())
+                XCTAssertEqual(places.count, 2)
+                XCTAssertEqual(places.first { $0.ownerID == "first" }?.categoryLabel, "Café")
+                XCTAssertNil(places.first { $0.ownerID == "second" }?.categoryCode)
+            }
+            try assertOriginalCells(at: url)
+        }
+    }
+
     // Store teardown also needs a Swift task context on the test runner.
     func testFreshStorePersistsUpsertsAndRemoteRestoration() async throws {
         let url = try makeStoreURL()
@@ -81,7 +156,7 @@ final class WanderMigrationPlanTests: XCTestCase {
 
         try autoreleasepool {
             let container = try currentContainer(at: url)
-            let attributes = try XCTUnwrap(container.schema.entities.first).attributesByName
+            let attributes = try XCTUnwrap(container.schema.entities.first { $0.name == "DiscoveredCell" }).attributesByName
             XCTAssertEqual(Set(attributes.keys), ["id", "resolution", "firstSeenAt", "lastSeenAt"])
 
             let store = DiscoveredCellStore()
@@ -136,7 +211,7 @@ final class WanderMigrationPlanTests: XCTestCase {
 
     private func currentContainer(at url: URL) throws -> ModelContainer {
         try ModelContainer(
-            for: DiscoveredCell.self,
+            for: DiscoveredCell.self, SavedPlace.self,
             migrationPlan: WanderMigrationPlan.self,
             configurations: ModelConfiguration(url: url, cloudKitDatabase: .none)
         )

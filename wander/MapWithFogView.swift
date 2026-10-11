@@ -875,6 +875,9 @@ struct MapWithFogView: UIViewRepresentable {
     /// Events belonging to the account and accepted friends, keyed by event ID.
     var outingPlans: [String: MapOutingPlan] = [:]
 
+    /// Private addresses imported by the active account.
+    var savedPlaces: [SavedPlace] = []
+
     var userDisplayName = ""
     var userAvatarID = ""
     var userProfileColorHex = ""
@@ -917,6 +920,8 @@ struct MapWithFogView: UIViewRepresentable {
 
     /// Presents the information for the selected outing.
     var onSelectOutingPlan: (String) -> Void = { _ in }
+
+    var onSelectSavedPlace: (String) -> Void = { _ in }
 
     /// Hides the detail card when that outing is deselected.
     var onDeselectOutingPlan: (String) -> Void = { _ in }
@@ -989,6 +994,7 @@ struct MapWithFogView: UIViewRepresentable {
         context.coordinator.refreshingFriendUserIDs =
             refreshingFriendLocationUserIDs
         context.coordinator.onSelectOutingPlan = onSelectOutingPlan
+        context.coordinator.onSelectSavedPlace = onSelectSavedPlace
         context.coordinator.onDeselectOutingPlan = onDeselectOutingPlan
         context.coordinator.onCreateEvent = onCreateEvent
         context.coordinator.setEventCreationEnabled(isEventCreationEnabled)
@@ -1001,6 +1007,7 @@ struct MapWithFogView: UIViewRepresentable {
         updateFriendAnnotations(on: uiView, context: context)
         updateUserLocationAnnotation(on: uiView, context: context)
         updateOutingPlanAnnotations(on: uiView, context: context)
+        updateSavedPlaceAnnotations(context: context)
         context.coordinator.synchronizeSocialProximityAnnotations(on: uiView)
         updateDraftOutingAnnotation(on: uiView, context: context)
         context.coordinator.refreshMapOffscreenIndicators(on: uiView)
@@ -1110,6 +1117,7 @@ struct MapWithFogView: UIViewRepresentable {
             fogColor: fogColor,
             onSelectFriend: onSelectFriend,
             onSelectOutingPlan: onSelectOutingPlan,
+            onSelectSavedPlace: onSelectSavedPlace,
             onDeselectOutingPlan: onDeselectOutingPlan,
             onCreateEvent: onCreateEvent
         )
@@ -1326,6 +1334,51 @@ struct MapWithFogView: UIViewRepresentable {
         }
     }
 
+    private func updateSavedPlaceAnnotations(context: Context) {
+        let coordinator = context.coordinator
+        let validPlaces = savedPlaces.filter {
+            CLLocationCoordinate2DIsValid($0.coordinate)
+        }
+        let currentIDs = Set(validPlaces.map(\.id))
+        let removedIDs = Set(coordinator.savedPlaceAnnotations.keys).subtracting(currentIDs)
+        let removals = removedIDs.compactMap {
+            coordinator.savedPlaceAnnotations.removeValue(forKey: $0)
+        }
+        if !removals.isEmpty {
+            coordinator.annotationStore.removeAnnotations(removals)
+        }
+
+        var additions: [SavedPlaceAnnotation] = []
+        var coordinatesChanged = false
+        for place in validPlaces {
+            if let annotation = coordinator.savedPlaceAnnotations[place.id] {
+                if annotation.coordinate.latitude != place.latitude
+                    || annotation.coordinate.longitude != place.longitude {
+                    annotation.coordinate = place.coordinate
+                    coordinatesChanged = true
+                }
+                if annotation.title != place.name || annotation.categoryCode != place.categoryCode
+                    || annotation.categoryName != place.categoryName {
+                    annotation.title = place.name
+                    annotation.categoryCode = place.categoryCode
+                    annotation.categoryName = place.categoryName
+                    (coordinator.annotationStore.view(for: annotation)
+                        as? SavedPlaceAnnotationView)?.configure(with: annotation)
+                }
+            } else {
+                let annotation = SavedPlaceAnnotation(place: place)
+                coordinator.savedPlaceAnnotations[place.id] = annotation
+                additions.append(annotation)
+            }
+        }
+        if !additions.isEmpty {
+            coordinator.annotationStore.addAnnotations(additions)
+        }
+        if coordinatesChanged {
+            coordinator.annotationStore.synchronizeCoordinates()
+        }
+    }
+
     private func updateDraftOutingAnnotation(
         on mapView: MapboxMaps.MapView,
         context: Context
@@ -1526,6 +1579,8 @@ struct MapWithFogView: UIViewRepresentable {
         var friendPresenceInfoByUserID: [String: MapUserPresenceInfo] = [:]
         var refreshingFriendUserIDs: Set<String> = []
         fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
+        fileprivate var savedPlaceAnnotations: [String: SavedPlaceAnnotation] = [:]
+        private var savedPlaceLabelsVisible = false
         fileprivate var draftOutingAnnotation: DraftOutingAnnotation?
         fileprivate var lastFocusedDraftCoordinate: MapUserCoordinate?
         private var lastRequestedDetailSelection: MapSocialClusterMemberID?
@@ -1533,6 +1588,7 @@ struct MapWithFogView: UIViewRepresentable {
         var onSelectOwnProfile: () -> Void = {}
         var onSelectFriend: (String) -> Void
         var onSelectOutingPlan: (String) -> Void
+        var onSelectSavedPlace: (String) -> Void
         var onDeselectOutingPlan: (String) -> Void
         var onCreateEvent: (CLLocationCoordinate2D) -> Void
         private weak var longPressRecognizer: UILongPressGestureRecognizer?
@@ -1604,12 +1660,14 @@ struct MapWithFogView: UIViewRepresentable {
             fogColor: UIColor,
             onSelectFriend: @escaping (String) -> Void,
             onSelectOutingPlan: @escaping (String) -> Void,
+            onSelectSavedPlace: @escaping (String) -> Void = { _ in },
             onDeselectOutingPlan: @escaping (String) -> Void,
             onCreateEvent: @escaping (CLLocationCoordinate2D) -> Void
         ) {
             self.fogColor = fogColor
             self.onSelectFriend = onSelectFriend
             self.onSelectOutingPlan = onSelectOutingPlan
+            self.onSelectSavedPlace = onSelectSavedPlace
             self.onDeselectOutingPlan = onDeselectOutingPlan
             self.onCreateEvent = onCreateEvent
         }
@@ -2477,6 +2535,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func cameraDidChange(on mapView: MapboxMaps.MapView) {
+            updateSavedPlaceLabelVisibility(on: mapView)
             let userInitiated = hasActiveMapGesture(in: mapView)
             if userInitiated {
                 clearImmediateSocialSelection()
@@ -2489,6 +2548,18 @@ struct MapWithFogView: UIViewRepresentable {
                     && userInitiated
             )
             refreshMapOffscreenIndicators(on: mapView)
+        }
+
+        private func updateSavedPlaceLabelVisibility(on mapView: MapboxMaps.MapView) {
+            let visible = SavedPlaceAnnotationView.shouldShowLabels(
+                at: mapView.mapboxMap.cameraState.zoom, wasVisible: savedPlaceLabelsVisible
+            )
+            guard visible != savedPlaceLabelsVisible else { return }
+            savedPlaceLabelsVisible = visible
+            for annotation in savedPlaceAnnotations.values {
+                (annotationStore.view(for: annotation) as? SavedPlaceAnnotationView)?
+                    .setLabelsVisible(visible)
+            }
         }
 
         func applyFriendCameraRequest(
@@ -2537,6 +2608,17 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MapboxMaps.MapView, viewFor annotation: MapAnnotation) -> MapAnnotationView? {
+            if let savedPlace = annotation as? SavedPlaceAnnotation {
+                let annotationView = SavedPlaceAnnotationView(
+                    annotation: savedPlace,
+                    reuseIdentifier: SavedPlaceAnnotationView.reuseIdentifier
+                )
+                annotationView.configure(with: savedPlace)
+                updateSavedPlaceLabelVisibility(on: mapView)
+                annotationView.setLabelsVisible(savedPlaceLabelsVisible)
+                return annotationView
+            }
+
             if annotation is UserLocationAnnotation {
                 let annotationView = UserLocationAnnotationView(
                         annotation: annotation,
@@ -2650,6 +2732,15 @@ struct MapWithFogView: UIViewRepresentable {
                     annotationStore.deselectAnnotation(annotation, animated: false)
                     restoreImmediateSocialSelection(on: mapView)
                 }
+                return
+            }
+            if let savedPlace = annotation as? SavedPlaceAnnotation {
+                friendCamera.cancel()
+                userCamera.stopFollowing()
+                socialProximityController.collapse(on: mapView)
+                // Release the native selection so the same pin can reopen its sheet.
+                annotationStore.deselectAnnotation(savedPlace, animated: false)
+                onSelectSavedPlace(savedPlace.placeID)
                 return
             }
             let isProgrammaticOutingSelection = annotation is OutingPlanAnnotation

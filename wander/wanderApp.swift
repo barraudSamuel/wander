@@ -20,7 +20,7 @@ struct wanderApp: App {
         if DebugSocialMapScenario.isEnabled {
             do {
                 container = try ModelContainer(
-                    for: DiscoveredCell.self,
+                    for: DiscoveredCell.self, SavedPlace.self,
                     configurations: ModelConfiguration(isStoredInMemoryOnly: true)
                 )
             } catch {
@@ -30,7 +30,10 @@ struct wanderApp: App {
         }
         #endif
         do {
-            container = try ModelContainer(for: DiscoveredCell.self, migrationPlan: WanderMigrationPlan.self)
+            container = try ModelContainer(
+                for: DiscoveredCell.self, SavedPlace.self,
+                migrationPlan: WanderMigrationPlan.self
+            )
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }
@@ -78,8 +81,9 @@ private struct WanderAuthenticatedRootView: View {
                 AuthenticationView(
                     authenticationService: authenticationService
                 )
-            } else if onboardingCompleted {
-                ContentView()
+            } else if onboardingCompleted, let ownerID = authenticationService.currentUserId {
+                ContentView(ownerID: ownerID)
+                    .id(ownerID)
             } else if !friendSyncService.isAccountBootstrapResolved {
                 AccountBootstrapView(service: friendSyncService)
             } else {
