@@ -24,7 +24,19 @@ final class SavedPlaceAnnotationView: MapAnnotationView {
     private let iconView = UIImageView()
     private let nameLabel = UILabel()
     private let typeLabel = UILabel()
-    private(set) var showsLabels = false
+    var showsLabels: Bool { labelsAllowed && !labelsOccluded }
+    private(set) var labelsAllowed = false
+    private var labelsOccluded = false
+    private var contentSize = CGSize(width: 44, height: 44)
+    private var labelWidth: CGFloat = 0
+
+    var labelCollisionRect: CGRect {
+        CGRect(x: 44, y: 6, width: labelWidth, height: 32)
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize { contentSize }
+
+    override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize { contentSize }
 
     static func shouldShowLabels(at zoom: Double, wasVisible: Bool) -> Bool {
         zoom >= (wasVisible ? 13.7 : 14)
@@ -47,6 +59,10 @@ final class SavedPlaceAnnotationView: MapAnnotationView {
         )
         nameLabel.text = annotation.title
         typeLabel.text = annotation.categoryLabel
+        labelWidth = min(160, ceil(max(
+            nameLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: 20)).width,
+            typeLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: 16)).width
+        )))
         accessibilityLabel = annotation.title
         accessibilityValue = annotation.categoryLabel
         accessibilityIdentifier = "saved-place-\(annotation.sourceID)"
@@ -54,8 +70,14 @@ final class SavedPlaceAnnotationView: MapAnnotationView {
     }
 
     func setLabelsVisible(_ visible: Bool) {
-        guard showsLabels != visible else { return }
-        showsLabels = visible
+        guard labelsAllowed != visible else { return }
+        labelsAllowed = visible
+        updateLayout()
+    }
+
+    func setLabelsOccluded(_ occluded: Bool) {
+        guard labelsOccluded != occluded else { return }
+        labelsOccluded = occluded
         updateLayout()
     }
 
@@ -82,20 +104,20 @@ final class SavedPlaceAnnotationView: MapAnnotationView {
         isAccessibilityElement = true
         accessibilityTraits = .button
         accessibilityHint = "Afficher cette adresse enregistrée"
+        clipsToBounds = true
         updateLayout()
     }
 
     private func updateLayout() {
         nameLabel.isHidden = !showsLabels
         typeLabel.isHidden = !showsLabels
-        let labelWidth = showsLabels ? min(160, ceil(max(
-            nameLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: 20)).width,
-            typeLabel.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: 16)).width
-        ))) : 0
+        let labelWidth = showsLabels ? labelCollisionRect.width : 0
         let width: CGFloat = showsLabels ? 48 + labelWidth : 44
         nameLabel.frame = CGRect(x: 44, y: 6, width: labelWidth, height: 18)
         typeLabel.frame = CGRect(x: 44, y: 24, width: labelWidth, height: 14)
-        bounds = CGRect(x: 0, y: 0, width: width, height: 44)
+        // Mapbox can assign an older frame; it must not become the next measured size.
+        contentSize = CGSize(width: width, height: 44)
+        bounds = CGRect(origin: .zero, size: contentSize)
         // Keep the icon, rather than the wider label group, on the coordinate.
         centerOffset = CGSize(width: (width - 44) / 2, height: 0)
     }

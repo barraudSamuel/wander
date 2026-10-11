@@ -280,6 +280,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
         previousTranslationY = 0
         pendingTranslationY = 0
         mapView.camera.cancelAnimations()
+        mapView.mapboxMap.beginGesture()
         onBegin()
     }
 
@@ -395,6 +396,7 @@ final class MapEdgeZoomController: NSObject, UIGestureRecognizerDelegate {
     private func finish() {
         stopFocusAnimation()
         finishesAfterFocus = false
+        if session != nil { viewport?.mapView.mapboxMap.endGesture() }
         session = nil
         isZoomingIn = nil
         edge = nil

@@ -90,6 +90,13 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
 
     private weak var mapView: MapboxMaps.MapView?
     private var entries: [ObjectIdentifier: Entry] = [:]
+    private var overlapUpdateScheduled = false
+    private var previousOverlapZoom: Double?
+    private var lastHiddenIcons: Set<ObjectIdentifier> = []
+    private var lastHiddenLabels: Set<ObjectIdentifier> = []
+    private var zoomOutHiddenIcons: Set<ObjectIdentifier> = []
+    private var zoomOutHiddenLabels: Set<ObjectIdentifier> = []
+    private var isOverlapZoomingOut = false
 
     private struct Entry {
         let view: MapAnnotationView
@@ -122,6 +129,7 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
             if let view = attach(annotation) { addedViews.append(view) }
         }
         if !addedViews.isEmpty { onDidAdd?(addedViews) }
+        updateSavedPlaceOverlap()
     }
 
     private func attach(_ annotation: MapAnnotation) -> MapAnnotationView? {
@@ -131,10 +139,14 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
         view.annotation = annotation
         let native = ViewAnnotation(coordinate: annotation.coordinate, view: view)
         native.allowOverlap = true
+        // Social markers reserve space before saved-place icons and labels.
+        native.priority = annotation is SavedPlaceAnnotation ? -1 : 0
         native.allowOverlapWithPuck = true
         native.ignoreCameraPadding = true
         let key = ObjectIdentifier(annotation)
         entries[key] = Entry(view: view, native: native, coordinate: annotation.coordinate)
+        native.onVisibilityChanged = { [weak self] _ in self?.scheduleSavedPlaceOverlapUpdate() }
+        native.onFrameChanged = { [weak self] _ in self?.scheduleSavedPlaceOverlapUpdate() }
         view.onGeometryChange = { [weak self] in self?.updateGeometry(for: key) }
         view.onActivate = { [weak self, weak annotation] in
             guard let self, let annotation else { return }
@@ -157,6 +169,7 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
             offsetY: -entry.view.centerOffset.height
         )]
         entry.native.setNeedsUpdateSize()
+        scheduleSavedPlaceOverlapUpdate()
     }
 
     func removeAnnotation(_ annotation: MapAnnotation) {
@@ -175,6 +188,7 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
             entry.native.remove()
             entry.view.prepareForReuse()
         }
+        updateSavedPlaceOverlap()
     }
 
     func selectAnnotation(_ annotation: MapAnnotation, animated: Bool) {
@@ -189,6 +203,7 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
         selectedAnnotations = [annotation]
         entry.native.priority = 1
         entry.view.setSelected(true, animated: animated)
+        updateSavedPlaceOverlap()
         onSelect?(entry.view)
     }
 
@@ -196,8 +211,9 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
         guard selectedAnnotations.contains(where: { $0 === annotation }) else { return }
         selectedAnnotations.removeAll { $0 === annotation }
         guard let entry = entries[ObjectIdentifier(annotation)] else { return }
-        entry.native.priority = 0
+        entry.native.priority = annotation is SavedPlaceAnnotation ? -1 : 0
         entry.view.setSelected(false, animated: animated)
+        updateSavedPlaceOverlap()
         onDeselect?(entry.view)
     }
 
@@ -211,7 +227,9 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
             }
             let coordinate = annotation.coordinate
             let isValid = CLLocationCoordinate2DIsValid(coordinate)
-            entry.native.visible = isValid
+            if !(annotation is SavedPlaceAnnotation) || !isValid {
+                entry.native.visible = isValid
+            }
             guard isValid,
                   coordinate.latitude != entry.coordinate.latitude
                     || coordinate.longitude != entry.coordinate.longitude else { continue }
@@ -220,6 +238,114 @@ final class MapAnnotationStore: NSObject, UIGestureRecognizerDelegate {
             entries[key] = entry
         }
         if !addedViews.isEmpty { onDidAdd?(addedViews) }
+        updateSavedPlaceOverlap()
+    }
+
+    private func scheduleSavedPlaceOverlapUpdate() {
+        guard !overlapUpdateScheduled else { return }
+        overlapUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.overlapUpdateScheduled = false
+            self.updateSavedPlaceOverlap()
+        }
+    }
+
+    func updateSavedPlaceOverlap() {
+        guard let mapView else { return }
+        let places = annotations.compactMap { $0 as? SavedPlaceAnnotation }.sorted {
+            let leftSelected = view(for: $0)?.isSelected == true
+            let rightSelected = view(for: $1)?.isSelected == true
+            if leftSelected != rightSelected { return leftSelected }
+            if $0.sourceID != $1.sourceID { return $0.sourceID < $1.sourceID }
+            return $0.placeID < $1.placeID
+        }
+        guard !places.isEmpty else { return }
+
+        let zoom = mapView.mapboxMap.cameraState.zoom
+        let moving = mapView.mapboxMap.isGestureInProgress || mapView.mapboxMap.isAnimationInProgress
+        if !moving || zoom > (previousOverlapZoom ?? zoom) + 0.000001 {
+            isOverlapZoomingOut = false
+            zoomOutHiddenIcons.removeAll()
+            zoomOutHiddenLabels.removeAll()
+        } else if zoom < (previousOverlapZoom ?? zoom) - 0.000001, !isOverlapZoomingOut {
+            isOverlapZoomingOut = true
+            zoomOutHiddenIcons = lastHiddenIcons
+            zoomOutHiddenLabels = lastHiddenLabels
+        }
+        previousOverlapZoom = zoom
+
+        func frame(for annotation: MapAnnotation, view: MapAnnotationView) -> CGRect? {
+            guard CLLocationCoordinate2DIsValid(annotation.coordinate) else { return nil }
+            let point = mapView.mapboxMap.point(for: annotation.coordinate)
+            // Mapbox returns (-1, -1) for an offscreen coordinate, not its projected position.
+            guard point.x.isFinite, point.y.isFinite, mapView.bounds.contains(point) else { return nil }
+            let rect = CGRect(x: point.x + view.centerOffset.width - view.bounds.width / 2,
+                              y: point.y + view.centerOffset.height - view.bounds.height / 2,
+                              width: view.bounds.width, height: view.bounds.height)
+            return rect.intersects(mapView.bounds) ? rect : nil
+        }
+
+        let socialRects: [CGRect] = annotations.compactMap { annotation in
+            guard !(annotation is SavedPlaceAnnotation),
+                  let view = view(for: annotation), !view.isHidden else { return nil }
+            return frame(for: annotation, view: view)
+        }
+        var occupiedIcons = socialRects
+        var visiblePlaces: [(id: ObjectIdentifier, view: SavedPlaceAnnotationView, origin: CGPoint, icon: CGRect)] = []
+        lastHiddenIcons.removeAll()
+        lastHiddenLabels.removeAll()
+        for (index, place) in places.enumerated() {
+            let id = ObjectIdentifier(place)
+            guard let entry = entries[id], let pin = entry.view as? SavedPlaceAnnotationView else { continue }
+            let selected = entry.view.isSelected
+            let priority = selected ? 1 : -index - 1
+            if entry.native.priority != priority { entry.native.priority = priority }
+            guard CLLocationCoordinate2DIsValid(place.coordinate) else {
+                if entry.native.visible { entry.native.visible = false }
+                continue
+            }
+            let point = mapView.mapboxMap.point(for: place.coordinate)
+            guard point.x.isFinite, point.y.isFinite,
+                  mapView.bounds.contains(point) else {
+                if entry.native.visible { entry.native.visible = false }
+                continue
+            }
+            let origin = CGPoint(x: point.x - 22, y: point.y - 22)
+            // Collisions use the 36 pt visual circle, not its larger touch target or name.
+            let icon = CGRect(x: origin.x + 4, y: origin.y + 4, width: 36, height: 36)
+            // A small release margin prevents visibility toggling around a collision boundary.
+            let collisionRect = entry.native.visible ? icon : icon.insetBy(dx: -4, dy: -4)
+            let visible = selected || (!zoomOutHiddenIcons.contains(id)
+                && !occupiedIcons.contains { $0.intersects(collisionRect) })
+            if entry.native.visible != visible { entry.native.visible = visible }
+            if visible {
+                occupiedIcons.append(icon)
+                visiblePlaces.append((id, pin, origin, icon))
+            } else {
+                lastHiddenIcons.insert(id)
+                if isOverlapZoomingOut { zoomOutHiddenIcons.insert(id) }
+                pin.setLabelsOccluded(true)
+            }
+        }
+
+        var occupiedLabels: [CGRect] = []
+        for candidate in visiblePlaces {
+            let pin = candidate.view
+            let rect = pin.labelCollisionRect.offsetBy(dx: candidate.origin.x, dy: candidate.origin.y)
+            let collisionRect = pin.showsLabels ? rect : rect.insetBy(dx: -2, dy: -2)
+            let show = pin.labelsAllowed && (!zoomOutHiddenLabels.contains(candidate.id) || pin.isSelected)
+                && !socialRects.contains { $0.intersects(collisionRect) }
+                && !visiblePlaces.contains { $0.id != candidate.id && $0.icon.intersects(collisionRect) }
+                && !occupiedLabels.contains { $0.intersects(collisionRect) }
+            pin.setLabelsOccluded(!show)
+            if show {
+                occupiedLabels.append(rect)
+            } else if pin.labelsAllowed {
+                lastHiddenLabels.insert(candidate.id)
+                if isOverlapZoomingOut { zoomOutHiddenLabels.insert(candidate.id) }
+            }
+        }
     }
 
     func removeAll() {

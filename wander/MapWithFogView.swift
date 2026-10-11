@@ -2535,7 +2535,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func cameraDidChange(on mapView: MapboxMaps.MapView) {
-            updateSavedPlaceLabelVisibility(on: mapView)
+            annotationStore.updateSavedPlaceOverlap()
             let userInitiated = hasActiveMapGesture(in: mapView)
             if userInitiated {
                 clearImmediateSocialSelection()
@@ -2551,6 +2551,9 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func updateSavedPlaceLabelVisibility(on mapView: MapboxMaps.MapView) {
+            // Keep marker geometry stable throughout a zoom gesture.
+            guard !mapView.mapboxMap.isAnimationInProgress,
+                  !mapView.mapboxMap.isGestureInProgress else { return }
             let visible = SavedPlaceAnnotationView.shouldShowLabels(
                 at: mapView.mapboxMap.cameraState.zoom, wasVisible: savedPlaceLabelsVisible
             )
@@ -2602,6 +2605,8 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func cameraDidFinish(on mapView: MapboxMaps.MapView) {
+            updateSavedPlaceLabelVisibility(on: mapView)
+            annotationStore.updateSavedPlaceOverlap()
             socialProximityController.regionDidChange(on: mapView)
             refreshMapOffscreenIndicators(on: mapView)
             applyPendingCameraUpdate()

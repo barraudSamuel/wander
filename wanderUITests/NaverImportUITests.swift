@@ -102,7 +102,7 @@ final class NaverImportUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Adresse de démonstration"].waitForExistence(timeout: 3))
     }
 
-    func testAllDenseAddressesAppearImmediately() {
+    func testDenseAddressesHideOverlapsAndOpenDetails() {
         let field = app.textFields["naver-import-link"]
         field.tap()
         field.typeText("https://naver.me/dense")
@@ -112,10 +112,53 @@ final class NaverImportUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Import terminé"].waitForExistence(timeout: 5))
         submit.tap()
         let pins = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "saved-place-dense-"))
-        expectation(for: NSPredicate { _, _ in pins.count == 36 }, evaluatedWith: app)
+        let map = app.otherElements["map-visible-viewport"].firstMatch
+        XCTAssertTrue(pins.firstMatch.waitForExistence(timeout: 5))
+        let initialPin = pins.allElementsBoundByIndex.first { $0.isHittable }
+        XCTAssertNotNil(initialPin)
+        if let initialPin {
+            let panStart = map.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
+            let panEnd = panStart.withOffset(CGVector(dx: map.frame.midX - initialPin.frame.minX - 22,
+                                                     dy: map.frame.midY - initialPin.frame.midY))
+            panStart.press(forDuration: 0.05, thenDragTo: panEnd, withVelocity: .slow, thenHoldForDuration: 0.2)
+        }
+        // Give several names room beyond the nearby social markers before testing zoom out.
+        map.pinch(withScale: 1.5, velocity: 0.5)
+        let separated = NSPredicate { _, _ in
+            let frames = pins.allElementsBoundByIndex.map(\.frame)
+            let icons = frames.map { CGRect(x: $0.minX + 4, y: $0.minY + 4, width: 36, height: 36) }
+            var labels: [CGRect] = []
+            return frames.count >= 4 && frames.count < 36 && frames.enumerated().allSatisfy { index, frame in
+                guard icons.dropFirst(index + 1).allSatisfy({ !icons[index].intersects($0) }) else { return false }
+                guard frame.width > 44 else { return true }
+                let text = CGRect(x: frame.minX + 44, y: frame.minY + 6, width: frame.width - 48, height: 32)
+                guard icons.enumerated().filter({ $0.offset != index }).allSatisfy({ !$0.element.intersects(text) }),
+                      labels.allSatisfy({ !$0.intersects(text) }) else { return false }
+                labels.append(text)
+                return true
+            }
+        }
+        expectation(for: separated, evaluatedWith: app)
         waitForExpectations(timeout: 5)
-        XCTAssertTrue(pins.allElementsBoundByIndex.allSatisfy { $0.frame.width > 44 })
-        screenshot("Toutes les adresses visibles dès l’import")
+        XCTAssertGreaterThanOrEqual(pins.allElementsBoundByIndex.filter { $0.frame.width > 44 }.count, 2)
+        XCTAssertTrue(pins.allElementsBoundByIndex.contains { abs($0.frame.width - 44) < 1 })
+        screenshot("Plusieurs icônes conservées et noms sans chevauchement")
+
+        let edgeStart = map.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 12, dy: map.frame.height * 0.2))
+        let edgeEnd = edgeStart.withOffset(CGVector(dx: 0, dy: 40))
+        edgeStart.press(forDuration: 0.05, thenDragTo: edgeEnd, withVelocity: .slow, thenHoldForDuration: 0.2)
+        expectation(for: separated, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["creation-menu-naver"].exists)
+        screenshot("Icônes conservées après dézoom doux")
+
+        let visiblePin = pins.allElementsBoundByIndex.first { $0.isHittable }
+        XCTAssertNotNil(visiblePin)
+        visiblePin?.tap()
+        XCTAssertTrue(app.staticTexts["Adresse de démonstration"].waitForExistence(timeout: 3))
+        app.buttons["Fermer"].tap()
+        XCTAssertTrue(app.staticTexts["Adresse de démonstration"].waitForNonExistence(timeout: 3))
     }
 
     func testPasteSharedTextIntoSingleField() {
