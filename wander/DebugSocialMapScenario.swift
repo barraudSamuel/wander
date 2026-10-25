@@ -153,7 +153,8 @@ struct DebugSocialMapScenarioView: View {
             kind: scene,
             bottomList: $bottomList,
             selectedDetail: $selectedDetail,
-            friendCode: $friendCode
+            friendCode: $friendCode,
+            canOpenSavedPlace: !creationMenuVisible && !naverImportVisible && !importAfterDismissal
         )
         .id("\(scene.rawValue)-\(revision)")
         .onChange(of: scene) { _, _ in resetPresentation() }
@@ -166,6 +167,7 @@ private struct DebugSocialMapScene: View {
     @State private var selectedSavedPlace: SavedPlace?
     @State private var pendingOutingSavedPlace: SavedPlace?
     @State private var savedPlaceComposerVisible = false
+    private let canOpenSavedPlace: Bool
     private static let coordinate = CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
     private static let ownerID = "scenario-owner"
     private static let arguments = Set(ProcessInfo.processInfo.arguments)
@@ -228,8 +230,10 @@ private struct DebugSocialMapScene: View {
         kind: DebugSocialMapScenarioView.SceneKind,
         bottomList: Binding<MapBottomList?>,
         selectedDetail: Binding<MapDetailSelection?>,
-        friendCode: Binding<String>
+        friendCode: Binding<String>,
+        canOpenSavedPlace: Bool
     ) {
+        self.canOpenSavedPlace = canOpenSavedPlace
         self._bottomList = bottomList
         self._selectedDetail = selectedDetail
         _eventScrollRequest = State(initialValue: selectedDetail.wrappedValue?.outingEventID.map {
@@ -501,14 +505,17 @@ private struct DebugSocialMapScene: View {
         } message: {
             Text("L’action a été reçue par le scénario local.")
         }
-        .sheet(item: $selectedSavedPlace, onDismiss: {
-            if pendingOutingSavedPlace != nil {
-                savedPlaceComposerVisible = true
+        .onChange(of: selectedDetail) { _, detail in
+            if detail != nil { selectedSavedPlace = nil }
+        }
+        .onChange(of: savedPlaces.map(\.id)) { _, placeIDs in
+            if let selectedSavedPlace, !placeIDs.contains(selectedSavedPlace.id) {
+                self.selectedSavedPlace = nil
             }
-        }) { place in
+        }
+        .sheet(item: $selectedSavedPlace, onDismiss: savedPlaceDidDismiss) { place in
             SavedPlaceDetailView(place: place, onCreateEvent: {
-                pendingOutingSavedPlace = place
-                selectedSavedPlace = nil
+                createEventFromSavedPlace(place.id)
             })
             .presentationDetents([.medium, .large])
         }
@@ -530,6 +537,31 @@ private struct DebugSocialMapScene: View {
                 showsNotificationSettings: false
             )
         }
+    }
+
+    private func createEventFromSavedPlace(_ id: String) {
+        guard canOpenSavedPlace, !savedPlaceComposerVisible,
+              editingEvent == nil, pendingOutingSavedPlace == nil,
+              selectedDetail == nil, selectedSavedPlace?.id == id,
+              pendingCreatedEventCoordinate == nil,
+              let place = savedPlaces.first(where: { $0.id == id && $0.ownerID == Self.ownerID }),
+              CLLocationCoordinate2DIsValid(place.coordinate) else { return }
+        pendingOutingSavedPlace = place
+        selectedSavedPlace = nil
+    }
+
+    private func savedPlaceDidDismiss() {
+        guard let place = pendingOutingSavedPlace else { return }
+        guard canOpenSavedPlace, !savedPlaceComposerVisible,
+              editingEvent == nil, selectedDetail == nil,
+              pendingCreatedEventCoordinate == nil,
+              place.ownerID == Self.ownerID,
+              savedPlaces.contains(where: { $0.id == place.id }),
+              CLLocationCoordinate2DIsValid(place.coordinate) else {
+            pendingOutingSavedPlace = nil
+            return
+        }
+        savedPlaceComposerVisible = true
     }
 
     private var composerOperations: OutingPlanComposerOperations {
@@ -665,6 +697,7 @@ private struct DebugSocialMapScene: View {
             isEventCreationEnabled: editingEvent == nil && selectedSavedPlace == nil && !savedPlaceComposerVisible,
             selectedOutingPlanEventID: selectedDetail?.outingEventID,
             selectedMapProfile: selectedDetail?.profile,
+            selectedSavedPlaceID: selectedSavedPlace?.id,
             friendCameraRequest: friendCameraRequest,
             onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
             onSelectFriend: {
@@ -677,8 +710,12 @@ private struct DebugSocialMapScene: View {
                 eventScrollRequest = MapEventScrollRequest(eventID: $0)
             },
             onSelectSavedPlace: { id in
+                guard canOpenSavedPlace, !savedPlaceComposerVisible,
+                      editingEvent == nil,
+                      pendingOutingSavedPlace == nil, pendingCreatedEventCoordinate == nil,
+                      let place = savedPlaces.first(where: { $0.id == id && $0.ownerID == Self.ownerID }) else { return }
                 selectedDetail = nil
-                selectedSavedPlace = savedPlaces.first { $0.id == id }
+                selectedSavedPlace = place
             },
             onCreateEvent: { coordinate in
                 guard Self.hasArgument("create-event"),

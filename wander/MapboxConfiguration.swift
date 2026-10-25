@@ -18,9 +18,11 @@ enum MapboxConfiguration {
             center: CLLocationCoordinate2D(latitude: 10.76, longitude: 106.66),
             zoom: 11, bearing: 0, pitch: 0
         )
-        return MapboxMaps.MapView(frame: .zero, mapInitOptions: MapInitOptions(
+        let mapView = MapboxMaps.MapView(frame: .zero, mapInitOptions: MapInitOptions(
             cameraOptions: camera, styleURI: nil, styleJSON: styleJSON
         ))
+        mapView.gestures.options.pitchEnabled = false
+        return mapView
     }
 
     private static var styleJSON: String {

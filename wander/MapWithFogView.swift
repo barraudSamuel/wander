@@ -909,6 +909,8 @@ struct MapWithFogView: UIViewRepresentable {
     /// Personal or friend profile visible above the map.
     var selectedMapProfile: MapProfileSelection?
 
+    var selectedSavedPlaceID: String? = nil
+
     /// One-shot framing from prepared sheet geometry, or when closing the profile.
     var friendCameraRequest: MapFriendCameraRequest?
 
@@ -977,6 +979,7 @@ struct MapWithFogView: UIViewRepresentable {
             guard let coordinator, let mapView else { return }
             coordinator.edgeZoom?.cancel()
             coordinator.friendCamera.cancel()
+            coordinator.annotationStore.updateSavedPlacePresentation()
             coordinator.socialProximityController.viewportDidChange(on: mapView)
             coordinator.refreshMapOffscreenIndicators(on: mapView)
             coordinator.applyPendingCameraUpdate()
@@ -1012,6 +1015,7 @@ struct MapWithFogView: UIViewRepresentable {
         updateDraftOutingAnnotation(on: uiView, context: context)
         context.coordinator.refreshMapOffscreenIndicators(on: uiView)
         synchronizeDetailSelection(on: uiView, context: context)
+        context.coordinator.synchronizeSavedPlaceSelection(selectedSavedPlaceID, on: uiView)
 
         scheduleCameraUpdate(in: viewport, coordinator: context.coordinator)
     }
@@ -1357,8 +1361,10 @@ struct MapWithFogView: UIViewRepresentable {
                     annotation.coordinate = place.coordinate
                     coordinatesChanged = true
                 }
-                if annotation.title != place.name || annotation.categoryCode != place.categoryCode
-                    || annotation.categoryName != place.categoryName {
+                let detailsChanged = annotation.title != place.name
+                    || annotation.categoryCode != place.categoryCode
+                    || annotation.categoryName != place.categoryName
+                if detailsChanged {
                     annotation.title = place.name
                     annotation.categoryCode = place.categoryCode
                     annotation.categoryName = place.categoryName
@@ -1580,7 +1586,6 @@ struct MapWithFogView: UIViewRepresentable {
         var refreshingFriendUserIDs: Set<String> = []
         fileprivate var outingPlanAnnotations: [String: OutingPlanAnnotation] = [:]
         fileprivate var savedPlaceAnnotations: [String: SavedPlaceAnnotation] = [:]
-        private var savedPlaceLabelsVisible = false
         fileprivate var draftOutingAnnotation: DraftOutingAnnotation?
         fileprivate var lastFocusedDraftCoordinate: MapUserCoordinate?
         private var lastRequestedDetailSelection: MapSocialClusterMemberID?
@@ -1687,6 +1692,9 @@ struct MapWithFogView: UIViewRepresentable {
             annotationStore.onSelect = { [weak self, weak mapView] view in
                 guard let self, let mapView else { return }
                 self.mapView(mapView, didSelect: view)
+            }
+            annotationStore.onActivateSavedPlace = { [weak self] annotation in
+                self?.onSelectSavedPlace(annotation.placeID)
             }
             annotationStore.onDeselect = { [weak self, weak mapView] view in
                 guard let self, let mapView else { return }
@@ -1831,6 +1839,20 @@ struct MapWithFogView: UIViewRepresentable {
             } else {
                 socialProximityController.collapse(on: mapView)
             }
+        }
+
+        func synchronizeSavedPlaceSelection(_ placeID: String?, on mapView: MapboxMaps.MapView) {
+            let requested = placeID.flatMap { savedPlaceAnnotations[$0] }
+            for current in annotationStore.selectedAnnotations where current is SavedPlaceAnnotation {
+                if current === requested { return }
+                annotationStore.deselectAnnotation(current, animated: true)
+            }
+            guard let requested else { return }
+            clearImmediateSocialSelection()
+            friendCamera.cancel()
+            userCamera.stopFollowing()
+            socialProximityController.collapse(on: mapView)
+            annotationStore.selectAnnotation(requested, animated: true, notifySelection: false)
         }
 
         func edgeZoomTargets(on mapView: MapboxMaps.MapView) -> [MapEdgeZoomController.Target] {
@@ -2535,7 +2557,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func cameraDidChange(on mapView: MapboxMaps.MapView) {
-            annotationStore.updateSavedPlaceOverlap()
+            annotationStore.updateSavedPlacePresentation()
             let userInitiated = hasActiveMapGesture(in: mapView)
             if userInitiated {
                 clearImmediateSocialSelection()
@@ -2548,21 +2570,6 @@ struct MapWithFogView: UIViewRepresentable {
                     && userInitiated
             )
             refreshMapOffscreenIndicators(on: mapView)
-        }
-
-        private func updateSavedPlaceLabelVisibility(on mapView: MapboxMaps.MapView) {
-            // Keep marker geometry stable throughout a zoom gesture.
-            guard !mapView.mapboxMap.isAnimationInProgress,
-                  !mapView.mapboxMap.isGestureInProgress else { return }
-            let visible = SavedPlaceAnnotationView.shouldShowLabels(
-                at: mapView.mapboxMap.cameraState.zoom, wasVisible: savedPlaceLabelsVisible
-            )
-            guard visible != savedPlaceLabelsVisible else { return }
-            savedPlaceLabelsVisible = visible
-            for annotation in savedPlaceAnnotations.values {
-                (annotationStore.view(for: annotation) as? SavedPlaceAnnotationView)?
-                    .setLabelsVisible(visible)
-            }
         }
 
         func applyFriendCameraRequest(
@@ -2605,8 +2612,7 @@ struct MapWithFogView: UIViewRepresentable {
         }
 
         private func cameraDidFinish(on mapView: MapboxMaps.MapView) {
-            updateSavedPlaceLabelVisibility(on: mapView)
-            annotationStore.updateSavedPlaceOverlap()
+            annotationStore.updateSavedPlacePresentation()
             socialProximityController.regionDidChange(on: mapView)
             refreshMapOffscreenIndicators(on: mapView)
             applyPendingCameraUpdate()
@@ -2619,8 +2625,7 @@ struct MapWithFogView: UIViewRepresentable {
                     reuseIdentifier: SavedPlaceAnnotationView.reuseIdentifier
                 )
                 annotationView.configure(with: savedPlace)
-                updateSavedPlaceLabelVisibility(on: mapView)
-                annotationView.setLabelsVisible(savedPlaceLabelsVisible)
+                annotationView.updatePhoto(SavedPlaceIllustration.image(for: savedPlace.sourceID))
                 return annotationView
             }
 
@@ -2737,15 +2742,6 @@ struct MapWithFogView: UIViewRepresentable {
                     annotationStore.deselectAnnotation(annotation, animated: false)
                     restoreImmediateSocialSelection(on: mapView)
                 }
-                return
-            }
-            if let savedPlace = annotation as? SavedPlaceAnnotation {
-                friendCamera.cancel()
-                userCamera.stopFollowing()
-                socialProximityController.collapse(on: mapView)
-                // Release the native selection so the same pin can reopen its sheet.
-                annotationStore.deselectAnnotation(savedPlace, animated: false)
-                onSelectSavedPlace(savedPlace.placeID)
                 return
             }
             let isProgrammaticOutingSelection = annotation is OutingPlanAnnotation

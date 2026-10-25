@@ -1,0 +1,19 @@
+{
+  "status": "complete",
+  "method": "Independent manual review equivalent to ce-code-review; explicit filesystem snapshot scope is unsupported by its Git-ref scope helper.",
+  "base": "/private/tmp/wander-native-sheet-baseline",
+  "restored_source": "SavedPlaceDetailView compared with git show HEAD:wander/SavedPlaceDetailView.swift",
+  "findings": [],
+  "coverage": [
+    "Native sheet lifecycle, modal exclusions, owner checks and event composer after dismissal",
+    "Saved-place selection confirmation, switching, clearing, deletion and camera preservation",
+    "Pin geometry, emphasis motion, white outline and shadow preservation independently reviewed",
+    "Changed native/UI test expectations reviewed against approved plan"
+  ],
+  "limits": [
+    "Static review only; authoritative build, simulator tests and screenshot inspection owned by parent",
+    "No external model/provider review",
+    "Live Firebase and real Naver navigation not exercised"
+  ],
+  "source_modified": false
+}

@@ -105,7 +105,7 @@ Do not add or run dedicated accessibility tests (large text / Dynamic Type sizes
 
 There is no XCTest target yet. Verify affected flows on a simulator or device. Add non-UI tests to a future `wanderTests` target using `<TypeName>Tests.swift`; record exact validation in the plan and PR.
 
-For simulator validation, use the already-running iPhone 17 Simulator. Do not boot, create, or download another simulator device or runtime without the project owner's explicit approval; local disk space is constrained.
+For simulator validation, use the already-running iPhone 18 Pro Simulator. Do not boot, create, or download another simulator device or runtime without the project owner's explicit approval; local disk space is constrained.
 
 ## Commit & Pull Request Guidelines
 

@@ -34,6 +34,7 @@ struct SavedPlaceDetailView: View {
                         Link(destination: url) {
                             Label("Ouvrir dans Naver", systemImage: "arrow.up.right.square")
                         }
+                        .accessibilityIdentifier("saved-place-open-naver")
                     }
                 }
             }

@@ -352,6 +352,14 @@ struct ContentView: View {
 
     private var lifecycleObservedContent: some View {
         outingObservedContent
+        .onChange(of: selectedMapDetail) { _, detail in
+            if detail != nil { selectedSavedPlace = nil }
+        }
+        .onChange(of: savedPlaces.map(\.id)) { _, placeIDs in
+            if let selectedSavedPlace, !placeIDs.contains(selectedSavedPlace.id) {
+                self.selectedSavedPlace = nil
+            }
+        }
         .onChange(of: friendSyncService.ownExplorationRevision) {
             restoreOwnExplorationIfAvailable()
         }
@@ -507,14 +515,20 @@ struct ContentView: View {
                     isEventCreationEnabled: !outingComposerVisible && !creationMenuVisible && !naverImportVisible && selectedSavedPlace == nil && !isProfileAccountFlowActive,
                     selectedOutingPlanEventID: selectedOutingPlanEventID,
                     selectedMapProfile: selectedMapDetail?.profile,
+                    selectedSavedPlaceID: selectedSavedPlace?.id,
                     friendCameraRequest: friendCameraRequest,
                     onSelectOwnProfile: { presentOwnProfile(focusOnMap: true) },
                     onSelectFriend: presentMapFriendProfile,
                     onSelectOutingPlan: selectOuting,
                     onSelectSavedPlace: { id in
-                        guard !naverImportVisible, !outingComposerVisible else { return }
+                        guard !naverImportVisible, !outingComposerVisible,
+                              !creationMenuVisible, !isProfileAccountFlowActive,
+                              !shouldCreateEventAfterMenuDismissal, !shouldImportNaverAfterMenuDismissal,
+                              editingOutingEvent == nil,
+                              pendingOutingSavedPlace == nil, pendingOutingCoordinate == nil,
+                              let place = savedPlaces.first(where: { $0.id == id }) else { return }
                         selectedMapDetail = nil
-                        selectedSavedPlace = savedPlaces.first { $0.id == id }
+                        selectedSavedPlace = place
                     },
                     onCreateEvent: { coordinate in
                         guard !isProfileAccountFlowActive,
@@ -578,23 +592,10 @@ struct ContentView: View {
             NaverImportView(ownerID: ownerID)
                 .presentationDetents([.large])
         }
-        .sheet(item: $selectedSavedPlace, onDismiss: {
-            guard let place = pendingOutingSavedPlace else { return }
-            guard place.ownerID == ownerID, !isProfileAccountFlowActive,
-                  CLLocationCoordinate2DIsValid(place.coordinate) else {
-                pendingOutingSavedPlace = nil
-                return
-            }
-            selectedMapDetail = nil
-            editingOutingEvent = nil
-            pendingOutingCoordinate = place.coordinate
-            outingComposerDetent = OutingComposerPresentation.creationDetent
-            outingComposerVisible = true
-        }) { place in
+        .sheet(item: $selectedSavedPlace, onDismiss: savedPlaceDidDismiss) { place in
             if place.ownerID == ownerID {
                 SavedPlaceDetailView(place: place, onCreateEvent: {
-                    pendingOutingSavedPlace = place
-                    selectedSavedPlace = nil
+                    createEventFromSavedPlace(place.id)
                 })
                 .presentationDetents([.medium, .large])
             }
@@ -726,6 +727,36 @@ struct ContentView: View {
     private func presentNavigationOptions(_ userID: String) {
         guard currentNavigationDestination(for: userID) != nil else { return }
         friendNavigationSelection = FriendSelection(userID: userID)
+    }
+
+    private func createEventFromSavedPlace(_ id: String) {
+        guard !outingComposerVisible, !naverImportVisible, !creationMenuVisible,
+              !isProfileAccountFlowActive, editingOutingEvent == nil,
+              !shouldCreateEventAfterMenuDismissal, !shouldImportNaverAfterMenuDismissal,
+              selectedMapDetail == nil,
+              selectedSavedPlace?.id == id,
+              pendingOutingSavedPlace == nil, pendingOutingCoordinate == nil,
+              let place = savedPlaces.first(where: { $0.id == id && $0.ownerID == ownerID }),
+              CLLocationCoordinate2DIsValid(place.coordinate) else { return }
+        pendingOutingSavedPlace = place
+        selectedSavedPlace = nil
+    }
+
+    private func savedPlaceDidDismiss() {
+        guard let place = pendingOutingSavedPlace else { return }
+        guard !outingComposerVisible, !naverImportVisible, !creationMenuVisible,
+              !isProfileAccountFlowActive, editingOutingEvent == nil,
+              !shouldCreateEventAfterMenuDismissal, !shouldImportNaverAfterMenuDismissal,
+              selectedMapDetail == nil, pendingOutingCoordinate == nil,
+              place.ownerID == ownerID,
+              savedPlaces.contains(where: { $0.id == place.id }),
+              CLLocationCoordinate2DIsValid(place.coordinate) else {
+            pendingOutingSavedPlace = nil
+            return
+        }
+        pendingOutingCoordinate = place.coordinate
+        outingComposerDetent = OutingComposerPresentation.creationDetent
+        outingComposerVisible = true
     }
 
     private func selectOuting(_ eventID: String) {

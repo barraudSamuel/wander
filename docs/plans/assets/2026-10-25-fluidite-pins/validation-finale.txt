@@ -1,0 +1,49 @@
+Source: /private/tmp/wander-pin-motion-final2.log
+Simulator: existing iPhone 18 Pro CD1E7A76-F65E-495D-A525-F328746F152F
+
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testActivationWaitsForParentConfirmationAndCleansUpOnRemoval]' passed (0.305 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testCentralPhotoTakesSpaceFromAnExistingPeripheralPhotoDuringPan]' passed (3.651 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testCompactPlacesHideOverlapsWithoutReappearingDuringZoomOut]' passed (2.686 seconds).
+PIN_CADENCE pass=0 frames=147 p50_ms=16.59595833189087 p95_ms=18.111041666998062 max_ms=22.528500001499197 layout_p95_ms=0.6899166692164727
+PIN_CADENCE pass=1 frames=147 p50_ms=16.570166666497244 p95_ms=17.855333331681322 max_ms=21.464166668010876 layout_p95_ms=0.6654999997408595
+PIN_CADENCE pass=2 frames=148 p50_ms=16.57237500330666 p95_ms=17.67262499924982 max_ms=20.78504166638595 layout_p95_ms=0.6791249979869463
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testDenseCameraFrameCadence]' passed (8.210 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testInterruptedTransitionsUseTheRenderedCircleAndIgnoreOldCompletions]' passed (1.197 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testLabelVisibilityHasSeparateZoomInAndZoomOutThresholds]' passed (0.001 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testLongCategoriesYieldToOtherPhotosWithoutHidingThePlaces]' passed (3.001 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testLongLabelsKeepIconAnchoredAndHitTargetUsableWhenToggled]' passed (0.006 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testPartiallyVisibleSocialPinStillReservesSpaceInsideTheCrop]' passed (0.049 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testPhotosUpdateDuringCameraAnimationAndHeldEdgeZoom]' passed (3.324 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testReconfigurationUpdatesVisibleNameAndType]' passed (0.006 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testSelectedCardKeepsItsPhotoAndCategoryWhenLabelsAreOccluded]' passed (0.006 seconds).
+Test Case '-[wanderTests.SavedPlaceAnnotationTests testVisualMeasurementSurvivesAStaleNativeFrame]' passed (0.004 seconds).
+	 Executed 13 tests, with 0 failures (0 unexpected) in 22.446 (22.454) seconds
+Test Case '-[wanderTests.SavedPlacePresentationTests testClosingAndReversingAnUnfinishedTurnKeepsOnlyTheLatestIntent]' passed (2.876 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testClosingTheBackReturnsToPhotoBeforeShrinking]' passed (0.783 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testClosingWhileReturningToPhotoStillShrinksTheCard]' passed (0.924 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testCompactTargetDoesNotMakeTheWholeTransparentHostInteractive]' passed (0.008 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testFloatingPointOpacityResidueDoesNotStopThePhotoVelocity]' passed (0.000 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testInterruptedCardClosingCannotShrinkBelowTheCompactPhoto]' passed (0.006 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testInterruptedOpeningPreservesRenderedAnchorAndOnlyCompletesLatestIntent]' passed (0.680 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testLabelCanDisappearWithoutShrinkingThePhoto]' passed (0.008 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testLateIllustrationPreservesTheInFlightMorphAndFallbackRemainsUsable]' passed (0.585 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testMorphKeepsTheTipAtTheGeographicPointAndReservesItsOvershoot]' passed (0.002 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testPhotoGrowthStartsProgressivelyAndPreservesVelocityWhenReversed]' passed (0.001 seconds).
+Test Case '-[wanderTests.SavedPlacePresentationTests testReservationContainsIntermediatePerspectiveProjection]' passed (0.001 seconds).
+	 Executed 12 tests, with 0 failures (0 unexpected) in 5.876 (5.882) seconds
+Test Case '-[wanderTests.SavedPlaceSelectionTests testCreateEventFiresOnceAfterTheInformationCardHasClosed]' passed (2.233 seconds).
+Test Case '-[wanderTests.SavedPlaceSelectionTests testDeletingAPlaceDuringCloseCancelsItsPendingEvent]' passed (1.618 seconds).
+Test Case '-[wanderTests.SavedPlaceSelectionTests testLatestSelectionWinsWhileThePreviousCardCloses]' passed (1.511 seconds).
+Test Case '-[wanderTests.SavedPlaceSelectionTests testOpeningAndTurningStayInsideTheUsefulViewport]' passed (7.231 seconds).
+Test Case '-[wanderTests.SavedPlaceSelectionTests testViewportExpansionRevealsPinsWithoutChangingTheCamera]' passed (0.359 seconds).
+	 Executed 5 tests, with 0 failures (0 unexpected) in 12.952 (12.955) seconds
+	 Executed 30 tests, with 0 failures (0 unexpected) in 41.273 (41.293) seconds
+	 Executed 30 tests, with 0 failures (0 unexpected) in 41.273 (41.294) seconds
+Test Case '-[wanderUITests.NaverImportUITests testDenseAddressesHideOverlapsAndOpenDetails]' passed (63.023 seconds).
+Test Case '-[wanderUITests.NaverImportUITests testDensePinsFollowPanAndZoomWithoutOpeningCard]' passed (36.545 seconds).
+Test Case '-[wanderUITests.NaverImportUITests testOpenCardFollowsMapDragAndClosesOutsideTheUsefulViewport]' passed (42.199 seconds).
+Test Case '-[wanderUITests.NaverImportUITests testPhotoCardFlipsAndClosesFromBothPinSizes]' passed (60.574 seconds).
+	 Executed 4 tests, with 0 failures (0 unexpected) in 202.340 (202.346) seconds
+	 Executed 4 tests, with 0 failures (0 unexpected) in 202.340 (202.347) seconds
+	 Executed 4 tests, with 0 failures (0 unexpected) in 202.340 (202.348) seconds
+** TEST SUCCEEDED **

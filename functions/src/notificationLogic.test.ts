@@ -38,6 +38,20 @@ describe("acceptedRecipientIDs", () => {
 });
 
 describe("notification content", () => {
+  for (const timeZoneIdentifier of ["Asia/Kolkata", "Asia/Calcutta"]) {
+    test(`formats the event time for the IANA alias ${timeZoneIdentifier}`, () => {
+      assert.deepEqual(buildEventNotificationContent({
+        displayName: "Samuel",
+        placeName: "Café",
+        plannedAt: new Date("2026-10-24T10:00:00.000Z"),
+        timeZoneIdentifier,
+      }), {
+        title: "Événement prévu",
+        body: "Samuel prévoit Café à 15:30",
+      });
+    });
+  }
+
   test("contains only the public event summary", () => {
     const content = buildEventNotificationContent({
       displayName: "Samuel",

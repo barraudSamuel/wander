@@ -344,6 +344,11 @@ extension OutingPlan {
     }
 
     private static func isValidTimeZoneIdentifier(_ identifier: String) -> Bool {
-        TimeZone.knownTimeZoneIdentifiers.contains(identifier)
+        if TimeZone.knownTimeZoneIdentifiers.contains(identifier) {
+            return true
+        }
+        // The enumerated list omits valid IANA aliases such as Asia/Kolkata and UTC.
+        return (identifier == "UTC" || identifier.contains("/"))
+            && TimeZone(identifier: identifier) != nil
     }
 }
